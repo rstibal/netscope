@@ -16,6 +16,22 @@ so you can save them back out.
 
 ---
 
+## Screenshots
+
+The live packet table, with columns and filter presets:
+
+![Packet table](screenshot.png)
+
+The History tab, showing traffic over time by program:
+
+![History tab](screenshot-history.png)
+
+The tray icon changes color with capture state (idle, capturing, alert, stopped):
+
+![Tray icons](screenshot-tray.png)
+
+---
+
 ## What you need first
 
 **1. Python 3.9 or newer** — https://www.python.org/downloads/windows/
