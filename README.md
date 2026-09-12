@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.12.0**
+**Version 1.12.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -669,6 +669,12 @@ names.
 ---
 
 ## Version history
+
+**1.12.1** — Fixed the tray tooltip always reading 0 B/s. The refresh loop
+was calling the status function twice per tick — once to pick the icon
+state, once inside the title text — and the rate it returns is a delta
+since the *previous* call, so the second call always landed a few
+milliseconds after the first with nothing new to report.
 
 **1.12.0** — A new alert rule: **port scan**. Fires on a remote host touching
 many distinct local ports in a short burst, or a local program fanning out to

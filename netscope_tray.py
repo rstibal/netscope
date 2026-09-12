@@ -451,8 +451,13 @@ class Tray:
             self.icon.stop()
         self.on_quit()
 
-    def _title(self):
-        s = self.status_fn() or {}
+    def _title(self, s=None):
+        # s is passed in by _refresh(), which already paid for one call to
+        # status_fn() this tick. status_fn()'s rate is a stateful delta since
+        # the *previous* call, so calling it again here would immediately
+        # see ~0 bytes and ~0 elapsed time and report 0 B/s forever.
+        if s is None:
+            s = self.status_fn() or {}
         bits = ["NetScope"]
         if s.get("rate"):
             bits.append(s["rate"])
@@ -495,7 +500,7 @@ class Tray:
                          else "high" if a.get("high")
                          else "warn" if a.get("warn") else "idle")
                 if self.icon:
-                    self.icon.title = self._title()
+                    self.icon.title = self._title(s)
                     if state != self.state:
                         self.state = state
                         self.icon.icon = make_icon(state)
