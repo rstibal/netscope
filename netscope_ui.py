@@ -1716,6 +1716,7 @@ const RULE_LABELS = {
   cleartext_proto: 'Unencrypted protocols (FTP, Telnet, POP3, IMAP)',
   cert_problems:   'Expired, self-signed or weakly signed certificates',
   dns_resolver:    'DNS going to an unexpected resolver',
+  port_scan:       'Many distinct ports/hosts touched in a short burst',
 };
 
 function ago(ts){

@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.11.1**
+**Version 1.12.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -470,6 +470,9 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
   Certificate message, so on a modern connection there is nothing to inspect.
 - **Unexpected DNS resolver** — queries going somewhere other than the resolver
   the rest of the machine uses.
+- **Port scan** — a remote host touching many distinct local ports in a short
+  burst, or a local program fanning out to many distinct hosts/ports at once.
+  Fires once per burst, high severity.
 
 Repeat alerts fold into a count rather than filling the list. **Windows desktop
 notifications** sends warnings and high-severity alerts as toasts (Windows only,
@@ -666,6 +669,12 @@ names.
 ---
 
 ## Version history
+
+**1.12.0** — A new alert rule: **port scan**. Fires on a remote host touching
+many distinct local ports in a short burst, or a local program fanning out to
+many distinct hosts/ports at once — the same shape of behavior a DoS/worm
+scanner in a tool like Colasoft Capsa would flag, built on the existing rule
+engine (dedup, muting, toasts) rather than a new subsystem.
 
 **1.11.1** — The test suite now lives in the repository.
 

@@ -26,7 +26,7 @@ import re
 import subprocess
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 try:
     from cryptography import x509
@@ -38,6 +38,9 @@ MAX_ALERTS = 500
 TOAST_MIN_INTERVAL = 6.0        # seconds between desktop notifications
 
 INFO, WARN, HIGH = "info", "warn", "high"
+
+SCAN_WINDOW_SECS = 20.0     # how far back a burst is measured
+SCAN_PORT_THRESHOLD = 12   # distinct ports/pairs in the window before it's a scan
 
 # Ports whose traffic is unencrypted by definition.
 CLEARTEXT_PORTS = {
@@ -81,6 +84,12 @@ RULE_WHY = {
                     "configured to use. Counted per interface, and checked "
                     "against the resolvers the OS reports, so a second "
                     "adapter's own resolver is not suspicious.",
+    "port_scan": "Fires when one remote host touches many distinct local "
+                 "ports in a short window — the signature of a port scan, "
+                 "not of any legitimate protocol. Also fires the other "
+                 "direction: one local process fanning out to many distinct "
+                 "host/port pairs at once, which is what a worm or a scanner "
+                 "looks like from here.",
 }
 
 
@@ -246,6 +255,8 @@ class AlertEngine:
         self._dns_read = 0.0
         self.process_bytes = {}
         self._threshold_fired = set()
+        self._scan_inbound = {}     # remote peer -> deque[(ts, dport)]
+        self._scan_outbound = {}    # process -> deque[(ts, (peer, dport))]
         # Muted (rule, subject) pairs -> expiry timestamp, or None for
         # indefinitely. Turning a whole rule off is the only control that
         # existed, and it is the wrong grain: a rule is usually right to look
@@ -262,6 +273,7 @@ class AlertEngine:
             "cleartext_proto": True,
             "cert_problems": True,
             "dns_resolver": True,
+            "port_scan": True,
         }
         self.threshold_mb = 500
         # Rule switches, the threshold and the toast toggle used to live only
@@ -468,6 +480,8 @@ class AlertEngine:
         self.seen_hosts.clear()
         self.process_bytes.clear()
         self._threshold_fired.clear()
+        self._scan_inbound.clear()
+        self._scan_outbound.clear()
         self.resolvers.clear()
         # Mutes deliberately survive: Clear means "I have read these", not
         # "forget everything I told you to ignore".
@@ -485,6 +499,7 @@ class AlertEngine:
             if payload:
                 self._transport_rules(rec, payload)
             self._dns_rule(rec)
+            self._scan_rule(rec)
         except Exception:
             pass
 
@@ -720,3 +735,57 @@ class AlertEngine:
                        "DNS to an unexpected resolver",
                        f"{proc} is querying {server}{where}, while most DNS "
                        f"on that interface goes to {primary}", rec)
+
+    def _scan_rule(self, rec):
+        """
+        Flag a burst of distinct ports touched in a short window, in either
+        direction: a remote host probing many local ports (an inbound scan),
+        or a local process reaching out to many distinct host/port pairs at
+        once (a scan or worm-like fan-out). Each burst fires once — the
+        window is cleared on fire rather than left to alert again on every
+        packet that follows.
+        """
+        if not self.rules["port_scan"]:
+            return
+        dport = rec.get("dport")
+        if not dport:
+            return
+        now = rec.get("ts") or _now()
+
+        if rec.get("dir") == "in":
+            peer = rec.get("remote") or rec.get("rhost")
+            if not peer:
+                return
+            win = self._scan_inbound.setdefault(peer, deque())
+            win.append((now, dport))
+            self._prune_window(win, now)
+            distinct = {p for _, p in win}
+            if len(distinct) >= SCAN_PORT_THRESHOLD:
+                self._fire(("port_scan_in", peer), HIGH, "port_scan",
+                           f"Possible port scan from {peer}",
+                           f"{peer} has touched {len(distinct)} distinct "
+                           f"ports on this machine in the last "
+                           f"{int(SCAN_WINDOW_SECS)}s", rec)
+                win.clear()
+        else:
+            proc = rec.get("process") or "-"
+            peer = rec.get("remote") or rec.get("rhost")
+            if proc == "-" or not peer:
+                return
+            win = self._scan_outbound.setdefault(proc, deque())
+            win.append((now, (peer, dport)))
+            self._prune_window(win, now)
+            distinct = {pair for _, pair in win}
+            if len(distinct) >= SCAN_PORT_THRESHOLD:
+                self._fire(("port_scan_out", proc), HIGH, "port_scan",
+                           f"{proc} is contacting many hosts/ports at once",
+                           f"{proc} has reached {len(distinct)} distinct "
+                           f"host/port pairs in the last "
+                           f"{int(SCAN_WINDOW_SECS)}s — unusual unless this "
+                           f"is a scanner you run on purpose", rec)
+                win.clear()
+
+    @staticmethod
+    def _prune_window(win, now):
+        while win and now - win[0][0] > SCAN_WINDOW_SECS:
+            win.popleft()
