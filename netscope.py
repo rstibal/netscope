@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.12.1"
+VERSION = "1.13.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -76,6 +76,7 @@ except ImportError:  # pragma: no cover
     psutil = None
 
 from netscope_smb import SmbTracker
+from netscope_ftp import FTPCorrelator
 from netscope_streams import (StreamTracker, ObjectStore, ObjectScanner,
                               TEXTUAL)
 from netscope_pcap import write_pcap, read_pcap
@@ -657,6 +658,7 @@ class CaptureEngine:
         self.alerts = alerts
         self.history = history
         self.smb = SmbTracker()
+        self.ftp = FTPCorrelator()
         self.quic = InitialReassembler()
         self.sniffer = None
         self.sniffers = []          # [(iface_name, AsyncSniffer, socket_or_None)]
@@ -1153,8 +1155,22 @@ class CaptureEngine:
         # Application-layer decoding
         hint = ""
         host_hint = ""
+        ftp_meta = None
         if payload:
-            if 445 in (sport, dport):
+            self.ftp.sweep(ts)
+            if 21 in (sport, dport):
+                self.ftp.observe_control(src, sport, dst, dport, payload,
+                                         dport == 21, ts)
+                proto = "FTP"
+                hint = "FTP"
+                info = payload.split(b"\r\n", 1)[0].decode("latin-1", "replace")[:200]
+            if not hint:
+                ftp_meta = self.ftp.match_data(src, sport, dst, dport)
+                if ftp_meta:
+                    proto = "FTP-DATA"
+                    hint = "FTP-DATA"
+                    info = f"FTP data: {ftp_meta['name']}"
+            if not hint and 445 in (sport, dport):
                 smb = self.smb.parse(payload)
                 if smb:
                     proto = "SMB2" if smb["messages"][0].get("dialect") != "SMB1" else "SMB"
@@ -1239,7 +1255,7 @@ class CaptureEngine:
             try:
                 stream_id = self.streams.observe(
                     src, sport, dst, dport, tcp_seq, payload, ts, pname,
-                    flags=flags, hint=hint, host=host_hint)
+                    flags=flags, hint=hint, host=host_hint, ftp_meta=ftp_meta)
             except Exception:
                 pass
 

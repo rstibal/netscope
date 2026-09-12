@@ -12,8 +12,9 @@ netscope_ui.py        the entire dashboard as one PAGE_HTML string
 netscope_conn.py      connection table: flow accounting joined to the socket table
 netscope_alerts.py    alert rules, muting, Windows toasts
 netscope_history.py   SQLite history and the settings file
-netscope_streams.py   TCP reassembly and HTTP file extraction
+netscope_streams.py   TCP reassembly and HTTP/FTP file extraction
 netscope_smb.py       SMB2 decoding (share paths, filenames)
+netscope_ftp.py       FTP control-channel parsing, data-connection correlation
 netscope_quic.py      QUIC Initial decryption for SNI/ALPN
 netscope_l2.py        ICMP and link-layer description
 netscope_pcap.py      .pcap reading and writing
@@ -85,6 +86,18 @@ with doubled bytes.
 **Unconnected UDP sockets match flows by local endpoint, not the 5-tuple.**
 They have no remote address; requiring the full tuple silently orphaned all
 DNS, mDNS, NTP and VPN tunnel traffic.
+
+**FTP data connections are only extracted once `closed`.** Unlike HTTP there
+is no `Content-Length` to say a file is complete — the data connection
+closing is the only signal FTP gives. Extracting earlier means shipping a
+truncated file with no way to tell it was truncated.
+
+**FTP uploads (`STOR`) are tracked but never armed for extraction.**
+`FTPCorrelator` deliberately only arms a data connection after a `RETR`, so
+an upload's data connection gets no hint and falls through to plain TCP —
+downloads-only was a scope decision, not an oversight, so a `STOR` data
+connection silently going unextracted is expected, not a bug to fix in
+isolation.
 
 **Alert mutes are per (rule, subject) and survive `Clear alerts`.** Disabling a
 whole rule to silence one subject is the wrong grain. Clearing means "I have

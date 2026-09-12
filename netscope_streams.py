@@ -71,8 +71,9 @@ class TCPStream:
         self.first_ts = ts
         self.last_ts = ts
         self.process = "-"
-        self.hint = ""          # HTTP / TLS / SMB / ...
+        self.hint = ""          # HTTP / TLS / SMB / FTP / FTP-DATA / ...
         self.host = ""          # SNI or HTTP Host, once we see one
+        self.ftp_meta = None    # {"name", "direction"} for an FTP-DATA stream
         self.closed = False
         self.segs = [{}, {}]
         self.times = [{}, {}]
@@ -195,7 +196,7 @@ class StreamTracker:
         self._next = 0
 
     def observe(self, src, sport, dst, dport, seq, data, ts, process, flags="",
-                hint="", host=""):
+                hint="", host="", ftp_meta=None):
         """Record one TCP segment. Returns the stream id."""
         key = frozenset(((src, sport), (dst, dport)))
         with self._lock:
@@ -220,6 +221,8 @@ class StreamTracker:
                 st.hint = hint
             if host and not st.host:
                 st.host = host
+            if ftp_meta and not st.ftp_meta:
+                st.ftp_meta = ftp_meta
             if "F" in flags or "R" in flags:
                 st.closed = True
             return st.id
@@ -474,6 +477,39 @@ def extract_objects(stream: TCPStream):
     return objs
 
 
+def extract_ftp_object(stream: TCPStream):
+    """
+    An FTP data connection carries nothing but the transferred file — unlike
+    HTTP there is no request/response framing inside it, so the whole stream
+    *is* the file, named from whatever the control channel negotiated.
+
+    Downloads only: uploads are never armed by FTPCorrelator (see
+    netscope_ftp.py), so meta["direction"] is always "download" here, but the
+    check stays as the contract in case that changes.
+
+    Callers must wait for stream.closed before calling this: there is no
+    length header to say when the file is complete, only the connection
+    closing.
+    """
+    meta = stream.ftp_meta
+    if not meta or meta.get("direction") != "download":
+        return None
+    data, _gaps = stream.assemble(1)        # server -> client
+    if not data:
+        return None
+    if len(data) > MAX_SINGLE_OBJECT:
+        data = data[:MAX_SINGLE_OBJECT]
+    name = safe_filename(meta.get("name", ""), "ftp-download")
+    return {
+        "name": name,
+        "ctype": "application/octet-stream",
+        "size": len(data),
+        "data": data,
+        "direction": "download",
+        "url": meta.get("name", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Object store + background scanner
 # ---------------------------------------------------------------------------
@@ -548,6 +584,16 @@ class ObjectScanner(threading.Thread):
             for st in self.tracker.dirty_streams():
                 try:
                     st.dirty = False
+                    if st.hint == "FTP-DATA":
+                        # Unlike HTTP, a data connection carries no length
+                        # header — it signals "done" by closing, so extracting
+                        # any earlier would ship a truncated file.
+                        if not st.objects_emitted and st.closed:
+                            obj = extract_ftp_object(st)
+                            if obj:
+                                self.store.add(obj, st)
+                                st.objects_emitted = 1
+                        continue
                     if st.hint == "TLS" or not st.bytes[1]:
                         continue            # nothing extractable
                     objs = extract_objects(st)

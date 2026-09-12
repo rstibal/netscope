@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.12.1**
+**Version 1.13.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -516,9 +516,16 @@ transfer, which is a bigger job than the HTTP path. If the share negotiated
 SMB3 encryption, even the names are gone, and NetScope says so rather than
 showing you noise.
 
-**FTP, TFTP, NFS, IPP print jobs, plain IMAP/POP3/SMTP** — filenames and
-commands are readable in the conversation viewer. They aren't specially
-decoded, so you'll be reading them as text rather than as tidy fields.
+**Plain FTP** — filenames yes, and **downloads are reconstructed into the
+Files tab** the same as HTTP. NetScope reads the control channel (`RETR`,
+and the `PASV`/`PORT` reply that says which port the file is about to arrive
+on) so it knows the file's name before the second, data-only connection even
+opens. Uploads (`STOR`) are not reconstructed yet — only tracked far enough
+to make sure they're never mistaken for a download.
+
+**TFTP, NFS, IPP print jobs, plain IMAP/POP3/SMTP** — filenames and commands
+are readable in the conversation viewer. They aren't specially decoded, so
+you'll be reading them as text rather than as tidy fields.
 
 **QUIC / HTTP-3** — hostnames yes, contents no. A browser's ClientHello is too
 big for one Initial packet (post-quantum key shares push it to two or three
@@ -554,6 +561,14 @@ half-finished. `Content-Length` and chunked encoding are both handled, and
 gzip/deflate bodies are decompressed. Names come from
 `Content-Disposition` when the server sends one, otherwise from the request
 path, with an extension inferred from the content type as a last resort.
+
+**FTP downloads work differently, because the protocol does.** The file's
+name and the fact that a download is coming are learned from the *control*
+connection (`RETR`, then the `PASV`/`PORT` reply naming a port); the actual
+bytes arrive on a second, separate connection that carries nothing but the
+file — no headers, no length. That connection is only reconstructed once it
+closes, since closing is the only signal FTP gives that the transfer is
+done.
 
 Limits, all deliberate so a big transfer can't eat the machine: 8 MB kept per
 direction per connection, 400 connections, 300 extracted files, 96 MB of file
@@ -669,6 +684,13 @@ names.
 ---
 
 ## Version history
+
+**1.13.0** — **FTP downloads are now reconstructed into the Files tab**, the
+same as HTTP. NetScope reads the control channel (`RETR`, and the
+`PASV`/`PORT` reply naming the port the file is about to arrive on) so it
+knows the filename before the separate, data-only connection even opens.
+Downloads only for now — uploads (`STOR`) are tracked far enough to never be
+mistaken for a download, but are not yet reconstructed.
 
 **1.12.1** — Fixed the tray tooltip always reading 0 B/s. The refresh loop
 was calling the status function twice per tick — once to pick the icon
