@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.13.0**
+**Version 1.14.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,9 @@ names.
 ---
 
 ## Version history
+
+**1.14.0** — Added a Clear button (✕) at the end of the packet filter field,
+next to the match count. Shows up only once there's text to clear.
 
 **1.13.0** — **FTP downloads are now reconstructed into the Files tab**, the
 same as HTTP. NetScope reads the control channel (`RETR`, and the

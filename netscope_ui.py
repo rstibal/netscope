@@ -522,6 +522,7 @@ back through the table while the capture continues."><input type="checkbox"
   <span class="flabel">filter</span>
   <input type="text" id="find" spellcheck="false"
          placeholder="proto == QUIC &amp;&amp; process ~ chrome   —   or just type text to search">
+  <button id="findClear" class="btn-sm" title="Clear filter" style="display:none">✕</button>
   <span id="fcount" class="fcount"></span>
   <button id="searchAll" class="btn-sm" style="display:none"
           title="Filter every packet still in the capture buffer, not just the rows loaded here">Search buffer</button>
@@ -1053,6 +1054,7 @@ let filterFn = null, filterError = null;
 function applyFind(){
   const text = $('find').value.trim();
   const box = $('find');
+  $('findClear').style.display = text ? '' : 'none';
   if (bufferMode) backToLive();
   if (!text){
     filterFn = null; filterError = null;
@@ -2363,6 +2365,7 @@ $('clear').onclick = () => {
   $('nPkt').textContent = ''; $('nPkt').classList.add('zero');
 };
 $('find').oninput = applyFind;
+$('findClear').onclick = () => { $('find').value = ''; applyFind(); $('find').focus(); };
 $('bpf').onkeydown = e => { if (e.key === 'Enter') $('apply').click(); };
 $('theme').onclick = () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
