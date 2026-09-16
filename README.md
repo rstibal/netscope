@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.15.0**
+**Version 1.15.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -26,8 +26,7 @@ The History tab, showing traffic over time by program:
 
 ![History tab](screenshot-history.png)
 
-The tray icon changes color with capture state (idle, capturing, alert, stopped),
-and its four bars light up like a signal-strength meter as throughput rises:
+The tray icon is blue while capturing and grey while stopped:
 
 ![Tray icons](screenshot-tray.png)
 
@@ -685,6 +684,11 @@ names.
 ---
 
 ## Version history
+
+**1.15.1** — Reverted the tray icon back to a static waveform: blue while
+capturing, grey while stopped, no alert coloring and no throughput
+animation. 1.15.0's signal-strength bars and a later breathing-dot variant
+were both tried live and didn't earn their keep.
 
 **1.15.0** — The tray icon now shows throughput, not just alert state: four
 signal-strength bars light up as the current rate climbs (log-scaled, so

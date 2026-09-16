@@ -63,6 +63,12 @@ DOM.
 Each of these was reached the hard way; changing one without reading the reason
 will reintroduce a bug that took a while to find.
 
+**The tray icon is static: blue running, grey stopped, nothing else.**
+Alert-state coloring (idle/warn/high) and a throughput-driven animation
+(signal-strength bars, then a growing/pulsing dot) were each built, tried
+live, and rejected — the moving parts read as noise rather than signal.
+Don't reintroduce either without trying them live first.
+
 **The packet table never scrolls sideways.** Info absorbs the remainder and
 drags are clamped. Horizontal scroll was tried and rejected — it pushed the most
 useful column off-screen.

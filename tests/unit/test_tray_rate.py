@@ -57,36 +57,26 @@ check("one refresh tick calls status_fn exactly once", len(calls) == 1, str(len(
 check("icon title reflects that single snapshot's rate",
       tr2.icon.title is not None and "9.0 KB/s" in tr2.icon.title, str(tr2.icon.title))
 
-# ---- 4. rate_to_level maps bytes/sec to a 0-4 lit-bar count, log-scaled.
-check("0 B/s is quiet", T.rate_to_level(0) == 0)
-check("just under the first threshold stays quiet",
-      T.rate_to_level(T.RATE_THRESHOLDS[0] - 1) == 0)
-check("at the first threshold lights one bar",
-      T.rate_to_level(T.RATE_THRESHOLDS[0]) == 1)
-check("at the last threshold lights all bars",
-      T.rate_to_level(T.RATE_THRESHOLDS[-1]) == len(T.RATE_THRESHOLDS))
-check("far above every threshold still caps at all bars",
-      T.rate_to_level(T.RATE_THRESHOLDS[-1] * 1000) == len(T.RATE_THRESHOLDS))
-
-# ---- 5. A refresh tick picks up rate_bps and redraws the icon on level change.
-calls3 = []
+# ---- 4. The icon is static apart from running/stopped: no redraw for an
+# unchanged state, a redraw to "off" when capture stops.
 def status_fn3():
-    calls3.append(1)
-    bps = 0 if len(calls3) == 1 else T.RATE_THRESHOLDS[-1]
-    return {"rate": "x", "rate_bps": bps, "packets": 0, "alerts": {}, "running": True}
+    return {"rate": "x", "packets": 0, "alerts": {}, "running": True}
 
 tr3 = T.Tray(url="http://x", on_quit=lambda: None, status_fn=status_fn3)
 tr3.icon = FakeIcon()
 tr3._stop = OneShot()
 tr3._refresh()
-check("level starts at 0 for a quiet tick", tr3.level == 0, str(tr3.level))
-check("no redraw yet -- level matched the Tray's own default", tr3.icon.icon is None)
+check("state starts idle while running", tr3.state == "idle", tr3.state)
+check("no redraw yet -- state matched the Tray's own default", tr3.icon.icon is None)
 
+def status_fn4():
+    return {"rate": "x", "packets": 0, "alerts": {}, "running": False}
+
+tr3.status_fn = status_fn4
 tr3._stop = OneShot()
 tr3._refresh()
-check("level updates on a later tick with a different rate",
-      tr3.level == len(T.RATE_THRESHOLDS), str(tr3.level))
-check("icon is redrawn once the level actually changes", tr3.icon.icon is not None)
+check("state flips to off once capture stops", tr3.state == "off", tr3.state)
+check("icon is redrawn once the state actually changes", tr3.icon.icon is not None)
 
 print()
 print("FAILED:", fails if fails else "none")
