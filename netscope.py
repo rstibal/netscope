@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.14.0"
+VERSION = "1.15.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2727,6 +2727,7 @@ def main(argv=None):
                 rate = (total - last["bytes"]) / dt
                 last["bytes"], last["t"] = total, now
                 return {"rate": human_bytes(rate) + "/s",
+                        "rate_bps": rate,
                         "packets": st["total_packets"],
                         "alerts": alerts.counts(),
                         "running": engine.running}

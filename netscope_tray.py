@@ -5,7 +5,8 @@ something that just runs.
 
 The tray icon is drawn at runtime rather than shipped as a file, so there is
 no asset to bundle and the icon can reflect state: it turns amber when a
-warning-level alert is outstanding and red for a high-severity one.
+warning-level alert is outstanding and red for a high-severity one. Bar count
+also reflects current throughput, signal-strength style.
 
 Autostart is a single HKCU Run entry. Per-user, no elevation, and removable
 from inside the app — nothing is written anywhere else and nothing is
@@ -403,8 +404,28 @@ PALETTE = {
 }
 
 
-def make_icon(state="idle", size=64):
-    """A small waveform on a rounded tile, tinted by alert state."""
+# Bar heights as a fraction of the tile, shortest to tallest.
+BAR_HEIGHT_FRACS = (0.28, 0.46, 0.64, 0.82)
+DIM_BAR = (255, 255, 255, 36)
+
+# Upper bound of bytes/sec for each bar level (signal-strength style, log
+# scaled so typical browsing sits at 1-2 bars and a real download maxes it
+# out). A rate at or above the last threshold lights all bars.
+RATE_THRESHOLDS = (10_000, 100_000, 1_000_000, 10_000_000)
+
+
+def rate_to_level(bps):
+    """Map a bytes/sec rate to a 0-4 lit-bar count."""
+    level = 0
+    for threshold in RATE_THRESHOLDS:
+        if bps >= threshold:
+            level += 1
+    return level
+
+
+def make_icon(state="idle", level=0, size=64):
+    """Signal-strength bars on a rounded tile, tinted by alert state and
+    lit up to `level` (0-4) by current throughput."""
     if not PIL_OK:
         return None
     bg, fg = PALETTE.get(state, PALETTE["idle"])
@@ -412,11 +433,20 @@ def make_icon(state="idle", size=64):
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([1, 1, size - 2, size - 2], radius=size // 5,
                         fill=bg + (255,))
-    # The same glyph as the dashboard's wordmark: a flat line, a spike, a dip.
-    m = size / 24.0
-    pts = [(3 * m, 12 * m), (7 * m, 12 * m), (10 * m, 4 * m),
-           (14 * m, 20 * m), (17 * m, 12 * m), (21 * m, 12 * m)]
-    d.line(pts, fill=fg + (255,), width=max(2, int(size / 16)), joint="curve")
+    n = len(BAR_HEIGHT_FRACS)
+    bar_w = size * 0.12
+    gap = size * 0.08
+    total_w = n * bar_w + (n - 1) * gap
+    start_x = (size - total_w) / 2
+    base_y = size * 0.84
+    for i, frac in enumerate(BAR_HEIGHT_FRACS):
+        h = size * frac
+        x0 = start_x + i * (bar_w + gap)
+        x1 = x0 + bar_w
+        y0 = base_y - h
+        y1 = base_y
+        color = fg + (255,) if i < level else DIM_BAR
+        d.rounded_rectangle([x0, y0, x1, y1], radius=bar_w * 0.3, fill=color)
     return img
 
 
@@ -430,6 +460,7 @@ class Tray:
         self.status_fn = status_fn or (lambda: {})
         self.icon = None
         self.state = "idle"
+        self.level = 0
         self._stop = threading.Event()
 
     # -- menu actions -------------------------------------------------------
@@ -499,10 +530,12 @@ class Tray:
                 state = ("off" if not s.get("running", True)
                          else "high" if a.get("high")
                          else "warn" if a.get("warn") else "idle")
+                level = rate_to_level(s.get("rate_bps", 0))
                 if self.icon:
                     self.icon.title = self._title(s)
-                    if state != self.state:
+                    if state != self.state or level != self.level:
                         self.state = state
-                        self.icon.icon = make_icon(state)
+                        self.level = level
+                        self.icon.icon = make_icon(state, level)
             except Exception:
                 pass
