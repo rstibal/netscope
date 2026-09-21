@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.16.0"
+VERSION = "1.16.1"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2122,6 +2122,35 @@ class App:
         self.sockets = SocketTable()
 
 
+class DashboardServer(ThreadingHTTPServer):
+    """
+    Refuses to share its port with another NetScope.
+
+    HTTPServer sets SO_REUSEADDR by default, and on Windows that option lets
+    a second process bind the very same port while the first is still
+    listening — the OS does not error, it just leaves both sockets bound and
+    routes new connections to whichever one bound first. A second launch (a
+    logon-task instance already running, then someone double-clicking the
+    tray icon again) would silently start a decoy: its own token, its own
+    printed URL, and every request that URL's browser tab makes lands on the
+    *other* process instead, which does not recognise that token — a "bad
+    token" 403 with no clue that the real cause is a second copy running.
+    SO_EXCLUSIVEADDRUSE is the Windows option that makes that conflict fail
+    at startup, where it can be explained, instead of arriving later as an
+    unexplained 403.
+    """
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if os.name == "nt":
+            try:
+                self.socket.setsockopt(socket.SOL_SOCKET,
+                                       socket.SO_EXCLUSIVEADDRUSE, 1)
+            except (AttributeError, OSError):
+                pass
+        super().server_bind()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"NetScope/{VERSION}"
     app: App = None
@@ -2167,8 +2196,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/":
             if not self._authed(qs):
-                return self._send(403, "<h1>403</h1><p>Open the URL printed in "
-                                       "the console — it carries the access token.</p>",
+                return self._send(403, "<h1>403</h1><p>This link's access token is "
+                                       "missing or wrong — a bookmark or an old tab "
+                                       "goes stale every time NetScope restarts, "
+                                       "since a fresh token is generated each run. "
+                                       "Open the URL printed in the console, or use "
+                                       "the tray icon's <b>Open dashboard</b> — both "
+                                       "always carry the current token.</p>",
                                   "text/html; charset=utf-8")
             return self._send(200, PAGE_HTML, "text/html; charset=utf-8")
 
@@ -2771,7 +2805,21 @@ def main(argv=None):
     if args.read:
         Handler.app.source = os.path.basename(args.read)
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    try:
+        httpd = DashboardServer(("127.0.0.1", args.port), Handler)
+    except OSError as exc:
+        msg = (f"Port {args.port} is already in use — NetScope may already "
+               f"be running (check the tray icon or Task Manager). Open its "
+               f"existing dashboard instead, or pick another port with "
+               f"--port.")
+        print(f"\n  {msg}\n  ({exc})\n")
+        # In tray mode there may be no console anyone will ever see this on
+        # (NetScopeTray.exe has none at all), so put it somewhere that is:
+        # a message box the user has to dismiss, not a line of text nobody
+        # is watching.
+        if args.tray:
+            tray.fatal_message("NetScope could not start", msg)
+        return 1
     httpd.daemon_threads = True
     url = f"http://127.0.0.1:{args.port}/?t={token}"
 

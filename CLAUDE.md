@@ -119,6 +119,17 @@ no exception to catch.
 `conf.ifaces` once at import and keeps it forever; started from a logon task,
 NetScope would otherwise never see Wi-Fi or a VPN that came up afterwards.
 
+**The dashboard server binds with `SO_EXCLUSIVEADDRUSE`, not the default
+`SO_REUSEADDR`.** On Windows, `SO_REUSEADDR` (which `HTTPServer` sets by
+default) lets a second NetScope silently bind the same port a first instance
+is still listening on — no error, and every request keeps going to whichever
+one bound first. The second process still prints and opens its own URL with
+its own, different token, which the process actually serving requests never
+recognises: a "bad token" 403 with nothing pointing at the real cause. This
+is what a second launch of the tray build looks like when NetScope is already
+running from the logon task. `DashboardServer` in `netscope.py` turns that
+into an immediate, explained failure instead.
+
 ## Environment
 
 Needs Npcap and administrator rights to capture. `cryptography` is optional

@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.16.0**
+**Version 1.16.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,15 @@ names.
 ---
 
 ## Version history
+
+**1.16.1** — Fixed a bad-token 403 that could show up in the dashboard after
+launching from the tray. On Windows, a second NetScope could silently bind
+the same port a first (already-running) instance was still listening on —
+requests kept going to the first instance, but the second one opened a
+browser tab with its own, different token, which the first didn't recognise.
+Launching a second instance on an occupied port now fails immediately with a
+clear message (a message box in tray mode, since the no-console build has
+nowhere to print one) instead of quietly running a decoy.
 
 **1.16.0** — **DHCP is now decoded**, with its own tab. Every
 DISCOVER/OFFER/REQUEST/ACK is shown, the completed lease (hostname, IP, MAC,

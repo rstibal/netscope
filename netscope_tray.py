@@ -102,6 +102,25 @@ def show_console():
     return False
 
 
+def fatal_message(title, text):
+    """
+    A message box for a startup failure in tray mode.
+
+    NetScopeTray.exe has no console at all, and even `python --tray` hides
+    its own console once it owns one — print() before that point can land
+    somewhere nobody is looking. A failure that stops NetScope from starting
+    has to be seen, so this puts it in front of the user instead.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        MB_ICONERROR, MB_TOPMOST = 0x10, 0x40000
+        ctypes.windll.user32.MessageBoxW(0, text, title, MB_ICONERROR | MB_TOPMOST)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Start on login
 # ---------------------------------------------------------------------------
