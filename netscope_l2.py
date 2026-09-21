@@ -16,6 +16,7 @@ and a handful of fields.
 
 from __future__ import annotations
 
+import socket
 import struct
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,64 @@ def describe_icmp(itype, icode, v6=False):
     if icode:
         return f"{name} · code {icode}"
     return name
+
+
+def parse_ra(body: bytes):
+    """
+    Decode an ICMPv6 Router Advertisement (RFC 4861), for the rogue-RA alert
+    and the packet detail panel.
+
+    Raw struct parsing, not scapy's IPv6 layers, matching the rest of this
+    decoder and netscope_dhcp.parse(). Options are a TLV chain (type, length
+    in 8-octet units, value) that can carry an arbitrary mix of entries in
+    any order, so this walks them defensively: a short or malformed option
+    just ends the walk and returns whatever was decoded so far, the same as
+    a DHCP packet with a truncated option list.
+    """
+    if len(body) < 16 or body[0] != 134:
+        return None
+    flags = body[5]
+    router_lifetime = int.from_bytes(body[6:8], "big")
+    ra = {
+        "managed": bool(flags & 0x80),
+        "other_config": bool(flags & 0x40),
+        "router_lifetime": router_lifetime,
+        "prefixes": [],
+        "rdnss": [],
+        "source_link_layer": "",
+    }
+    i = 16
+    while i + 2 <= len(body):
+        otype, olen8 = body[i], body[i + 1]
+        olen = olen8 * 8
+        if olen8 == 0 or i + olen > len(body):
+            break
+        value = body[i + 2:i + olen]
+        if otype == 1 and len(value) >= 6:
+            ra["source_link_layer"] = ":".join(f"{b:02x}" for b in value[:6])
+        elif otype == 3 and len(value) >= 30:
+            prefix_len = value[0]
+            pflags = value[1]
+            valid = int.from_bytes(value[2:6], "big")
+            preferred = int.from_bytes(value[6:10], "big")
+            addr = socket.inet_ntop(socket.AF_INET6, value[14:30])
+            ra["prefixes"].append({
+                "prefix": f"{addr}/{prefix_len}",
+                "on_link": bool(pflags & 0x80),
+                "autonomous": bool(pflags & 0x40),
+                "valid_lifetime": valid,
+                "preferred_lifetime": preferred,
+            })
+        elif otype == 25 and len(value) >= 22:
+            lifetime = int.from_bytes(value[2:6], "big")
+            addrs = value[6:]
+            for j in range(0, len(addrs) - 15, 16):
+                ra["rdnss"].append({
+                    "server": socket.inet_ntop(socket.AF_INET6, addrs[j:j + 16]),
+                    "lifetime": lifetime,
+                })
+        i += olen
+    return ra
 
 
 # ---------------------------------------------------------------------------

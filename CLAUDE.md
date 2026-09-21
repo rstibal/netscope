@@ -130,12 +130,16 @@ is what a second launch of the tray build looks like when NetScope is already
 running from the logon task. `DashboardServer` in `netscope.py` turns that
 into an immediate, explained failure instead.
 
-**ARP bindings are tracked per (adapter, IP), not per IP alone.** Same
-reasoning as the flow key including the adapter: a VPN or a second NIC can
-legitimately show the same private IP on two interfaces at once, and without
-the adapter in the key that would misfire as spoofing on every capture
-start. `AlertEngine.arp_bindings` in `netscope_alerts.py` keys on
-`(iface, ip)`.
+**ARP bindings and seen routers are tracked per adapter, DHCP servers are
+not.** `arp_spoof` and `rogue_ra` both key their "seen before" state on
+`(iface, subject)` — a VPN or a second NIC can legitimately show the same
+private IP, or run its own router, without anything being wrong. DHCP
+servers (`seen_dhcp_servers`) are deliberately tracked machine-wide instead:
+a DHCP OFFER/ACK is already scoped to the interface it arrived on by the
+capture itself, and a second adapter genuinely getting a lease from the same
+router (common — one physical LAN, two adapters) is not a second server. If
+a future rule needs multi-adapter DHCP-server tracking, that is a deliberate
+change, not a bug to "fix" by copying the ARP/RA shape blindly.
 
 ## Environment
 

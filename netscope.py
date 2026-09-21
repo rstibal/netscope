@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.18.0"
+VERSION = "1.19.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -88,7 +88,7 @@ from netscope_quic import (parse_quic, summarise as quic_summary,
 from netscope_alerts import AlertEngine, DesktopNotifier, RULE_WHY
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
-                         owner_label, UNOWNED)
+                         owner_label, parse_ra, UNOWNED)
 from netscope_history import (HistoryStore, default_db_path,
                               load_settings, save_setting)
 import netscope_tray as tray
@@ -1152,6 +1152,11 @@ class CaptureEngine:
             info = describe_icmp(t6, c6, v6=True)
             decoded["icmp"] = {"type": t6, "code": c6, "meaning": info,
                                "version": 6}
+            if t6 == 134:
+                ra = parse_ra(bytes(pkt[IPv6].payload))
+                if ra:
+                    ra["router"] = src
+                    decoded["ra"] = ra
         elif ipver == 4 and getattr(pkt.getlayer(IP), "proto", None) == 2:
             proto = "IGMP"
             info = "Multicast group management"

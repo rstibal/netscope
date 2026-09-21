@@ -104,6 +104,13 @@ RULE_WHY = {
                  "restarting with a new virtual MAC, or a DHCP lease moving "
                  "to a different device can cause the same thing "
                  "legitimately.",
+    "rogue_ra": "Fires when an IPv6 Router Advertisement arrives from a "
+               "router this machine has not seen on this adapter before. A "
+               "fake RA can redirect IPv6 traffic through an attacker's "
+               "machine or push a rogue DNS server via RDNSS without "
+               "touching DHCP at all — but a second router kept for "
+               "failover, or a new ISP gateway after a router swap, "
+               "triggers this too.",
 }
 
 
@@ -277,6 +284,8 @@ class AlertEngine:
         # sighting. Per adapter, same reasoning as the flow key: a VPN or a
         # second NIC can legitimately show the same private IP twice.
         self.arp_bindings = {}
+        # iface -> set of router IPv6 addresses seen advertising themselves.
+        self.seen_routers = {}
         # Muted (rule, subject) pairs -> expiry timestamp, or None for
         # indefinitely. Turning a whole rule off is the only control that
         # existed, and it is the wrong grain: a rule is usually right to look
@@ -296,6 +305,7 @@ class AlertEngine:
             "port_scan": True,
             "dhcp_rogue_server": True,
             "arp_spoof": True,
+            "rogue_ra": True,
         }
         self.threshold_mb = 500
         # Rule switches, the threshold and the toast toggle used to live only
@@ -507,6 +517,7 @@ class AlertEngine:
         self.resolvers.clear()
         self.seen_dhcp_servers.clear()
         self.arp_bindings.clear()
+        self.seen_routers.clear()
         # Mutes deliberately survive: Clear means "I have read these", not
         # "forget everything I told you to ignore".
         self.warmup_until = _now() + 5.0
@@ -526,6 +537,7 @@ class AlertEngine:
             self._scan_rule(rec)
             self._dhcp_rule(rec)
             self._arp_rule(rec)
+            self._ra_rule(rec)
         except Exception:
             pass
 
@@ -881,3 +893,42 @@ class AlertEngine:
                    f"LAN) looks on the wire. Could also be a NIC swap, a VM "
                    f"restarting with a new MAC, or a device getting a new "
                    f"one from DHCP.", rec)
+
+    def _ra_rule(self, rec):
+        """
+        Flag an IPv6 Router Advertisement from a router this machine has not
+        seen on this adapter before.
+
+        Same "first sighting is the baseline" shape as the DHCP and ARP
+        rules, and tracked per adapter for the same reason as ARP: two NICs
+        on two networks each have their own legitimate router, and without
+        the adapter in the key a second interface would look like a rogue
+        one from the first packet it ever sends.
+        """
+        if not self.rules["rogue_ra"]:
+            return
+        ra = (rec.get("decoded") or {}).get("ra")
+        if not ra:
+            return
+        router = ra.get("router")
+        if not router:
+            return
+        iface = rec.get("iface") or ""
+        routers = self.seen_routers.setdefault(iface, set())
+        if router in routers:
+            return
+        first = not routers
+        routers.add(router)
+        if first:
+            return
+        detail = f"{router} is advertising itself as a router — this " \
+                 f"machine has seen {len(routers) - 1} other router(s) " \
+                 f"on this adapter before now."
+        if ra.get("rdnss"):
+            servers = ", ".join(d["server"] for d in ra["rdnss"])
+            detail += f" It is also pushing DNS servers via RDNSS: {servers}."
+        detail += (" A second router on this network can redirect IPv6 "
+                   "traffic through itself, or a legitimate second router "
+                   "kept for failover can look like this too.")
+        self._fire(("rogue_ra", iface, router), HIGH, "rogue_ra",
+                   "Unexpected IPv6 router", detail, rec)

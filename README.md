@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.18.0**
+**Version 1.19.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,16 @@ names.
 ---
 
 ## Version history
+
+**1.19.0** — New alert: **Unexpected IPv6 router**, the IPv6 sibling of the
+DHCP rogue-server and ARP-spoof alerts. Router Advertisements are now
+decoded (router lifetime, M/O flags, advertised prefixes, and RDNSS — the
+DNS servers pushed via SLAAC), and NetScope remembers which router has
+advertised on each adapter, firing HIGH the first time a different one shows
+up. A fake RA can redirect IPv6 traffic or hand out a rogue DNS server
+without DHCP being involved at all — though a legitimate second router kept
+for failover looks the same, and the alert says so. RA packets also get
+their own section in the packet detail panel.
 
 **1.18.0** — New alert: **ARP binding changed**, the IPv4 sibling of the
 DHCP rogue-server alert. ARP is already read for every packet on the wire;

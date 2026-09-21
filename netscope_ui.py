@@ -1377,6 +1377,19 @@ function renderDetail(d){
     h += '</div>';
   }
 
+  if (dec.ra){
+    const r = dec.ra;
+    h += '<div class="sec"><h4>IPv6 Router Advertisement</h4>';
+    h += kv('Router', r.router);
+    h += kv('Router lifetime', r.router_lifetime + ' s' + (r.router_lifetime === 0 ? '  (not a default router)' : ''));
+    h += kv('Flags', (r.managed ? 'M ' : '') + (r.other_config ? 'O' : '') || '—');
+    if (r.source_link_layer) h += kv('Source MAC', r.source_link_layer);
+    (r.prefixes||[]).forEach(p => h += kv('Prefix', p.prefix +
+      (p.on_link ? '  on-link' : '') + (p.autonomous ? '  autonomous' : '')));
+    (r.rdnss||[]).forEach(n => h += kv('DNS (RDNSS)', n.server + '  (' + n.lifetime + 's)'));
+    h += '</div>';
+  }
+
   if (d.raw_b64){
     h += '<div class="sec"><h4>Raw bytes ('+d.raw_len+')</h4><div class="hex">'+
          hexdump(b64bytes(d.raw_b64))+'</div></div>';
@@ -1748,6 +1761,7 @@ const RULE_LABELS = {
   port_scan:       'Many distinct ports/hosts touched in a short burst',
   dhcp_rogue_server: 'An unexpected DHCP server hands out a lease',
   arp_spoof:       'The MAC address answering for an IP changes',
+  rogue_ra:        'An unexpected IPv6 router advertises itself',
 };
 
 function ago(ts){
