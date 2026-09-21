@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.21.0**
+**Version 1.21.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -695,6 +695,15 @@ names.
 ---
 
 ## Version history
+
+**1.21.1** — Reverse DNS's safety cap was 2,000 lookups for the life of the
+process — plenty for a short session, too low for a tray instance left
+running across a long day, and there was no way to tell it had been hit.
+Raised to 20,000, and the Alerts tab now shows a line under the checkbox:
+how many IPs have been looked up, how many resolved, and whether the cap
+has been reached. Most unresolved IPs simply have no reverse DNS record at
+all — that was already normal and still is; this just makes the run's own
+state visible instead of a silent "nothing happened."
 
 **1.21.0** — Optional reverse DNS for IPs nothing else has named. Every
 other naming source in NetScope is passive; this is the first one that

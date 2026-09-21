@@ -46,7 +46,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.21.0"
+VERSION = "1.21.1"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -682,7 +682,12 @@ class ReverseResolver:
     WORKERS = 4
     MAX_QUEUED = 200
     NEGATIVE_TTL = 600          # seconds before a failed lookup is retried
-    MAX_ATTEMPTS = 2000         # per run, so a huge capture can't queue forever
+    # A tray instance can run for days. This is a safety net against a
+    # runaway capture, not a budget meant to be hit in ordinary use -- 20,000
+    # distinct external IPs is far beyond what even a very busy machine sees
+    # in a day, but the cap still exists so nothing grows completely
+    # unbounded if it somehow is.
+    MAX_ATTEMPTS = 20000
 
     def __init__(self, store: PacketStore, enabled: bool = False):
         self.store = store
@@ -691,6 +696,7 @@ class ReverseResolver:
         self._queued = set()        # ips currently queued or being resolved
         self._negative = {}         # ip -> retry-not-before timestamp
         self._attempts = 0
+        self._resolved = 0
         self._lock = threading.Lock()
         self._settings_sink = None
 
@@ -729,12 +735,26 @@ class ReverseResolver:
         try:
             name = socket.gethostbyaddr(ip)[0]
             self.store.note_host(ip, name)
+            with self._lock:
+                self._resolved += 1
         except Exception:
             with self._lock:
                 self._negative[ip] = time.time() + self.NEGATIVE_TTL
         finally:
             with self._lock:
                 self._queued.discard(ip)
+
+    def stats(self):
+        """For the Alerts panel, so 'nothing is getting labeled' is
+        answerable by looking rather than by asking -- attempted vs.
+        resolved, and whether the run-long safety cap has been reached."""
+        with self._lock:
+            return {
+                "attempted": self._attempts,
+                "resolved": self._resolved,
+                "pending": len(self._queued),
+                "cap_reached": self._attempts >= self.MAX_ATTEMPTS,
+            }
 
     # -- persistence, same shape as AlertEngine's -----------------------
 
@@ -2584,6 +2604,7 @@ class Handler(BaseHTTPRequestHandler):
                 "toasts": a.notifier.enabled,
                 "toasts_supported": IS_WINDOWS,
                 "reverse_dns": bool(self.app.reverse and self.app.reverse.enabled),
+                "reverse_dns_stats": self.app.reverse.stats() if self.app.reverse else None,
             })
 
         if path == "/api/streams":

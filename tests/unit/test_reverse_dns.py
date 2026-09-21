@@ -76,6 +76,29 @@ r.request("203.0.113.21")
 r.request("203.0.113.22")
 check("attempt cap stops further requests", r._queue.qsize() == 2)
 
+# ---- stats(), so "why isn't this labeling anything" is answerable by
+#      looking at the Alerts panel instead of asking someone to dig in -----
+r = resolver()
+check("fresh resolver has no attempts or resolutions yet",
+      r.stats() == {"attempted": 0, "resolved": 0, "pending": 0, "cap_reached": False},
+      str(r.stats()))
+
+r.request("203.0.113.30")
+check("a queued lookup counts as attempted", r.stats()["attempted"] == 1, str(r.stats()))
+check("a queued, not-yet-resolved lookup is pending", r.stats()["pending"] == 1, str(r.stats()))
+
+r._queue.get_nowait()
+with mock.patch.object(N.socket, "gethostbyaddr", return_value=("host.example", [], [])):
+    r._resolve_one("203.0.113.30")
+check("a successful resolution is reflected in resolved", r.stats()["resolved"] == 1, str(r.stats()))
+check("no longer pending once resolved", r.stats()["pending"] == 0, str(r.stats()))
+
+r = resolver()
+r.MAX_ATTEMPTS = 1
+r.request("203.0.113.31")
+check("cap_reached flips once the attempt budget is used up",
+      r.stats()["cap_reached"] is True, str(r.stats()))
+
 # ---- persistence round trip, same shape as AlertEngine's ------------------
 store_dict = {}
 load = lambda: dict(store_dict)

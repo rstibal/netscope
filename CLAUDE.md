@@ -174,6 +174,16 @@ choice, not a default. `App.reverse` is `None`-safe everywhere it's read
 (`CaptureEngine` never queues work against it in demo mode) so the toggle
 existing does not imply demo mode does anything with it.
 
+**Reverse DNS's lifetime attempt cap is a safety net, not a budget meant to
+be hit.** It was originally 2,000 and got raised to 20,000 after a real
+tray-mode run, left going since early morning, silently exhausted it with
+no way to tell — every subsequently-seen IP just stayed unlabeled and looked
+identical to "has no PTR record", which is the common, expected case. The
+Alerts tab now shows attempted/resolved/cap-reached (`ReverseResolver.stats()`)
+so that distinction is visible without reading the source. If this cap ever
+needs raising again, add to the stats line too — a cap nobody can see being
+hit is worse than no cap at all.
+
 ## Environment
 
 Needs Npcap and administrator rights to capture. `cryptography` is optional

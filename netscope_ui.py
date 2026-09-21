@@ -1810,6 +1810,16 @@ function renderAlerts(d){
          'sends DNS queries out."><input type="checkbox" id="reverseDns"'+
          (d.reverse_dns ? ' checked' : '')+'> Reverse DNS for unlabeled IPs'+
          '</label>';
+    const rs = d.reverse_dns_stats;
+    if (d.reverse_dns && rs){
+      h += '<div class="hint" style="margin-left:23px">'+rs.attempted+
+           ' looked up · '+rs.resolved+' resolved'+
+           (rs.pending ? ' · '+rs.pending+' pending' : '')+
+           (rs.cap_reached ? ' · limit reached, restart NetScope to resume'
+                           : '')+
+           '. Most unresolved IPs simply have no reverse DNS record — '+
+           'that is normal, not a fault.</div>';
+    }
     h += '</div><div class="rowbtns">'+
          '<button class="btn-sm" id="applyRules">Apply</button>'+
          '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+
