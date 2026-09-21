@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
 
+CREATE TABLE IF NOT EXISTS dhcp_leases (
+    mac        TEXT PRIMARY KEY,
+    ip         TEXT NOT NULL,
+    hostname   TEXT,
+    server     TEXT,
+    lease_secs INTEGER,
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     started REAL NOT NULL,
@@ -154,6 +164,7 @@ class HistoryStore:
         self._procs = {}        # name -> [first, last, in, out, packets]
         self._hosts = {}        # host -> [first, last, in, out, packets]
         self._pending_alerts = []
+        self._pending_leases = []
         self._lock = threading.Lock()
         self._db_lock = threading.Lock()
         self._stop = threading.Event()
@@ -271,6 +282,18 @@ class HistoryStore:
                 alert.get("detail", ""), alert.get("process", ""),
                 alert.get("peer", "")))
 
+    def record_dhcp_lease(self, lease):
+        """A completed lease (a DHCP ACK), queued for the next flush."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self._pending_leases.append((
+                lease.get("mac", ""), lease.get("ip", ""),
+                lease.get("hostname", ""), lease.get("server", ""),
+                lease.get("lease_secs"),
+                lease.get("first_seen", time.time()),
+                lease.get("last_seen", time.time())))
+
     # -- first-seen lookups -------------------------------------------------
 
     def known_process(self, name):
@@ -291,10 +314,12 @@ class HistoryStore:
         if not self.enabled or self._db is None:
             return
         with self._lock:
-            acc, procs, hosts, alerts = (self._acc, self._procs, self._hosts,
-                                         self._pending_alerts)
-            self._acc, self._procs, self._hosts, self._pending_alerts = {}, {}, {}, []
-        if not (acc or procs or hosts or alerts):
+            acc, procs, hosts, alerts, leases = (
+                self._acc, self._procs, self._hosts, self._pending_alerts,
+                self._pending_leases)
+            (self._acc, self._procs, self._hosts, self._pending_alerts,
+             self._pending_leases) = {}, {}, {}, [], []
+        if not (acc or procs or hosts or alerts or leases):
             return
         try:
             with self._db_lock:
@@ -324,6 +349,18 @@ class HistoryStore:
                     self._db.executemany(
                         "INSERT INTO alerts(ts,severity,rule,title,detail,process,peer)"
                         " VALUES (?,?,?,?,?,?,?)", alerts)
+
+                if leases:
+                    self._db.executemany(
+                        "INSERT INTO dhcp_leases(mac,ip,hostname,server,"
+                        "lease_secs,first_seen,last_seen) VALUES (?,?,?,?,?,?,?) "
+                        "ON CONFLICT(mac) DO UPDATE SET "
+                        "ip=excluded.ip, "
+                        "hostname=CASE WHEN excluded.hostname<>'' "
+                        "THEN excluded.hostname ELSE dhcp_leases.hostname END, "
+                        "server=excluded.server, "
+                        "lease_secs=excluded.lease_secs, "
+                        "last_seen=excluded.last_seen", leases)
 
                 if self.session_id:
                     self._db.execute(
@@ -413,6 +450,11 @@ class HistoryStore:
             "SELECT id, ts, severity, rule, title, detail, process, peer "
             "FROM alerts WHERE ts >= ? ORDER BY ts DESC LIMIT ?", (since, limit))
 
+    def dhcp_leases(self, limit=100):
+        return self._q(
+            "SELECT mac, ip, hostname, server, lease_secs, first_seen, last_seen "
+            "FROM dhcp_leases ORDER BY last_seen DESC LIMIT ?", (limit,))
+
     def sessions(self, limit=20):
         return self._q(
             "SELECT id, started, ended, iface, packets, version FROM sessions "
@@ -456,10 +498,12 @@ class HistoryStore:
         if not self.enabled or self._db is None:
             return
         with self._lock:
-            self._acc, self._procs, self._hosts, self._pending_alerts = {}, {}, {}, []
+            (self._acc, self._procs, self._hosts, self._pending_alerts,
+             self._pending_leases) = {}, {}, {}, [], []
         try:
             with self._db_lock:
-                for t in ("usage", "processes", "hosts", "alerts", "sessions"):
+                for t in ("usage", "processes", "hosts", "alerts",
+                          "dhcp_leases", "sessions"):
                     self._db.execute(f"DELETE FROM {t}")
                 self._db.commit()
                 self._db.execute("VACUUM")

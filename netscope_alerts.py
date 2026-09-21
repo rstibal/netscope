@@ -90,6 +90,13 @@ RULE_WHY = {
                  "direction: one local process fanning out to many distinct "
                  "host/port pairs at once, which is what a worm or a scanner "
                  "looks like from here.",
+    "dhcp_rogue_server": "Fires when a DHCP OFFER or ACK arrives from a "
+                         "server this machine has not seen answering before. "
+                         "Anyone on the same broadcast domain can run a "
+                         "second DHCP server, and a client that takes a "
+                         "lease from it can be handed a rogue gateway or DNS "
+                         "server without anything else on the wire looking "
+                         "unusual.",
 }
 
 
@@ -257,6 +264,7 @@ class AlertEngine:
         self._threshold_fired = set()
         self._scan_inbound = {}     # remote peer -> deque[(ts, dport)]
         self._scan_outbound = {}    # process -> deque[(ts, (peer, dport))]
+        self.seen_dhcp_servers = set()
         # Muted (rule, subject) pairs -> expiry timestamp, or None for
         # indefinitely. Turning a whole rule off is the only control that
         # existed, and it is the wrong grain: a rule is usually right to look
@@ -274,6 +282,7 @@ class AlertEngine:
             "cert_problems": True,
             "dns_resolver": True,
             "port_scan": True,
+            "dhcp_rogue_server": True,
         }
         self.threshold_mb = 500
         # Rule switches, the threshold and the toast toggle used to live only
@@ -483,6 +492,7 @@ class AlertEngine:
         self._scan_inbound.clear()
         self._scan_outbound.clear()
         self.resolvers.clear()
+        self.seen_dhcp_servers.clear()
         # Mutes deliberately survive: Clear means "I have read these", not
         # "forget everything I told you to ignore".
         self.warmup_until = _now() + 5.0
@@ -500,6 +510,7 @@ class AlertEngine:
                 self._transport_rules(rec, payload)
             self._dns_rule(rec)
             self._scan_rule(rec)
+            self._dhcp_rule(rec)
         except Exception:
             pass
 
@@ -789,3 +800,32 @@ class AlertEngine:
     def _prune_window(win, now):
         while win and now - win[0][0] > SCAN_WINDOW_SECS:
             win.popleft()
+
+    def _dhcp_rule(self, rec):
+        """
+        Flag a DHCP server this machine has not seen answering before.
+
+        The first server ever seen becomes the baseline rather than an alert
+        — otherwise the very first lease on a fresh install would fire this
+        on the router doing its ordinary job. Every server after that is
+        either the same one again or a second one that should not exist on a
+        normal network.
+        """
+        if not self.rules["dhcp_rogue_server"]:
+            return
+        dhcp = (rec.get("decoded") or {}).get("dhcp")
+        if not dhcp or dhcp.get("msg_type") not in ("OFFER", "ACK"):
+            return
+        server = dhcp.get("server_id")
+        if not server or server in self.seen_dhcp_servers:
+            return
+        first = not self.seen_dhcp_servers
+        self.seen_dhcp_servers.add(server)
+        if first:
+            return
+        self._fire(("dhcp_server", server), HIGH, "dhcp_rogue_server",
+                   "Unexpected DHCP server",
+                   f"{server} answered a DHCP request — this machine has "
+                   f"seen leases from {len(self.seen_dhcp_servers) - 1} other "
+                   f"server(s) before now. A second DHCP server on this "
+                   f"network can hand out a rogue gateway or DNS server.", rec)

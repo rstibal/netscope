@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.15.1"
+VERSION = "1.16.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -77,6 +77,7 @@ except ImportError:  # pragma: no cover
 
 from netscope_smb import SmbTracker
 from netscope_ftp import FTPCorrelator
+from netscope_dhcp import DhcpTracker, summarise as dhcp_summary
 from netscope_streams import (StreamTracker, ObjectStore, ObjectScanner,
                               TEXTUAL)
 from netscope_pcap import write_pcap, read_pcap
@@ -651,7 +652,7 @@ class CaptureEngine:
     _ifaces_read = 0.0          # last OS re-read, shared across instances
     def __init__(self, store: PacketStore, resolver: ProcessResolver,
                  streams: StreamTracker = None, alerts: AlertEngine = None,
-                 history: HistoryStore = None):
+                 history: HistoryStore = None, dhcp: DhcpTracker = None):
         self.store = store
         self.resolver = resolver
         self.streams = streams
@@ -660,6 +661,7 @@ class CaptureEngine:
         self.smb = SmbTracker()
         self.ftp = FTPCorrelator()
         self.quic = InitialReassembler()
+        self.dhcp = dhcp or DhcpTracker()
         self.sniffer = None
         self.sniffers = []          # [(iface_name, AsyncSniffer, socket_or_None)]
         self.stress_us = 0          # --stress-drops: microseconds per packet
@@ -1177,6 +1179,24 @@ class CaptureEngine:
                     decoded["smb"] = smb
                     info = smb["summary"]
                     hint = "SMB"
+            if not hint and transport == "udp" and ({67, 68} & {sport, dport}):
+                d = self.dhcp.observe(payload, ts)
+                if d:
+                    proto = "DHCP"
+                    hint = "DHCP"
+                    decoded["dhcp"] = d
+                    info = dhcp_summary(d)
+                    # A DISCOVER/REQUEST names the client machine before it has
+                    # sent a single other packet — worth remembering against
+                    # the address DHCP is about to hand it, the same way a TLS
+                    # SNI or a DNS answer teaches the store a hostname.
+                    lease_ip = d.get("your_ip") or d.get("requested_ip")
+                    if d.get("hostname") and lease_ip:
+                        self.store.note_host(lease_ip, d["hostname"])
+                    if d["msg_type"] == "ACK" and self.history is not None:
+                        lease = self.dhcp.latest(d["mac"])
+                        if lease:
+                            self.history.record_dhcp_lease(lease)
             if not hint:
                 tls = decode_tls(payload)
                 if tls:
@@ -1339,13 +1359,15 @@ class DemoEngine:
             return payload
 
     def __init__(self, store: PacketStore, resolver=None, streams=None,
-                 alerts: AlertEngine = None, history: HistoryStore = None):
+                 alerts: AlertEngine = None, history: HistoryStore = None,
+                 dhcp: DhcpTracker = None):
         self.store = store
         self.streams = streams
         self.alerts = alerts
         self.history = history
         self.smb = SmbTracker()
         self.quic = InitialReassembler()
+        self.dhcp = dhcp or DhcpTracker()
         self.running = False
         self.error = None
         self.iface = "demo0"
@@ -1690,6 +1712,92 @@ class DemoEngine:
                 self._emit_udp(short, random.random() < 0.4, ip, 443, cport,
                                proc, host)
 
+    # -- DHCP -----------------------------------------------------------
+
+    @staticmethod
+    def _dhcp_opt(tag, value):
+        return bytes([tag, len(value)]) + value
+
+    @classmethod
+    def _dhcp_packet(cls, op, msg_type, xid, mac, yiaddr=b"\x00\x00\x00\x00",
+                     siaddr=b"\x00\x00\x00\x00", options=b""):
+        pkt = bytearray(240)
+        pkt[0] = op                 # 1 = request, 2 = reply
+        pkt[1] = 1                  # htype: Ethernet
+        pkt[2] = 6                  # hlen
+        struct.pack_into("!I", pkt, 4, xid)
+        pkt[16:20] = yiaddr
+        pkt[20:24] = siaddr
+        pkt[28:28 + len(mac)] = mac
+        pkt[236:240] = b"\x63\x82\x53\x63"
+        return bytes(pkt) + cls._dhcp_opt(53, bytes([msg_type])) + options + b"\xff"
+
+    def _emit_dhcp(self, payload, outbound, src, dst, sport, dport):
+        """One synthetic BOOTP/DHCP message, decoded the same way a real one
+        would be so the tracker, the alert rule and the lease table all see
+        genuine correlated state rather than a canned record."""
+        now = time.time()
+        d = self.dhcp.observe(payload, now)
+        info = dhcp_summary(d) if d else ""
+        rec = {
+            "ts": now,
+            "time": datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3],
+            "src": src, "dst": dst, "sport": sport, "dport": dport,
+            "proto": "DHCP", "length": len(payload) + 42,
+            "process": "System", "pid": 4,
+            "dir": "out" if outbound else "in",
+            "remote": dst if outbound else src, "rhost": "",
+            "info": info, "ipver": 4, "ttl": 64 if outbound else 255,
+            "payload_len": len(payload), "stream": None, "iface": "demo0",
+            "transport": "udp",
+            "decoded": {"dhcp": d} if d else {},
+        }
+        raw = self.frame(src, sport, dst, dport, payload, "udp", 0, outbound,
+                         rec["ttl"])
+        rec["length"] = len(raw)
+        self.store.add(rec, raw)
+        if self.alerts is not None:
+            self.alerts.inspect(rec, payload)
+        if self.history is not None:
+            self.history.record(rec)
+            if d and d.get("msg_type") == "ACK":
+                lease = self.dhcp.latest(d["mac"])
+                if lease:
+                    self.history.record_dhcp_lease(lease)
+
+    def _seed_dhcp(self):
+        """A realistic DISCOVER/OFFER/REQUEST/ACK, as genuine DHCP bytes —
+        the one exchange that names a machine before it sends anything else,
+        and the one an unexpected second server would answer instead."""
+        mac = bytes(int(x, 16) for x in "aa:bb:cc:11:22:33".split(":"))
+        xid = random.randint(0, 2**32 - 1)
+        hostname = self._dhcp_opt(12, b"robs-laptop")
+        client_ip = bytes([192, 168, 1, 77])
+        server_ip = bytes([192, 168, 1, 1])
+        lease = self._dhcp_opt(51, struct.pack("!I", 86400))
+        server_id = self._dhcp_opt(54, server_ip)
+        subnet = self._dhcp_opt(1, bytes([255, 255, 255, 0]))
+        router = self._dhcp_opt(3, server_ip)
+        dns = self._dhcp_opt(6, server_ip)
+
+        discover = self._dhcp_packet(1, 1, xid, mac,
+                                     options=hostname + self._dhcp_opt(60, b"MSFT 5.0"))
+        offer = self._dhcp_packet(2, 2, xid, mac, yiaddr=client_ip, siaddr=server_ip,
+                                  options=server_id + lease + subnet + router + dns)
+        request = self._dhcp_packet(1, 3, xid, mac,
+                                    options=hostname + self._dhcp_opt(50, client_ip) + server_id)
+        ack = self._dhcp_packet(2, 5, xid, mac, yiaddr=client_ip, siaddr=server_ip,
+                                options=server_id + lease + subnet + router + dns)
+
+        BCAST, SERVER = "255.255.255.255", "192.168.1.1"
+        for payload, outbound in ((discover, True), (offer, False),
+                                  (request, True), (ack, False)):
+            if outbound:
+                self._emit_dhcp(payload, True, self.LOCAL, BCAST, 68, 67)
+            else:
+                self._emit_dhcp(payload, False, SERVER, self.LOCAL, 67, 68)
+            self._stop.wait(0.05)
+
     # -- deliberately insecure traffic, to exercise the alert rules ---------
 
     def _seed_insecure(self):
@@ -1871,7 +1979,7 @@ class DemoEngine:
         if not self._seeded:
             self._seeded = True
             for seed in (self._seed_http, self._seed_smb, self._seed_quic,
-                         self._seed_insecure):
+                         self._seed_dhcp, self._seed_insecure):
                 try:
                     seed()
                 except Exception:
@@ -1993,7 +2101,7 @@ STREAM_VIEW_CAP = 512 * 1024
 class App:
     def __init__(self, store, engine, resolver, token, demo=False,
                  streams=None, objects=None, scanner=None, alerts=None,
-                 decoder=None, history=None):
+                 decoder=None, history=None, dhcp=None):
         self.store = store
         self.engine = engine
         # Reads .pcap files. Same object as `engine` for a live capture; a
@@ -2007,6 +2115,7 @@ class App:
         self.scanner = scanner
         self.alerts = alerts
         self.history = history
+        self.dhcp = dhcp
         self.source = None          # set when a .pcap has been loaded
         # Enumerated on demand rather than on a timer: the socket table is
         # expensive, and nobody needs it unless the Connections tab is open.
@@ -2188,6 +2297,11 @@ class Handler(BaseHTTPRequestHandler):
                              for d, b in blocks]
             out["clipped"] = clipped
             return self._send(200, out)
+
+        if path == "/api/dhcp":
+            return self._send(200, {
+                "leases": self.app.dhcp.list() if self.app.dhcp else [],
+            })
 
         if path == "/api/objects":
             return self._send(200, {
@@ -2374,6 +2488,7 @@ class Handler(BaseHTTPRequestHandler):
             "proc_attribution": bool(psutil) and (is_admin() or not IS_WINDOWS),
             "extract": self.app.scanner.enabled if self.app.scanner else False,
             "objects": len(self.app.objects.list()) if self.app.objects else 0,
+            "dhcp_leases": len(self.app.dhcp.list()) if self.app.dhcp else 0,
             "alerts": self.app.alerts.counts() if self.app.alerts else {},
             "source": self.app.source,
             "quic_keys": QUIC_CRYPTO_OK,
@@ -2613,13 +2728,15 @@ def main(argv=None):
                            enabled=not args.no_history)
     alerts = AlertEngine(DesktopNotifier(enabled=args.toasts), history=history)
     alerts.attach_settings(load_settings, save_setting)
+    dhcp = DhcpTracker()
 
-    engine = (DemoEngine(store, streams=streams, alerts=alerts, history=history)
+    engine = (DemoEngine(store, streams=streams, alerts=alerts, history=history,
+                         dhcp=dhcp)
               if args.demo
               else CaptureEngine(store, resolver, streams=streams,
-                                 alerts=alerts, history=history))
+                                 alerts=alerts, history=history, dhcp=dhcp))
     decoder = (CaptureEngine(store, resolver, streams=streams, alerts=alerts,
-                             history=history) if args.demo else engine)
+                             history=history, dhcp=dhcp) if args.demo else engine)
     if args.stress_drops and hasattr(engine, "stress_us"):
         engine.stress_us = max(0, args.stress_drops)
         print(f"  Stress:    stalling the capture {engine.stress_us}us per "
@@ -2649,7 +2766,8 @@ def main(argv=None):
     token = secrets.token_urlsafe(18)
     Handler.app = App(store, engine, resolver, token, demo=args.demo,
                       streams=streams, objects=objects, scanner=scanner,
-                      alerts=alerts, decoder=decoder, history=history)
+                      alerts=alerts, decoder=decoder, history=history,
+                      dhcp=dhcp)
     if args.read:
         Handler.app.source = os.path.basename(args.read)
 

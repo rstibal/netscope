@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.15.1**
+**Version 1.16.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,15 @@ names.
 ---
 
 ## Version history
+
+**1.16.0** — **DHCP is now decoded**, with its own tab. Every
+DISCOVER/OFFER/REQUEST/ACK is shown, the completed lease (hostname, IP, MAC,
+lease time) lands in a new DHCP tab, and the hostname a DISCOVER/REQUEST
+names is remembered for that IP the same way a TLS SNI or a DNS answer is —
+so it can label traffic before the host has sent anything else. A new alert,
+**Unexpected DHCP server**, fires the first time a lease is offered or
+acknowledged by a DHCP server this machine hasn't seen before, which is what
+a rogue DHCP server on the same network looks like.
 
 **1.15.1** — Reverted the tray icon back to a static waveform: blue while
 capturing, grey while stopped, no alert coloring and no throughput

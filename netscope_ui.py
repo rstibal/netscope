@@ -173,6 +173,7 @@ td.info{color:var(--dim)}
 .pr.ARP{color:var(--arp);background:#8b97a81a;border-color:#8b97a833}
 .pr.SMB2,.pr.SMB{color:var(--smb);background:#db61a21a;border-color:#db61a233}
 .pr.QUIC{color:var(--quic);background:#56d4dd1a;border-color:#56d4dd33}
+.pr.DHCP{color:var(--udp);background:#a371f71a;border-color:#a371f733}
 /* Hidden columns are squeezed to zero width rather than display:none —
    removing a cell from the row shifts every later cell onto the wrong <col>,
    so the colgroup widths and the resize handles end up applying to the
@@ -606,6 +607,7 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="tab" data-p="files">Files <span class="n zero" id="nFiles"></span></div>
       <div class="tab" data-p="conns" title="What is open right now, per program">Connections</div>
       <div class="tab" data-p="streams">Streams</div>
+      <div class="tab" data-p="dhcp">DHCP <span class="n zero" id="nDhcp"></span></div>
       <div class="tab" data-p="talkers">Talkers</div>
     </div>
     <div class="pane on" id="p-detail"><div class="empty">Click a packet to inspect it.</div></div>
@@ -614,6 +616,7 @@ back through the table while the capture continues."><input type="checkbox"
     <div class="pane" id="p-files"><div class="empty">No files rebuilt yet.</div></div>
     <div class="pane" id="p-conns"><div class="empty">Loading connections…</div></div>
     <div class="pane" id="p-streams"><div class="empty">No TCP connections yet.</div></div>
+    <div class="pane" id="p-dhcp"><div class="empty">No DHCP leases seen yet.</div></div>
     <div class="pane" id="p-talkers"><div class="empty">No traffic yet.</div></div>
   </div>
 </main>
@@ -1350,6 +1353,22 @@ function renderDetail(d){
     h += '</div>';
   }
 
+  if (dec.dhcp){
+    const q = dec.dhcp;
+    h += '<div class="sec"><h4>DHCP</h4>';
+    h += kv('Message', q.msg_type);
+    h += kv('Client MAC', q.mac);
+    if (q.hostname)      h += kv('Hostname', q.hostname);
+    if (q.your_ip)       h += kv('Assigned IP', q.your_ip);
+    if (q.requested_ip)  h += kv('Requested IP', q.requested_ip);
+    if (q.server_id)     h += kv('Server', q.server_id);
+    if (q.lease_secs != null) h += kv('Lease time', (q.lease_secs/3600).toFixed(1)+' h');
+    if (q.router)         h += kv('Router', q.router);
+    if (q.dns && q.dns.length) h += kv('DNS', q.dns.join(', '));
+    if (q.vendor_class)   h += kv('Vendor class', q.vendor_class);
+    h += '</div>';
+  }
+
   if (d.raw_b64){
     h += '<div class="sec"><h4>Raw bytes ('+d.raw_len+')</h4><div class="hex">'+
          hexdump(b64bytes(d.raw_b64))+'</div></div>';
@@ -1830,6 +1849,25 @@ function renderStreams(d){
       '</div>').join('') + '</div>';
 }
 
+function renderDhcp(d){
+  const list = d.leases || [];
+  if (!list.length){
+    $('p-dhcp').innerHTML = '<div class="empty">No DHCP leases seen yet.</div>';
+    return;
+  }
+  const age = s => { const h = s / 3600;
+    return h >= 1 ? h.toFixed(1) + 'h lease' : Math.round(s/60) + 'm lease'; };
+  $('p-dhcp').innerHTML = '<div class="sec"><h4>'+list.length+' lease'+
+    (list.length===1?'':'s')+'</h4>' +
+    list.map(l =>
+      '<div class="item">' +
+        '<div class="l1"><span class="nm">'+esc(l.hostname || '(no hostname)')+
+          '</span><span class="sz">'+esc(l.ip)+'</span></div>' +
+        '<div class="l2">'+esc(l.mac)+' · server '+esc(l.server)+
+          (l.lease_secs ? ' · '+age(l.lease_secs) : '')+'</div>' +
+      '</div>').join('') + '</div>';
+}
+
 let streamData = null, streamMode = 'text';
 
 /* Printable runs, ASCII and UTF-16LE — the readable part of a binary protocol.
@@ -2230,6 +2268,9 @@ function renderStatus(st){
   const n = $('nFiles');
   n.textContent = st.objects || '';
   n.classList.toggle('zero', !st.objects);
+  const nd = $('nDhcp');
+  nd.textContent = st.dhcp_leases || '';
+  nd.classList.toggle('zero', !st.dhcp_leases);
 
   const a = st.alerts || {};
   const na = $('nAlerts');
@@ -2338,6 +2379,7 @@ function refreshTab(name){
   if (name === 'talkers') renderTalkers(lastStats);
   else if (name === 'files')   api('/api/objects').then(r=>r.json()).then(renderFiles).catch(()=>{});
   else if (name === 'streams') api('/api/streams').then(r=>r.json()).then(renderStreams).catch(()=>{});
+  else if (name === 'dhcp')    api('/api/dhcp').then(r=>r.json()).then(renderDhcp).catch(()=>{});
   else if (name === 'alerts')  return api('/api/alerts').then(r=>r.json()).then(renderAlerts).catch(()=>{});
   else if (name === 'history') return api('/api/history?days='+histDays)
     .then(r=>r.json()).then(renderHistory).catch(()=>{});
