@@ -240,6 +240,9 @@ footer b{font-variant-numeric:tabular-nums;display:inline-block}
 .empty{color:var(--faint);text-align:center;padding:40px 12px;font-size:12px}
 h4{margin:0 0 8px;font:600 11px var(--sans);letter-spacing:.5px;text-transform:uppercase;color:var(--dim)}
 .sec{margin-bottom:16px}
+.sechead{display:flex;justify-content:space-between;align-items:baseline;
+  gap:10px;margin-bottom:8px}
+.sechead h4{margin:0}
 .row{display:flex;justify-content:space-between;gap:10px;padding:3px 0;
   font-family:var(--mono);font-size:11.5px;border-bottom:1px solid var(--line)}
 .row span:first-child{color:var(--dim);flex:0 0 auto}
@@ -1781,21 +1784,32 @@ function ago(ts){
   return Math.round(s/3600) + 'h ago';
 }
 
+// Remembered across renders (and across the 2.5s auto-refresh) rather than
+// re-derived from the DOM each time, so collapsing the rules or leaving a
+// "why did this fire?" open survives the next poll instead of snapping shut
+// under you.
+let rulesCollapsed = false;
+try { rulesCollapsed = localStorage.getItem('rulesCollapsed') === '1'; } catch(e) {}
+let openWhy = new Set();
+
 function renderAlerts(d){
-  let h = '<div class="sec"><h4>Rules</h4><div class="rulegrid">';
-  for (const k in RULE_LABELS){
-    h += '<label><input type="checkbox" data-rule="'+k+'"'+
-         (d.rules[k] ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
+  let h = '';
+  if (!rulesCollapsed){
+    h += '<div class="sec"><h4>Rules</h4><div class="rulegrid">';
+    for (const k in RULE_LABELS){
+      h += '<label><input type="checkbox" data-rule="'+k+'"'+
+           (d.rules[k] ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
+    }
+    h += '<label>Threshold <input type="number" id="thrMb" min="1" value="'+
+         d.threshold_mb+'"> MB per program</label>';
+    h += '<label><input type="checkbox" id="toasts"'+(d.toasts ? ' checked' : '')+
+         (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
+         (d.toasts_supported ? '' : ' (Windows only)')+'</label>';
+    h += '</div><div class="rowbtns">'+
+         '<button class="btn-sm" id="applyRules">Apply</button>'+
+         '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+
+         '<div class="hint">Settings are remembered between runs.</div></div>';
   }
-  h += '<label>Threshold <input type="number" id="thrMb" min="1" value="'+
-       d.threshold_mb+'"> MB per program</label>';
-  h += '<label><input type="checkbox" id="toasts"'+(d.toasts ? ' checked' : '')+
-       (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
-       (d.toasts_supported ? '' : ' (Windows only)')+'</label>';
-  h += '</div><div class="rowbtns">'+
-       '<button class="btn-sm" id="applyRules">Apply</button>'+
-       '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+
-       '<div class="hint">Settings are remembered between runs.</div></div>';
 
   // Muted subjects, listed where you can undo them. A mute you cannot see is
   // indistinguishable from a rule that stopped working.
@@ -1812,12 +1826,15 @@ function renderAlerts(d){
   }
 
   const list = d.alerts || [];
+  h += '<div class="sec"><div class="sechead"><h4>'+
+       (list.length ? list.length+' alerts · '+d.counts.high+' high · '+d.counts.warn+' warn'
+                    : 'Alerts')+
+       '</h4><button class="btn-sm" id="toggleRules">'+
+       (rulesCollapsed ? 'Show rules' : 'Hide rules')+'</button></div>';
   if (!list.length){
     h += '<div class="empty">Nothing flagged yet. Rules run on every packet; '+
          'alerts appear here and repeat counts are folded together.</div>';
   } else {
-    h += '<div class="sec"><h4>'+list.length+' alerts · '+d.counts.high+' high · '+
-         d.counts.warn+' warn</h4>';
     h += list.map(a =>
       '<div class="alert '+a.severity+'">'+
         '<div class="t"><span class="ti">'+esc(a.title)+'</span>'+
@@ -1825,7 +1842,8 @@ function renderAlerts(d){
         '<div class="d">'+esc(a.detail)+'</div>'+
         '<div class="rl" title="'+esc((d.why||{})[a.rule]||'')+'">'+esc(a.rule)+
           (a.process ? ' · '+esc(a.process) : '')+'</div>'+
-        ((d.why||{})[a.rule] ? '<details class="why"><summary>Why did this '+
+        ((d.why||{})[a.rule] ? '<details class="why" data-aid="'+a.id+'"'+
+          (openWhy.has(a.id) ? ' open' : '')+'><summary>Why did this '+
           'fire?</summary>'+esc(d.why[a.rule])+'</details>' : '')+
         '<div class="rowbtns">'+
           (a.subject ? '<button class="btn-sm" data-mute="'+esc(a.rule)+
@@ -1836,9 +1854,28 @@ function renderAlerts(d){
             '" data-subject="'+esc(a.subject)+'">Mute 1h</button>' : '')+
           '<button class="btn-sm" data-dismiss="'+a.id+'">Dismiss</button>'+
         '</div>'+
-      '</div>').join('') + '</div>';
+      '</div>').join('');
   }
+  h += '</div>';
   $('p-alerts').innerHTML = h;
+
+  // Alerts that no longer exist (dismissed, muted, cleared) don't need to be
+  // remembered as "open" forever.
+  const liveIds = new Set(list.map(a => a.id));
+  openWhy.forEach(id => { if (!liveIds.has(id)) openWhy.delete(id); });
+
+  const toggleRules = $('toggleRules');
+  if (toggleRules) toggleRules.onclick = () => {
+    rulesCollapsed = !rulesCollapsed;
+    try { localStorage.setItem('rulesCollapsed', rulesCollapsed ? '1' : '0'); } catch(e) {}
+    renderAlerts(d);
+  };
+  document.querySelectorAll('#p-alerts details.why').forEach(det => {
+    det.addEventListener('toggle', () => {
+      const id = Number(det.dataset.aid);
+      if (det.open) openWhy.add(id); else openWhy.delete(id);
+    });
+  });
 
   const apply = $('applyRules');
   if (apply) apply.onclick = () => {

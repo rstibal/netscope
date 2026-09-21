@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.20.0**
+**Version 1.20.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,14 @@ names.
 ---
 
 ## Version history
+
+**1.20.1** — Two Alerts tab fixes. The Rules panel can now be collapsed to
+a "Hide rules"/"Show rules" button, right next to the alert count, instead
+of always taking up the top of the tab — and the choice is remembered
+between runs. And "Why did this fire?" no longer snaps shut on its own: the
+tab refreshes every 2.5 seconds, which used to rebuild the whole list and
+lose any open explanation before there was time to read it; open ones now
+stay open across the refresh.
 
 **1.20.0** — Devices are now named from mDNS, LLMNR and NBNS, the same way
 DHCP already teaches NetScope a hostname before anything else has. mDNS
