@@ -31,6 +31,7 @@ python -m PyInstaller --noconfirm --clean ^
   --onefile ^
   --console ^
   --name NetScope ^
+  --icon netscope.ico ^
   --collect-all scapy ^
   --hidden-import netscope_ui ^
   --hidden-import netscope_smb ^
@@ -60,6 +61,7 @@ python -m PyInstaller --noconfirm --clean ^
   --onefile ^
   --noconsole ^
   --name NetScopeTray ^
+  --icon netscope.ico ^
   --collect-all scapy ^
   --hidden-import netscope_ui ^
   --hidden-import netscope_smb ^
