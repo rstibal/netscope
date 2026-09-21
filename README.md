@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.16.1**
+**Version 1.17.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,12 @@ names.
 ---
 
 ## Version history
+
+**1.17.0** — `NetScope.exe` and `NetScopeTray.exe` now carry the same blue
+waveform icon the tray and dashboard already use, instead of PyInstaller's
+default icon. `build.bat` passes `--icon netscope.ico`; the .ico is rendered
+by `make_appicon.py` from the tray's own icon-drawing code, so the two can't
+drift apart.
 
 **1.16.1** — Fixed a bad-token 403 that could show up in the dashboard after
 launching from the tray. On Windows, a second NetScope could silently bind
