@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.19.0**
+**Version 1.20.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,20 @@ names.
 ---
 
 ## Version history
+
+**1.20.0** — Devices are now named from mDNS, LLMNR and NBNS, the same way
+DHCP already teaches NetScope a hostname before anything else has. mDNS
+(UDP/5353) and LLMNR (UDP/5355) share DNS's wire format, so they're decoded
+by the existing DNS path and shown in the same DNS detail section; a printer
+or smart-home device announcing `name.local` over mDNS, or a Windows machine
+answering an LLMNR lookup for itself, now labels that IP everywhere the
+dashboard shows one. NBNS (UDP/137, the legacy NetBIOS name service) gets a
+new decoder and its own detail section — but only a Name Registration/
+Refresh or a positive Name Query Response ever attributes a name; a plain
+broadcast query says nothing trustworthy about who sent it, so it's decoded
+for display but never used to label a host. This is enrichment, not a
+security alert: nothing was invisible before, packets just show bare IPs
+less often now.
 
 **1.19.0** — New alert: **Unexpected IPv6 router**, the IPv6 sibling of the
 DHCP rogue-server and ARP-spoof alerts. Router Advertisements are now

@@ -141,6 +141,27 @@ router (common — one physical LAN, two adapters) is not a second server. If
 a future rule needs multi-adapter DHCP-server tracking, that is a deliberate
 change, not a bug to "fix" by copying the ARP/RA shape blindly.
 
+**NBNS naming only ever comes from a Name Registration/Refresh or a
+positive Name Query Response, never a plain query.** `netscope_nbns.parse()`
+decodes every NBNS packet for display, but a broadcast query ("who has this
+name?") says nothing trustworthy about who sent it — anyone can ask about
+any name. Only the two unambiguous shapes call `store.note_host()`, and that
+decision is made by the caller in `netscope.py`, not inside `parse()`
+itself, the same separation `netscope_dhcp.parse()` keeps from
+`DhcpTracker`'s lease correlation. This means NBNS naming fires less often
+than mDNS/LLMNR in practice, since most real NBNS traffic is the ambiguous
+broadcast queries — that's an honest trade, not a shortfall to "fix" by
+attributing names from queries too.
+
+**Building a scapy `DNS()` for a response, without also silencing the
+question, leaks a phantom `www.example.com` query.** `DNS()`'s `qd` field
+defaults to one `DNSQR()` (query section count 1) even when you only set
+`an=...`, so a hand-built mDNS/LLMNR *response* needs `qdcount=0, qd=None`
+explicitly, or the decoded `queries` list carries a fake entry that shows up
+in the info line. Cost a debugging pass in the demo-mode mDNS seed
+(`DemoEngine._seed_mdns`) before the LLMNR seed, built with an explicit
+`qd`, happened to dodge it.
+
 ## Environment
 
 Needs Npcap and administrator rights to capture. `cryptography` is optional

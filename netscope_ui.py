@@ -1293,7 +1293,8 @@ function renderDetail(d){
     h += '</div>';
   }
   if (dec.dns){
-    h += '<div class="sec"><h4>DNS '+(dec.dns.response?'response':'query')+'</h4>';
+    h += '<div class="sec"><h4>'+(p.proto==='MDNS'||p.proto==='LLMNR'?p.proto:'DNS')+
+         ' '+(dec.dns.response?'response':'query')+'</h4>';
     h += kv('Transaction ID', '0x'+Number(dec.dns.id).toString(16));
     (dec.dns.queries||[]).forEach(q => h += kv('Query', q.type + '  ' + q.name));
     (dec.dns.answers||[]).forEach(a => h += kv('Answer ' + a.type, a.name + ' → ' + a.data));
@@ -1387,6 +1388,15 @@ function renderDetail(d){
     (r.prefixes||[]).forEach(p => h += kv('Prefix', p.prefix +
       (p.on_link ? '  on-link' : '') + (p.autonomous ? '  autonomous' : '')));
     (r.rdnss||[]).forEach(n => h += kv('DNS (RDNSS)', n.server + '  (' + n.lifetime + 's)'));
+    h += '</div>';
+  }
+
+  if (dec.nbns){
+    const nb = dec.nbns;
+    h += '<div class="sec"><h4>NBNS</h4>';
+    h += kv('Operation', (nb.response ? 'response  ' : '') + nb.opcode);
+    h += kv('Name', nb.name + (nb.service ? '  <'+nb.service+'>' : ''));
+    if (nb.ips && nb.ips.length) h += kv('Address' + (nb.ips.length>1?'es':''), nb.ips.join(', '));
     h += '</div>';
   }
 

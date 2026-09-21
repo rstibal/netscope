@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.19.0"
+VERSION = "1.20.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -89,6 +89,7 @@ from netscope_alerts import AlertEngine, DesktopNotifier, RULE_WHY
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
                          owner_label, parse_ra, UNOWNED)
+from netscope_nbns import parse as parse_nbns, summarise as nbns_summary
 from netscope_history import (HistoryStore, default_db_path,
                               load_settings, save_setting)
 import netscope_tray as tray
@@ -102,7 +103,7 @@ try:
     from scapy.layers.inet import IP, TCP, UDP, ICMP
     from scapy.layers.inet6 import IPv6
     from scapy.layers.l2 import Ether, ARP
-    from scapy.layers.dns import DNS
+    from scapy.layers.dns import DNS, DNSQR, DNSRR
     from scapy.packet import Raw
 
     SCAPY_OK = True
@@ -315,11 +316,17 @@ def decode_http(payload: bytes):
         return None
 
 
-def decode_dns(pkt):
-    """Summarise a scapy DNS layer into queries and answers."""
-    try:
-        dns = pkt[DNS]
-    except Exception:
+def decode_dns(dns):
+    """
+    Summarise a scapy DNS layer into queries and answers.
+
+    Takes the DNS object itself rather than a packet, so it works both for
+    real DNS (pkt[DNS], scapy's own dissection off port 53) and for mDNS/
+    LLMNR, which share DNS's exact wire format but arrive on ports 5353 and
+    5355 that scapy does not bind DNS to -- those are decoded by handing this
+    a DNS() built directly from the raw payload instead.
+    """
+    if dns is None:
         return None
     out = {"id": int(dns.id), "response": bool(dns.qr), "queries": [], "answers": []}
     try:
@@ -352,6 +359,17 @@ def decode_dns(pkt):
     except Exception:
         pass
     return out
+
+
+def _dns_info(d):
+    """The packet-list info line for a decode_dns() result -- shared by real
+    DNS, mDNS and LLMNR so all three read the same way."""
+    if d["response"]:
+        names = ", ".join(a["data"] for a in d["answers"][:3]) or "no answer"
+        q = d["queries"][0]["name"] if d["queries"] else ""
+        return f"response  {q} → {names}"
+    q = d["queries"][0] if d["queries"] else {"name": "?", "type": "?"}
+    return f"query  {q['type']}  {q['name']}"
 
 
 # ---------------------------------------------------------------------------
@@ -1204,6 +1222,22 @@ class CaptureEngine:
                         lease = self.dhcp.latest(d["mac"])
                         if lease:
                             self.history.record_dhcp_lease(lease)
+            if not hint and transport == "udp" and 137 in (sport, dport):
+                nb = parse_nbns(payload)
+                if nb:
+                    proto = "NBNS"
+                    hint = "NBNS"
+                    decoded["nbns"] = nb
+                    info = nbns_summary(nb)
+                    # Only a registration/refresh (a host claiming a name for
+                    # itself) or a positive query response (an explicit
+                    # name -> address answer) says whose name this is. A
+                    # plain broadcast query does not, and parse_nbns() leaves
+                    # that judgment to us rather than guessing.
+                    if nb["ips"] and (nb["opcode"] in ("registration", "refresh")
+                                     or (nb["opcode"] == "query" and nb["response"])):
+                        for ip in nb["ips"]:
+                            self.store.note_host(ip, nb["name"])
             if not hint:
                 tls = decode_tls(payload)
                 if tls:
@@ -1240,18 +1274,27 @@ class CaptureEngine:
                         host_hint = qinfo["sni"]
 
         if DNS in pkt:
-            d = decode_dns(pkt)
+            d = decode_dns(pkt[DNS])
             if d:
                 proto = "DNS"
                 decoded["dns"] = d
+                info = _dns_info(d)
                 if d["response"]:
-                    names = ", ".join(a["data"] for a in d["answers"][:3]) or "no answer"
-                    q = d["queries"][0]["name"] if d["queries"] else ""
-                    info = f"response  {q} → {names}"
                     self.store.note_dns(d["answers"])
-                else:
-                    q = d["queries"][0] if d["queries"] else {"name": "?", "type": "?"}
-                    info = f"query  {q['type']}  {q['name']}"
+        elif payload and transport == "udp" and ({5353, 5355} & {sport, dport}):
+            # mDNS and LLMNR are DNS-message-format-compatible, just on ports
+            # scapy doesn't bind the DNS layer to -- build one from the raw
+            # bytes instead of relying on scapy's own dissection.
+            try:
+                d = decode_dns(DNS(payload))
+            except Exception:
+                d = None
+            if d and (d["queries"] or d["answers"]):
+                proto = "MDNS" if 5353 in (sport, dport) else "LLMNR"
+                decoded["dns"] = d
+                info = _dns_info(d)
+                if d["response"]:
+                    self.store.note_dns(d["answers"])
 
         pname, pid, direction = self.resolver.lookup(
             sport, dport, transport or "tcp", src, dst)
@@ -1805,6 +1848,126 @@ class DemoEngine:
                 self._emit_dhcp(payload, False, SERVER, self.LOCAL, 67, 68)
             self._stop.wait(0.05)
 
+    # -- mDNS / LLMNR / NBNS: device self-announcement, for host naming -----
+
+    def _emit_dns_like(self, payload, outbound, src, dst, sport, dport, proto):
+        """One synthetic mDNS or LLMNR message, decoded through the exact
+        same decode_dns() path a real one would take."""
+        now = time.time()
+        try:
+            d = decode_dns(DNS(payload))
+        except Exception:
+            d = None
+        info = _dns_info(d) if d else ""
+        rec = {
+            "ts": now,
+            "time": datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3],
+            "src": src, "dst": dst, "sport": sport, "dport": dport,
+            "proto": proto, "length": len(payload) + 42,
+            "process": "System", "pid": 4,
+            "dir": "out" if outbound else "in",
+            "remote": dst if outbound else src, "rhost": "",
+            "info": info, "ipver": 4, "ttl": 64 if outbound else 255,
+            "payload_len": len(payload), "stream": None, "iface": "demo0",
+            "transport": "udp",
+            "decoded": {"dns": d} if d else {},
+        }
+        raw = self.frame(src, sport, dst, dport, payload, "udp", 0, outbound,
+                         rec["ttl"])
+        rec["length"] = len(raw)
+        self.store.add(rec, raw)
+        if self.alerts is not None:
+            self.alerts.inspect(rec, payload)
+        if self.history is not None:
+            self.history.record(rec)
+        if d and d["response"]:
+            self.store.note_dns(d["answers"])
+
+    def _seed_mdns(self):
+        """A smart-home device announcing its own address over mDNS,
+        unprompted — the everyday case this decoder exists for."""
+        payload = bytes(DNS(qr=1, aa=1, qdcount=0, qd=None,
+                            an=DNSRR(rrname="attic-sensor.local.", type="A",
+                                     ttl=120, rdata="192.168.1.65")))
+        self._emit_dns_like(payload, False, "192.168.1.65", "224.0.0.251",
+                            5353, 5353, "MDNS")
+
+    def _seed_llmnr(self):
+        """A Windows machine answering an LLMNR name lookup for itself, the
+        way name resolution falls back once DNS has nothing."""
+        cport = random.randint(49152, 65535)
+        query = bytes(DNS(rd=0, qd=DNSQR(qname="DESKTOP-7FQAK2.", qtype="A")))
+        self._emit_dns_like(query, True, self.LOCAL, "224.0.0.252", cport,
+                            5355, "LLMNR")
+        response = bytes(DNS(qr=1, aa=1,
+                             qd=DNSQR(qname="DESKTOP-7FQAK2.", qtype="A"),
+                             an=DNSRR(rrname="DESKTOP-7FQAK2.", type="A",
+                                      ttl=30, rdata="192.168.1.46")))
+        self._emit_dns_like(response, False, "192.168.1.46", self.LOCAL,
+                            5355, cport, "LLMNR")
+
+    # -- NBNS -----------------------------------------------------------
+
+    @staticmethod
+    def _nbns_name(name, suffix):
+        raw = name.encode("latin-1")[:15].ljust(15, b" ") + bytes([suffix])
+        out = bytearray(32)
+        for i, b in enumerate(raw):
+            out[2 * i] = 0x41 + (b >> 4)
+            out[2 * i + 1] = 0x41 + (b & 0xF)
+        return bytes([0x20]) + bytes(out) + bytes([0])
+
+    @classmethod
+    def _nbns_packet(cls, opcode, response, name, suffix, ip):
+        """A Name Registration Request: a host claiming a name for itself,
+        the address given as a compressed pointer back to the question —
+        the shape real Windows registration traffic actually takes."""
+        flags = (0x8000 if response else 0) | ((opcode & 0xF) << 11)
+        header = struct.pack("!HHHHHH", random.randint(0, 0xFFFF), flags,
+                             1, 0, 0, 1)
+        qname = cls._nbns_name(name, suffix) + struct.pack("!HH", 0x0020, 1)
+        rdata = b"\x00\x00" + bytes(int(o) for o in ip.split("."))
+        rr = b"\xc0\x0c" + struct.pack("!HHIH", 0x0020, 1, 0, len(rdata)) + rdata
+        return header + qname + rr
+
+    def _emit_nbns(self, payload, outbound, src, dst, sport, dport):
+        now = time.time()
+        nb = parse_nbns(payload)
+        info = nbns_summary(nb) if nb else ""
+        rec = {
+            "ts": now,
+            "time": datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3],
+            "src": src, "dst": dst, "sport": sport, "dport": dport,
+            "proto": "NBNS", "length": len(payload) + 42,
+            "process": "System", "pid": 4,
+            "dir": "out" if outbound else "in",
+            "remote": dst if outbound else src, "rhost": "",
+            "info": info, "ipver": 4, "ttl": 64 if outbound else 128,
+            "payload_len": len(payload), "stream": None, "iface": "demo0",
+            "transport": "udp",
+            "decoded": {"nbns": nb} if nb else {},
+        }
+        raw = self.frame(src, sport, dst, dport, payload, "udp", 0, outbound,
+                         rec["ttl"])
+        rec["length"] = len(raw)
+        self.store.add(rec, raw)
+        if self.alerts is not None:
+            self.alerts.inspect(rec, payload)
+        if self.history is not None:
+            self.history.record(rec)
+        if nb and nb["ips"] and (nb["opcode"] in ("registration", "refresh")
+                                 or (nb["opcode"] == "query" and nb["response"])):
+            for ip in nb["ips"]:
+                self.store.note_host(ip, nb["name"])
+
+    def _seed_nbns(self):
+        """Another device on the network registering its NetBIOS name —
+        the one NBNS shape unambiguous enough to attribute a hostname from."""
+        payload = self._nbns_packet(5, False, "OFFICE-PRINTER", 0x00,
+                                    "192.168.1.201")
+        self._emit_nbns(payload, False, "192.168.1.201", "255.255.255.255",
+                        137, 137)
+
     # -- deliberately insecure traffic, to exercise the alert rules ---------
 
     def _seed_insecure(self):
@@ -1986,7 +2149,8 @@ class DemoEngine:
         if not self._seeded:
             self._seeded = True
             for seed in (self._seed_http, self._seed_smb, self._seed_quic,
-                         self._seed_dhcp, self._seed_insecure):
+                         self._seed_dhcp, self._seed_mdns, self._seed_llmnr,
+                         self._seed_nbns, self._seed_insecure):
                 try:
                     seed()
                 except Exception:
