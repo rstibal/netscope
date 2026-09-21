@@ -1316,6 +1316,14 @@ function renderDetail(d){
     h += '</div>';
   }
 
+  if (dec.arp){
+    h += '<div class="sec"><h4>ARP</h4>';
+    h += kv('Operation', dec.arp.op === 1 ? 'request (who-has)' : 'reply (is-at)');
+    h += kv('Sender', dec.arp.sender_ip + '  ' + dec.arp.sender_mac);
+    h += kv('Target', dec.arp.target_ip);
+    h += '</div>';
+  }
+
   if (dec.quic){
     const q = dec.quic;
     h += '<div class="sec"><h4>QUIC</h4>';
@@ -1738,6 +1746,8 @@ const RULE_LABELS = {
   cert_problems:   'Expired, self-signed or weakly signed certificates',
   dns_resolver:    'DNS going to an unexpected resolver',
   port_scan:       'Many distinct ports/hosts touched in a short burst',
+  dhcp_rogue_server: 'An unexpected DHCP server hands out a lease',
+  arp_spoof:       'The MAC address answering for an IP changes',
 };
 
 function ago(ts){

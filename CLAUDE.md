@@ -130,6 +130,13 @@ is what a second launch of the tray build looks like when NetScope is already
 running from the logon task. `DashboardServer` in `netscope.py` turns that
 into an immediate, explained failure instead.
 
+**ARP bindings are tracked per (adapter, IP), not per IP alone.** Same
+reasoning as the flow key including the adapter: a VPN or a second NIC can
+legitimately show the same private IP on two interfaces at once, and without
+the adapter in the key that would misfire as spoofing on every capture
+start. `AlertEngine.arp_bindings` in `netscope_alerts.py` keys on
+`(iface, ip)`.
+
 ## Environment
 
 Needs Npcap and administrator rights to capture. `cryptography` is optional

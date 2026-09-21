@@ -45,7 +45,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.17.0"
+VERSION = "1.18.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -1097,6 +1097,8 @@ class CaptureEngine:
             proto = "ARP"
             info = f"who-has {a.pdst} tell {a.psrc}" if a.op == 1 else f"{a.psrc} is-at {a.hwsrc}"
             ipver, ttl = 4, None
+            decoded["arp"] = {"op": int(a.op), "sender_ip": a.psrc,
+                              "sender_mac": a.hwsrc, "target_ip": a.pdst}
         else:
             # Not IP, IPv6 or ARP. These used to show as OTHER with '?' for
             # both addresses; now they get named and carry real MACs.

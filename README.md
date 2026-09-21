@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.17.0**
+**Version 1.18.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -684,6 +684,17 @@ names.
 ---
 
 ## Version history
+
+**1.18.0** — New alert: **ARP binding changed**, the IPv4 sibling of the
+DHCP rogue-server alert. ARP is already read for every packet on the wire;
+NetScope now remembers which MAC address last claimed each IP per adapter,
+and fires HIGH the first time a different MAC claims one already seen — the
+signature of ARP cache poisoning (a LAN man-in-the-middle), though a NIC
+swap, a VM restarting with a new MAC, or a DHCP reassignment can trigger it
+too. ARP packets also get their own section (operation, sender, target) in
+the packet detail panel. Also fixed: the DHCP rogue-server rule added in
+1.16.0 never got a toggle in the dashboard's alert settings — it was on by
+default but invisible there. Both rules now show up correctly.
 
 **1.17.0** — `NetScope.exe` and `NetScopeTray.exe` now carry the same blue
 waveform icon the tray and dashboard already use, instead of PyInstaller's

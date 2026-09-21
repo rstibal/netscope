@@ -97,6 +97,13 @@ RULE_WHY = {
                          "lease from it can be handed a rogue gateway or DNS "
                          "server without anything else on the wire looking "
                          "unusual.",
+    "arp_spoof": "Fires when the MAC address answering for an IP this "
+                 "machine has already seen changes. That is how ARP cache "
+                 "poisoning — the usual way to sit in the middle of a LAN "
+                 "conversation — looks on the wire, though a NIC swap, a VM "
+                 "restarting with a new virtual MAC, or a DHCP lease moving "
+                 "to a different device can cause the same thing "
+                 "legitimately.",
 }
 
 
@@ -265,6 +272,11 @@ class AlertEngine:
         self._scan_inbound = {}     # remote peer -> deque[(ts, dport)]
         self._scan_outbound = {}    # process -> deque[(ts, (peer, dport))]
         self.seen_dhcp_servers = set()
+        # (iface, ip) -> mac last seen claiming it, so a later ARP claiming
+        # the same IP with a different MAC can be told apart from the first
+        # sighting. Per adapter, same reasoning as the flow key: a VPN or a
+        # second NIC can legitimately show the same private IP twice.
+        self.arp_bindings = {}
         # Muted (rule, subject) pairs -> expiry timestamp, or None for
         # indefinitely. Turning a whole rule off is the only control that
         # existed, and it is the wrong grain: a rule is usually right to look
@@ -283,6 +295,7 @@ class AlertEngine:
             "dns_resolver": True,
             "port_scan": True,
             "dhcp_rogue_server": True,
+            "arp_spoof": True,
         }
         self.threshold_mb = 500
         # Rule switches, the threshold and the toast toggle used to live only
@@ -493,6 +506,7 @@ class AlertEngine:
         self._scan_outbound.clear()
         self.resolvers.clear()
         self.seen_dhcp_servers.clear()
+        self.arp_bindings.clear()
         # Mutes deliberately survive: Clear means "I have read these", not
         # "forget everything I told you to ignore".
         self.warmup_until = _now() + 5.0
@@ -511,6 +525,7 @@ class AlertEngine:
             self._dns_rule(rec)
             self._scan_rule(rec)
             self._dhcp_rule(rec)
+            self._arp_rule(rec)
         except Exception:
             pass
 
@@ -829,3 +844,40 @@ class AlertEngine:
                    f"seen leases from {len(self.seen_dhcp_servers) - 1} other "
                    f"server(s) before now. A second DHCP server on this "
                    f"network can hand out a rogue gateway or DNS server.", rec)
+
+    def _arp_rule(self, rec):
+        """
+        Flag a MAC address change for an IP this machine has already seen
+        claimed on this adapter.
+
+        The first sighting of (iface, ip) becomes the baseline rather than an
+        alert, same reasoning as the DHCP rule: otherwise the very first ARP
+        packet for every host on the network would fire this. Tracked per
+        adapter, not just per IP, because a VPN or a second NIC can put the
+        same private address on two interfaces at once without anything
+        being wrong.
+        """
+        if not self.rules["arp_spoof"]:
+            return
+        arp = (rec.get("decoded") or {}).get("arp")
+        if not arp:
+            return
+        ip = arp.get("sender_ip")
+        mac = arp.get("sender_mac")
+        if not ip or not mac or ip == "0.0.0.0":
+            return
+        key = (rec.get("iface") or "", ip)
+        seen = self.arp_bindings.get(key)
+        if seen is None:
+            self.arp_bindings[key] = mac
+            return
+        if seen == mac:
+            return
+        self.arp_bindings[key] = mac
+        self._fire(("arp_spoof", key[0], ip), HIGH, "arp_spoof",
+                   "ARP binding changed",
+                   f"{ip} was at {seen}, is now claimed by {mac} — this is "
+                   f"how ARP cache poisoning (a man-in-the-middle on this "
+                   f"LAN) looks on the wire. Could also be a NIC swap, a VM "
+                   f"restarting with a new MAC, or a device getting a new "
+                   f"one from DHCP.", rec)
