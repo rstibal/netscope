@@ -1805,6 +1805,11 @@ function renderAlerts(d){
     h += '<label><input type="checkbox" id="toasts"'+(d.toasts ? ' checked' : '')+
          (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
          (d.toasts_supported ? '' : ' (Windows only)')+'</label>';
+    h += '<label title="Looks up a name for IPs nothing on the wire has '+
+         'already named. Off by default: unlike everything else here, this '+
+         'sends DNS queries out."><input type="checkbox" id="reverseDns"'+
+         (d.reverse_dns ? ' checked' : '')+'> Reverse DNS for unlabeled IPs'+
+         '</label>';
     h += '</div><div class="rowbtns">'+
          '<button class="btn-sm" id="applyRules">Apply</button>'+
          '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+
@@ -1884,7 +1889,8 @@ function renderAlerts(d){
       cb => rules[cb.dataset.rule] = cb.checked);
     control({action:'alerts', rules,
              threshold_mb: Number($('thrMb').value) || 500,
-             toasts: $('toasts').checked}).then(() => refreshTab('alerts'));
+             toasts: $('toasts').checked,
+             reverse_dns: $('reverseDns').checked}).then(() => refreshTab('alerts'));
   };
   const clr = $('clearAlerts');
   if (clr) clr.onclick = () => control({action:'clear_alerts'})

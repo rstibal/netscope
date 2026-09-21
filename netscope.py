@@ -31,6 +31,7 @@ import base64
 import ctypes
 import json
 import os
+import queue
 import random
 import re
 import secrets
@@ -45,7 +46,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.20.1"
+VERSION = "1.21.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -661,6 +662,100 @@ class PacketStore:
             self.started_at = time.time()
 
 
+class ReverseResolver:
+    """
+    Best-effort, opt-in reverse DNS for IPs nothing on the wire has already
+    named.
+
+    Unlike every other naming source in this app (DNS, DHCP, mDNS/LLMNR/
+    NBNS, TLS/QUIC SNI), this one sends queries out rather than just
+    listening -- so it defaults off, and a caller only reaches it at all
+    once passive naming has already failed for that IP.
+
+    Runs in a small pool of daemon threads so a slow or unresponsive
+    resolver never blocks packet processing; a result lands through the
+    same store.note_host() every other naming source uses, so nothing
+    downstream needs to know it came from here. Failures are negative-
+    cached, since a lot of the public internet has no PTR record at all and
+    a busy capture would otherwise re-query the same dead address forever.
+    """
+    WORKERS = 4
+    MAX_QUEUED = 200
+    NEGATIVE_TTL = 600          # seconds before a failed lookup is retried
+    MAX_ATTEMPTS = 2000         # per run, so a huge capture can't queue forever
+
+    def __init__(self, store: PacketStore, enabled: bool = False):
+        self.store = store
+        self.enabled = enabled
+        self._queue = queue.Queue(maxsize=self.MAX_QUEUED)
+        self._queued = set()        # ips currently queued or being resolved
+        self._negative = {}         # ip -> retry-not-before timestamp
+        self._attempts = 0
+        self._lock = threading.Lock()
+        self._settings_sink = None
+
+    def start(self):
+        for _ in range(self.WORKERS):
+            threading.Thread(target=self._worker, daemon=True,
+                             name="rdns").start()
+
+    def request(self, ip: str):
+        """Queue ip for a background reverse lookup. Cheap to call on every
+        packet that lacks a name -- most calls bail out immediately."""
+        if not self.enabled or not ip:
+            return
+        with self._lock:
+            if ip in self._queued or self._attempts >= self.MAX_ATTEMPTS:
+                return
+            if self._negative.get(ip, 0) > time.time():
+                return
+            if self.store.hostname(ip):
+                return
+            self._queued.add(ip)
+            self._attempts += 1
+        try:
+            self._queue.put_nowait(ip)
+        except queue.Full:
+            with self._lock:
+                self._queued.discard(ip)
+
+    def _worker(self):
+        while True:
+            self._resolve_one(self._queue.get())
+
+    def _resolve_one(self, ip):
+        """The blocking part, split out from _worker() so it can be tested
+        without a real thread or a real DNS server."""
+        try:
+            name = socket.gethostbyaddr(ip)[0]
+            self.store.note_host(ip, name)
+        except Exception:
+            with self._lock:
+                self._negative[ip] = time.time() + self.NEGATIVE_TTL
+        finally:
+            with self._lock:
+                self._queued.discard(ip)
+
+    # -- persistence, same shape as AlertEngine's -----------------------
+
+    def attach_settings(self, load, save):
+        self._settings_sink = save
+        try:
+            stored = load() or {}
+        except Exception:
+            return
+        if "reverse_dns" in stored:
+            self.enabled = bool(stored["reverse_dns"])
+
+    def set_enabled(self, on: bool):
+        self.enabled = bool(on)
+        if self._settings_sink is not None:
+            try:
+                self._settings_sink("reverse_dns", self.enabled)
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Capture engine
 # ---------------------------------------------------------------------------
@@ -670,7 +765,8 @@ class CaptureEngine:
     _ifaces_read = 0.0          # last OS re-read, shared across instances
     def __init__(self, store: PacketStore, resolver: ProcessResolver,
                  streams: StreamTracker = None, alerts: AlertEngine = None,
-                 history: HistoryStore = None, dhcp: DhcpTracker = None):
+                 history: HistoryStore = None, dhcp: DhcpTracker = None,
+                 reverse: ReverseResolver = None):
         self.store = store
         self.resolver = resolver
         self.streams = streams
@@ -680,6 +776,7 @@ class CaptureEngine:
         self.ftp = FTPCorrelator()
         self.quic = InitialReassembler()
         self.dhcp = dhcp or DhcpTracker()
+        self.reverse = reverse
         self.sniffer = None
         self.sniffers = []          # [(iface_name, AsyncSniffer, socket_or_None)]
         self.stress_us = 0          # --stress-drops: microseconds per packet
@@ -1317,6 +1414,8 @@ class CaptureEngine:
         if not rhost and host_hint and direction == "out":
             rhost = host_hint
             self.store.note_host(remote, host_hint)
+        if not rhost and self.reverse is not None:
+            self.reverse.request(remote)
 
         # Hand TCP segments to the reassembler so a connection can later be
         # read as one conversation and its files rebuilt.
@@ -2272,7 +2371,7 @@ STREAM_VIEW_CAP = 512 * 1024
 class App:
     def __init__(self, store, engine, resolver, token, demo=False,
                  streams=None, objects=None, scanner=None, alerts=None,
-                 decoder=None, history=None, dhcp=None):
+                 decoder=None, history=None, dhcp=None, reverse=None):
         self.store = store
         self.engine = engine
         # Reads .pcap files. Same object as `engine` for a live capture; a
@@ -2287,6 +2386,7 @@ class App:
         self.alerts = alerts
         self.history = history
         self.dhcp = dhcp
+        self.reverse = reverse
         self.source = None          # set when a .pcap has been loaded
         # Enumerated on demand rather than on a timer: the socket table is
         # expensive, and nobody needs it unless the Connections tab is open.
@@ -2483,6 +2583,7 @@ class Handler(BaseHTTPRequestHandler):
                 "threshold_mb": a.threshold_mb,
                 "toasts": a.notifier.enabled,
                 "toasts_supported": IS_WINDOWS,
+                "reverse_dns": bool(self.app.reverse and self.app.reverse.enabled),
             })
 
         if path == "/api/streams":
@@ -2630,6 +2731,8 @@ class Handler(BaseHTTPRequestHandler):
                 if "toasts" in body:
                     a.notifier.enabled = bool(body["toasts"])
                 a.save_config()          # so a reboot does not undo the choice
+                if "reverse_dns" in body and self.app.reverse is not None:
+                    self.app.reverse.set_enabled(bool(body["reverse_dns"]))
             elif action == "mute":
                 a = self.app.alerts
                 rule, subject = body.get("rule"), body.get("subject")
@@ -2934,14 +3037,19 @@ def main(argv=None):
     alerts = AlertEngine(DesktopNotifier(enabled=args.toasts), history=history)
     alerts.attach_settings(load_settings, save_setting)
     dhcp = DhcpTracker()
+    reverse = ReverseResolver(store)
+    reverse.attach_settings(load_settings, save_setting)
+    reverse.start()
 
     engine = (DemoEngine(store, streams=streams, alerts=alerts, history=history,
                          dhcp=dhcp)
               if args.demo
               else CaptureEngine(store, resolver, streams=streams,
-                                 alerts=alerts, history=history, dhcp=dhcp))
+                                 alerts=alerts, history=history, dhcp=dhcp,
+                                 reverse=reverse))
     decoder = (CaptureEngine(store, resolver, streams=streams, alerts=alerts,
-                             history=history, dhcp=dhcp) if args.demo else engine)
+                             history=history, dhcp=dhcp, reverse=reverse)
+              if args.demo else engine)
     if args.stress_drops and hasattr(engine, "stress_us"):
         engine.stress_us = max(0, args.stress_drops)
         print(f"  Stress:    stalling the capture {engine.stress_us}us per "
@@ -2972,7 +3080,7 @@ def main(argv=None):
     Handler.app = App(store, engine, resolver, token, demo=args.demo,
                       streams=streams, objects=objects, scanner=scanner,
                       alerts=alerts, decoder=decoder, history=history,
-                      dhcp=dhcp)
+                      dhcp=dhcp, reverse=reverse)
     if args.read:
         Handler.app.source = os.path.basename(args.read)
 

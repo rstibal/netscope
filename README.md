@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.20.1**
+**Version 1.21.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -134,7 +134,10 @@ claiming a clean capture it has not verified.
 frame: sequence number, timestamp to the millisecond, owning process, direction
 (▲ out / ▼ in), source, destination, protocol, byte count, and a summary line.
 Hostnames appear in place of IPs once NetScope has seen the DNS response that
-resolved them.
+resolved them (or a DHCP/mDNS/LLMNR/NBNS announcement, or a TLS/QUIC SNI —
+see [Notes on safety and privacy](#notes-on-safety-and-privacy) for the one
+opt-in exception, reverse DNS, that looks a name up instead of waiting to
+see one go by).
 
 **Click any row** to open it in the Packet panel: the full field breakdown
 (TCP flags, sequence numbers, TLS record type and SNI, HTTP start line and
@@ -620,6 +623,14 @@ to your network. Nothing is written to disk and nothing leaves your machine;
 the packet buffer lives in memory (the last 20,000 frames, with the first 2 KB
 of each retained for the hex view) and vanishes when you close the app.
 
+**One deliberate exception: reverse DNS, and it's off by default.** Every
+other naming source (DNS, DHCP, mDNS/LLMNR/NBNS, TLS/QUIC SNI) is passive —
+NetScope only labels an IP once something already announced a name for it on
+the wire. The "Reverse DNS for unlabeled IPs" checkbox on the Alerts tab is
+the one feature that sends anything out: a background lookup for an IP
+nothing has named yet, using your machine's normal DNS resolver. Leave it
+off and NetScope never originates a single packet of its own.
+
 This is a diagnostic tool for a machine you own. Capturing traffic on networks
 or devices that aren't yours is a different matter entirely, and generally not
 a legal one.
@@ -684,6 +695,16 @@ names.
 ---
 
 ## Version history
+
+**1.21.0** — Optional reverse DNS for IPs nothing else has named. Every
+other naming source in NetScope is passive; this is the first one that
+sends anything out — an opt-in checkbox on the Alerts tab, off by default.
+A small pool of background threads looks up any IP that stays unlabeled
+after the passive sources have had their chance, through your machine's
+normal DNS resolver, and a result lands through the same mechanism DHCP and
+mDNS already use, so nothing new shows up anywhere except the name itself.
+Failed lookups (common — a lot of the public internet has no PTR record) are
+cached so they are not retried on every packet.
 
 **1.20.1** — Two Alerts tab fixes. The Rules panel can now be collapsed to
 a "Hide rules"/"Show rules" button, right next to the alert count, instead

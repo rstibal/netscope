@@ -162,6 +162,18 @@ in the info line. Cost a debugging pass in the demo-mode mDNS seed
 (`DemoEngine._seed_mdns`) before the LLMNR seed, built with an explicit
 `qd`, happened to dodge it.
 
+**Reverse DNS is the one naming source that is opt-in and off by default.**
+Every other one (DNS, DHCP, mDNS/LLMNR/NBNS, TLS/QUIC SNI) only labels an IP
+because something on the wire already announced a name — NetScope stays
+purely passive. `ReverseResolver` in `netscope.py` is different: it sends
+PTR-style queries out via the OS resolver for whatever stays unlabeled.
+Defaulting it on would quietly turn a "just watching" tool into one that
+originates its own traffic, and on a busy capture full of public IPs that
+is a steady stream of queries leaving the machine — worth a deliberate
+choice, not a default. `App.reverse` is `None`-safe everywhere it's read
+(`CaptureEngine` never queues work against it in demo mode) so the toggle
+existing does not imply demo mode does anything with it.
+
 ## Environment
 
 Needs Npcap and administrator rights to capture. `cryptography` is optional
