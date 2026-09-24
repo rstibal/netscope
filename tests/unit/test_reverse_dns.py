@@ -127,6 +127,39 @@ r4.attach_settings(boom, boom)
 r4.set_enabled(True)
 check("a failing settings store never breaks the toggle", r4.enabled is True)
 
+# ---- the cap counts distinct IPs, so retries don't spend it ---------------
+#
+# Every retry after NEGATIVE_TTL used to count as a new attempt: a few
+# hundred long-lived unnamed IPs, each retried every ten minutes, used up the
+# whole budget in well under a day.
+r = resolver()
+r.MAX_ATTEMPTS = 2
+for ip in ("203.0.113.40", "203.0.113.41"):
+    r.request(ip)
+    r._queue.get_nowait()
+    with mock.patch.object(N.socket, "gethostbyaddr", side_effect=OSError("no PTR")):
+        r._resolve_one(ip)
+check("two distinct IPs reach the cap", r.stats()["cap_reached"] is True, str(r.stats()))
+r._negative["203.0.113.40"] = 0            # its negative-cache entry has expired
+r.request("203.0.113.40")
+check("a retry of an IP already tried is still allowed at the cap",
+      r._queue.qsize() == 1, str(r._queue.qsize()))
+check("...and does not count as another attempt",
+      r.stats()["attempted"] == 2, str(r.stats()))
+r.request("203.0.113.42")
+check("a new IP at the cap is refused", "203.0.113.42" not in r._queued)
+
+# ---- only real unicast addresses are looked up ----------------------------
+r = resolver()
+for junk in ("aa:bb:cc:dd:ee:ff", "?", "224.0.0.251", "ff02::fb",
+             "255.255.255.255", "0.0.0.0", "::"):
+    r.request(junk)
+check("MACs, '?', multicast, broadcast and unspecified are never queued",
+      r._queue.qsize() == 0 and r.stats()["attempted"] == 0, str(r.stats()))
+r.request("192.168.1.1"); r.request("2001:db8::1")
+check("private and IPv6 unicast addresses still are",
+      r._queue.qsize() == 2, str(r._queue.qsize()))
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

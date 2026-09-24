@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.21.2**
+**Version 1.21.3**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -700,6 +700,27 @@ names.
 ---
 
 ## Version history
+
+**1.21.3** — The rest of the bug sweep.
+- **Clear didn't reset the Connections tab.** Its conversations and byte
+  counts survived Clear, and an import, which clears too.
+- **Importing a .pcap wrote it into your history.** A saved capture's
+  traffic was added to this machine's usage and first-seen tables, and its
+  packets were attributed to whatever process owns those ports right now.
+  Imports are now kept out of history and are not attributed through the
+  live socket table.
+- **DNS to a configured IPv6 resolver was flagged as unconfigured.** The
+  list of configured resolvers was read for IPv4 only; both families are
+  read now.
+- **Reverse DNS still used up its limit on a long run.** The limit counted
+  every lookup, including retries of the same IP every ten minutes. It now
+  counts distinct IPs, and anything that isn't a real unicast address (a
+  MAC address from a non-IP frame, multicast, broadcast) is never looked up.
+- **With `--no-history`, the new-program and new-host alerts never fired.**
+- **TCP streams crossing sequence number 2³² lost their tail** when
+  reassembled.
+- **Stopping a capture could race the drop-counter read** on a capture
+  handle being closed on another thread.
 
 **1.21.2** — Fixes found in a bug sweep.
 - **FTP downloads were almost never reconstructed.** Real clients negotiate

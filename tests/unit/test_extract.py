@@ -215,6 +215,41 @@ check("unmatched endpoint falls back to the side with the data",
       [(o["name"], o["size"]) for o in store.list()] == [("odd.bin", 300)],
       str([(o["name"], o["size"]) for o in store.list()]))
 
+# ---- 12. Sequence numbers wrap at 2**32. A random ISN near the top means a
+# few MB can cross zero; sorted raw, the wrapped tail came first and was
+# dropped as "already covered".
+t = S.StreamTracker()
+top = (1 << 32) - 3000
+chunks = [b"A" * 1400, b"B" * 1400, b"C" * 1400, b"D" * 1400]
+seq = top
+for i, ch in enumerate(chunks):
+    t.observe("198.51.100.7", 80, "10.0.0.1", 40000, seq, ch, 0.1 * i, "-")
+    seq = (seq + len(ch)) % (1 << 32)
+data, gaps = t.get(1).assemble(0)
+check("a stream crossing sequence 2**32 reassembles whole",
+      data == b"".join(chunks) and gaps == 0, f"len={len(data)} gaps={gaps}")
+
+# ---- 13. ...including when the segments around the wrap arrive out of order.
+t = S.StreamTracker()
+segs = []
+seq = top
+for ch in chunks:
+    segs.append((seq, ch))
+    seq = (seq + len(ch)) % (1 << 32)
+for s, ch in (segs[0], segs[3], segs[2], segs[1]):
+    t.observe("198.51.100.7", 80, "10.0.0.1", 40000, s, ch, 0.0, "-")
+data, gaps = t.get(1).assemble(0)
+check("out-of-order segments across the wrap reassemble in order",
+      data == b"".join(chunks) and gaps == 0, f"len={len(data)} gaps={gaps}")
+
+# ---- 14. A hole is still counted as one, across the wrap too.
+t = S.StreamTracker()
+for s, ch in (segs[0], segs[2], segs[3]):
+    t.observe("198.51.100.7", 80, "10.0.0.1", 40000, s, ch, 0.0, "-")
+data, gaps = t.get(1).assemble(0)
+check("a missing segment across the wrap is one gap",
+      gaps == 1 and data == chunks[0] + chunks[2] + chunks[3], f"gaps={gaps}")
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

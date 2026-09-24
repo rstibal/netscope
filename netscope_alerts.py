@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import json
 import os
 import re
@@ -147,11 +148,51 @@ def _now():
 
 DNS_REFRESH = 300.0        # seconds between re-reads; config changes are rare
 
+# Both address families. This used to ask for IPv4 only, so on a dual-stack
+# network every query to a configured IPv6 resolver (the router's link-local
+# address, an ISP's v6 DNS handed out by RA or DHCPv6) was judged against an
+# IPv4-only list and alerted as "unconfigured".
 _PS_DNS = (
-    "@(Get-DnsClientServerAddress -AddressFamily IPv4 |"
+    "@(Get-DnsClientServerAddress |"
     " Select-Object InterfaceAlias,ServerAddresses) |"
     " ConvertTo-Json -Compress -Depth 3"
 )
+
+
+def normalise_ip(addr):
+    """
+    One spelling per address, so a configured resolver and a packet's
+    destination compare equal. IPv6 has many ("fe80::1", "FE80:0:0::1",
+    "fe80::1%12"); scapy always hands back the compressed lower-case form.
+    """
+    s = str(addr or "").strip().split("%")[0]
+    try:
+        return str(ipaddress.ip_address(s))
+    except ValueError:
+        return s
+
+
+def _parse_resolvers(data):
+    """(all_servers, by_interface) from Get-DnsClientServerAddress's JSON."""
+    if data is None:
+        return None, None
+    if isinstance(data, dict):          # a single adapter is not an array
+        data = [data]
+    by_iface, everything = {}, set()
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        servers = row.get("ServerAddresses") or []
+        if isinstance(servers, str):
+            servers = [servers]
+        servers = {normalise_ip(s) for s in servers if s}
+        if not servers:
+            continue                    # adapters with no resolver tell us nothing
+        # Each family is its own row for the same adapter; merge them.
+        alias = str(row.get("InterfaceAlias") or "")
+        by_iface.setdefault(alias, set()).update(servers)
+        everything.update(servers)
+    return (everything, by_iface) if everything else (None, None)
 
 
 def configured_resolvers():
@@ -172,23 +213,7 @@ def configured_resolvers():
             data = json.loads((p.stdout or "").strip() or "null")
         except Exception:
             return None, None
-        if data is None:
-            return None, None
-        if isinstance(data, dict):          # a single adapter is not an array
-            data = [data]
-        by_iface, everything = {}, set()
-        for row in data:
-            if not isinstance(row, dict):
-                continue
-            servers = row.get("ServerAddresses") or []
-            if isinstance(servers, str):
-                servers = [servers]
-            servers = [s for s in servers if s]
-            if not servers:
-                continue                    # adapters with no resolver tell us nothing
-            by_iface[str(row.get("InterfaceAlias") or "")] = set(servers)
-            everything.update(servers)
-        return (everything, by_iface) if everything else (None, None)
+        return _parse_resolvers(data)
 
     # POSIX — for the headless build. resolv.conf is the whole story unless
     # systemd-resolved is stubbing, in which case 127.0.0.53 is the honest
@@ -201,7 +226,7 @@ def configured_resolvers():
                 if line.startswith("nameserver"):
                     parts = line.split()
                     if len(parts) > 1:
-                        found.add(parts[1])
+                        found.add(normalise_ip(parts[1]))
         return (found, {"": found}) if found else (None, None)
     except Exception:
         return None, None
@@ -275,7 +300,12 @@ class AlertEngine:
         self.notifier = notifier or DesktopNotifier(enabled=False)
         # With history attached, "first seen" means the first time ever rather
         # than the first time since launch — which is what makes the rule
-        # worth having.
+        # worth having. A HistoryStore that is switched off (--no-history) or
+        # failed to open counts as no history at all: it knows nothing, so
+        # every program looked never-seen, and its empty database looked like
+        # a first run, so the rules stayed silently in baseline mode forever.
+        if history is not None and not getattr(history, "enabled", True):
+            history = None
         self.history = history
 
         self.seen_processes = set()
@@ -745,7 +775,7 @@ class AlertEngine:
             return
         if rec.get("dir") != "out":
             return
-        server = rec.get("remote")
+        server = normalise_ip(rec.get("remote"))
         if not server:
             return
         self._maybe_refresh_dns()

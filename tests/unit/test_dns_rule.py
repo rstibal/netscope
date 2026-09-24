@@ -99,6 +99,41 @@ with mock.patch.object(A.os, "name", "posix"):
 check("resolv.conf parsed", got == {"127.0.0.53", "192.168.1.1"}, str(got))
 _os.unlink(path)
 
+# ---- IPv6 resolvers -----------------------------------------------------------
+#
+# The OS query used to ask for IPv4 servers only, so on a dual-stack network
+# every query to a configured IPv6 resolver was judged "unconfigured".
+
+# ---- The PowerShell answer: one row per adapter *per family*, merged.
+ps = [
+    {"InterfaceAlias": "Wi-Fi", "ServerAddresses": ["192.168.1.1"]},
+    {"InterfaceAlias": "Wi-Fi", "ServerAddresses": ["FE80:0:0:0::1%12", "2001:DB8::53"]},
+    {"InterfaceAlias": "Loopback", "ServerAddresses": []},
+]
+every, by = A._parse_resolvers(ps)
+check("both families are read and normalised",
+      every == {"192.168.1.1", "fe80::1", "2001:db8::53"}, str(every))
+check("an adapter's v4 and v6 rows merge rather than overwrite",
+      by.get("Wi-Fi") == {"192.168.1.1", "fe80::1", "2001:db8::53"}, str(by))
+check("a single adapter (not an array) still parses",
+      A._parse_resolvers({"InterfaceAlias": "E", "ServerAddresses": "10.0.0.1"})[0]
+      == {"10.0.0.1"})
+check("no resolvers at all -> (None, None)", A._parse_resolvers([]) == (None, None))
+
+# ---- A configured IPv6 resolver is not an alert, however it is spelled.
+e = engine(every, by)
+for _ in range(20): e._dns_rule(rec("fe80::1", "Wi-Fi"))
+for _ in range(20): e._dns_rule(rec("2001:db8::53", "Wi-Fi"))
+check("DNS to configured IPv6 resolvers -> silent", e.list() == [], str(titles(e)))
+
+# ---- An unconfigured IPv6 resolver still is.
+for _ in range(5): e._dns_rule(rec("2606:4700:4700::1111", "Wi-Fi"))
+check("DNS to an unconfigured IPv6 resolver -> fires",
+      titles(e) == ["DNS to an unconfigured resolver"], str(titles(e)))
+
+check("normalise_ip leaves a non-address alone",
+      A.normalise_ip("not-an-ip") == "not-an-ip" and A.normalise_ip(None) == "")
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

@@ -200,7 +200,18 @@ identical to "has no PTR record", which is the common, expected case. The
 Alerts tab now shows attempted/resolved/cap-reached (`ReverseResolver.stats()`)
 so that distinction is visible without reading the source. If this cap ever
 needs raising again, add to the stats line too — a cap nobody can see being
-hit is worse than no cap at all.
+hit is worse than no cap at all. It counts *distinct IPs*, not lookups (since
+1.21.3): counting every lookup meant each retry after the 10-minute negative
+cache spent budget too, so a few hundred long-lived unnamed IPs would still
+exhaust 20,000 in under a day — the same failure the raise was meant to fix.
+Retrying an IP already tried is free at the cap.
+
+**An imported .pcap is offline: no history, no live attribution.**
+`CaptureEngine.ingest_file()` sets `_offline` so imported packets are not
+written to the history database (they are another machine's traffic, or
+this one's from another time) and are not matched against the live socket
+table (a port some process owns now says nothing about when the file was
+captured). Direction is still computed, since it only compares addresses.
 
 ## Environment
 

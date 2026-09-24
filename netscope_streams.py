@@ -48,6 +48,7 @@ EXT_BY_TYPE = {
 }
 
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+_SEQ_MOD = 1 << 32                      # TCP sequence space
 
 
 def safe_filename(name: str, fallback: str = "object") -> str:
@@ -158,9 +159,23 @@ class TCPStream:
             return b"", 0
         out = bytearray()
         gaps = 0
-        expected = self.isn[d]
-        for seq in sorted(segs):
+        # Work in offsets from the first sequence number seen, modulo 2**32.
+        # TCP sequence numbers wrap, and a random ISN near the top of the
+        # range means a stream of a few MB can cross zero; sorting raw
+        # numbers then put the wrapped tail first, where it read as "already
+        # covered" and was dropped. An offset in the upper half is taken as
+        # negative: a segment from before the first one seen (a reordered
+        # early segment), not one 4 GB ahead.
+        base = self.isn[d]
+
+        def rel(seq):
+            r = (seq - base) % _SEQ_MOD
+            return r - _SEQ_MOD if r >= _SEQ_MOD // 2 else r
+
+        expected = 0
+        for off, seq in sorted((rel(s), s) for s in segs):
             data = segs[seq]
+            seq = off
             end = seq + len(data)
             if end <= expected:
                 continue                        # already covered

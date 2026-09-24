@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+import ipaddress
 import json
 import os
 import queue
@@ -46,7 +47,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.21.2"
+VERSION = "1.21.3"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -660,6 +661,11 @@ class PacketStore:
             self._buckets.clear()
             self._cur_bucket = None
             self.started_at = time.time()
+            # The Connections tab's byte counts come from here. Leaving it
+            # alone meant Clear (and an import, which clears too) kept showing
+            # conversations and totals from before. The hostname cache stays:
+            # a name learned earlier is still true.
+            self.flows.clear()
 
 
 class ReverseResolver:
@@ -684,9 +690,12 @@ class ReverseResolver:
     NEGATIVE_TTL = 600          # seconds before a failed lookup is retried
     # A tray instance can run for days. This is a safety net against a
     # runaway capture, not a budget meant to be hit in ordinary use -- 20,000
-    # distinct external IPs is far beyond what even a very busy machine sees
-    # in a day, but the cap still exists so nothing grows completely
-    # unbounded if it somehow is.
+    # distinct IPs is far beyond what even a very busy machine sees in a
+    # day, but the cap still exists so nothing grows completely unbounded if
+    # it somehow is. It counts distinct IPs, not lookups: a retry of an IP
+    # already tried (after NEGATIVE_TTL) is free. Counting every lookup let a
+    # few hundred long-lived unnamed IPs, each retried every ten minutes, use
+    # the whole budget in well under a day.
     MAX_ATTEMPTS = 20000
 
     def __init__(self, store: PacketStore, enabled: bool = False):
@@ -695,7 +704,7 @@ class ReverseResolver:
         self._queue = queue.Queue(maxsize=self.MAX_QUEUED)
         self._queued = set()        # ips currently queued or being resolved
         self._negative = {}         # ip -> retry-not-before timestamp
-        self._attempts = 0
+        self._tried = set()         # every distinct ip ever queued
         self._resolved = 0
         self._lock = threading.Lock()
         self._settings_sink = None
@@ -711,19 +720,41 @@ class ReverseResolver:
         if not self.enabled or not ip:
             return
         with self._lock:
-            if ip in self._queued or self._attempts >= self.MAX_ATTEMPTS:
+            if ip in self._queued:
+                return
+            if ip not in self._tried and (len(self._tried) >= self.MAX_ATTEMPTS
+                                          or not self._worth_asking(ip)):
                 return
             if self._negative.get(ip, 0) > time.time():
                 return
             if self.store.hostname(ip):
                 return
             self._queued.add(ip)
-            self._attempts += 1
+            self._tried.add(ip)
         try:
             self._queue.put_nowait(ip)
         except queue.Full:
             with self._lock:
                 self._queued.discard(ip)
+
+    @staticmethod
+    def _worth_asking(ip):
+        """
+        Only a real unicast address has a PTR record worth asking for.
+
+        The record's "remote" is whatever the frame had: a MAC address for a
+        non-IP frame, "?" when there was nothing at all. gethostbyaddr() does
+        not reject those -- it tries them as hostnames, so a MAC address went
+        out as a forward DNS query. Multicast, broadcast and the unspecified
+        address never have anything to find either.
+        """
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if addr.is_multicast or addr.is_unspecified:
+            return False
+        return str(addr) != "255.255.255.255"
 
     def _worker(self):
         while True:
@@ -750,10 +781,10 @@ class ReverseResolver:
         resolved, and whether the run-long safety cap has been reached."""
         with self._lock:
             return {
-                "attempted": self._attempts,
+                "attempted": len(self._tried),
                 "resolved": self._resolved,
                 "pending": len(self._queued),
-                "cap_reached": self._attempts >= self.MAX_ATTEMPTS,
+                "cap_reached": len(self._tried) >= self.MAX_ATTEMPTS,
             }
 
     # -- persistence, same shape as AlertEngine's -----------------------
@@ -800,6 +831,8 @@ class CaptureEngine:
         self.sniffer = None
         self.sniffers = []          # [(iface_name, AsyncSniffer, socket_or_None)]
         self.stress_us = 0          # --stress-drops: microseconds per packet
+        self._offline = False       # True while ingest_file() is feeding a .pcap
+        self._handle_lock = threading.Lock()    # pcap handle reads vs. closes
         self.new_ifaces = []        # adapters attached after the capture began
         self._watch_stop = threading.Event()
         self._watcher = None
@@ -1072,15 +1105,22 @@ class CaptureEngine:
         """
         recv = drop = ifdrop = 0
         answered = False
-        # Under the lock: stop() frees these handles, and reading one after it
-        # has been closed is a segfault rather than an exception.
+        # stop() frees these handles, and reading one after it has been closed
+        # is a segfault rather than an exception. Copying the list under
+        # _lock is not enough on its own — the copy can outlive the close,
+        # which happens on another thread — so each read also holds
+        # _handle_lock, which _close_sockets() takes to close, and skips a
+        # socket that has already been closed.
         with self._lock:
             entries = list(getattr(self, "sniffers", []))
         for entry in entries:
             sock = entry[2] if len(entry) > 2 else None
             if sock is None:
                 continue
-            got = pcap_stats_for(sock)
+            with self._handle_lock:
+                if getattr(sock, "closed", False):
+                    continue
+                got = pcap_stats_for(sock)
             if got is None:
                 continue
             answered = True
@@ -1130,8 +1170,7 @@ class CaptureEngine:
             threading.Thread(target=self._close_sockets, args=(entries,),
                              daemon=True, name="pcap-close").start()
 
-    @staticmethod
-    def _close_sockets(entries):
+    def _close_sockets(self, entries):
         """
         Close capture sockets only once their sniffer thread has let go.
 
@@ -1154,10 +1193,11 @@ class CaptureEngine:
                 except Exception:
                     pass
             if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
+                with self._handle_lock:     # never mid-read by capture_stats()
+                    try:
+                        sock.close()        # scapy sets sock.closed
+                    except Exception:
+                        pass
 
     def stop(self):
         with self._lock:
@@ -1185,17 +1225,30 @@ class CaptureEngine:
                 self.store.add(rec, raw)
                 if self.alerts is not None:
                     self.alerts.inspect(rec, payload)
-                if self.history is not None:
+                if self.history is not None and not self._offline:
                     self.history.record(rec)
         except Exception:
             pass
 
     def ingest_file(self, packets):
-        """Feed packets read from a .pcap through the same decoding path."""
+        """
+        Feed packets read from a .pcap through the same decoding path.
+
+        Offline for the duration: a saved capture is someone else's traffic,
+        or this machine's from some other time, so it is kept out of the
+        persistent history (it would otherwise be added to this machine's
+        usage and first-seen tables) and never matched against the live
+        socket table (a port that some process owns *now* says nothing about
+        who owned it when the file was captured).
+        """
         count = 0
-        for pkt in packets:
-            self._on_packet(pkt)
-            count += 1
+        self._offline = True
+        try:
+            for pkt in packets:
+                self._on_packet(pkt)
+                count += 1
+        finally:
+            self._offline = False
         return count
 
     def close_streams(self):
@@ -1415,8 +1468,12 @@ class CaptureEngine:
 
         pname, pid, direction = self.resolver.lookup(
             sport, dport, transport or "tcp", src, dst)
+        if self._offline:
+            # Keep the direction (it only compares against local addresses)
+            # but not the owner: see ingest_file().
+            pname, pid = "-", None
 
-        if pname == "-":
+        if pname == "-" and not self._offline:
             # Nudge the socket table: a connection that opened and closed
             # between polls is often still alive right now, and this is much
             # cheaper than polling continuously.
