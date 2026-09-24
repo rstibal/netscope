@@ -49,8 +49,10 @@ python tests/run_tests.py -k conn    just the matching files
 
 `tests/unit/` imports the modules directly and needs only Python.
 `tests/ui/` drives the real dashboard through Playwright against a demo server
-the runner starts and stops (`pip install playwright && playwright install
-chromium`; skipped with a message if absent). Three unit tests open a real
+the runner starts and stops. The tests are Node scripts, so they need the
+*npm* package — `npm install --no-save playwright && npx playwright install
+chromium` in the project root; pip's `playwright` does not help. Skipped with
+a message if absent. Three unit tests open a real
 capture socket and create adapters with `ip`, so they are Linux+root only and
 skip elsewhere.
 
@@ -104,6 +106,22 @@ an upload's data connection gets no hint and falls through to plain TCP —
 downloads-only was a scope decision, not an oversight, so a `STOR` data
 connection silently going unextracted is expected, not a bug to fix in
 isolation.
+
+**FTP negotiates the data port before it names the file.** RFC 959 order is
+`PASV`/`EPSV` (or `PORT`/`EPRT`) first, then `RETR`. `FTPCorrelator` holds an
+unnamed negotiation per control connection until the `RETR` arrives; any
+other transfer command (`LIST`, `STOR`, ...) spends it. The original code and
+its tests had the order reversed, which meant real downloads were missed or
+mislabelled while every test passed — write FTP tests in the order a real
+client sends.
+
+**The port-scan rule counts connection attempts, not packets.** Inbound TCP
+counts only a bare SYN; inbound UDP only when it isn't a reply to a datagram
+this machine sent to that (peer, port) recently. Counting every packet made
+each DNS reply (a fresh ephemeral port each time) look like a probe from the
+router. Outbound fan-out ignores ports 80/443: one page load opens
+connections to dozens of hosts, which is indistinguishable from a scan by
+shape alone.
 
 **Alert mutes are per (rule, subject) and survive `Clear alerts`.** Disabling a
 whole rule to silence one subject is the wrong grain. Clearing means "I have

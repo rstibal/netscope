@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.21.1**
+**Version 1.21.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -473,8 +473,11 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
   Certificate message, so on a modern connection there is nothing to inspect.
 - **Unexpected DNS resolver** — queries going somewhere other than the resolver
   the rest of the machine uses.
-- **Port scan** — a remote host touching many distinct local ports in a short
-  burst, or a local program fanning out to many distinct hosts/ports at once.
+- **Port scan** — a remote host trying to connect to many distinct local ports
+  in a short burst, or a local program opening connections to many distinct
+  hosts/ports at once. Only connection attempts count — a TCP SYN, or UDP that
+  isn't a reply to something this machine sent — and web ports (80/443) are
+  left out of the outbound count, since one page load reaches dozens of hosts.
   Fires once per burst, high severity.
 
 Repeat alerts fold into a count rather than filling the list. **Windows desktop
@@ -520,11 +523,12 @@ SMB3 encryption, even the names are gone, and NetScope says so rather than
 showing you noise.
 
 **Plain FTP** — filenames yes, and **downloads are reconstructed into the
-Files tab** the same as HTTP. NetScope reads the control channel (`RETR`,
-and the `PASV`/`PORT` reply that says which port the file is about to arrive
-on) so it knows the file's name before the second, data-only connection even
-opens. Uploads (`STOR`) are not reconstructed yet — only tracked far enough
-to make sure they're never mistaken for a download.
+Files tab** the same as HTTP. NetScope reads the control channel (the
+`PASV`/`EPSV` reply or `PORT`/`EPRT` command that says which port the file is
+about to arrive on, then the `RETR` that names it) so it knows the file's name
+before the data-only connection carries any of it. Uploads (`STOR`) are not
+reconstructed yet — only tracked far enough to make sure they're never
+mistaken for a download.
 
 **TFTP, NFS, IPP print jobs, plain IMAP/POP3/SMTP** — filenames and commands
 are readable in the conversation viewer. They aren't specially decoded, so
@@ -567,7 +571,7 @@ path, with an extension inferred from the content type as a last resort.
 
 **FTP downloads work differently, because the protocol does.** The file's
 name and the fact that a download is coming are learned from the *control*
-connection (`RETR`, then the `PASV`/`PORT` reply naming a port); the actual
+connection (the `PASV`/`PORT` exchange naming a port, then `RETR`); the actual
 bytes arrive on a second, separate connection that carries nothing but the
 file — no headers, no length. That connection is only reconstructed once it
 closes, since closing is the only signal FTP gives that the transfer is
@@ -603,8 +607,9 @@ python tests/run_tests.py -k conn    only matching filenames
 
 `tests/unit/` imports the modules directly and needs only Python. `tests/ui/`
 drives the real dashboard in a real browser through Playwright, against a demo
-server the runner starts and stops — `pip install playwright && playwright
-install chromium`, and it is skipped with a message if absent. Three unit tests
+server the runner starts and stops — the tests are Node scripts, so run
+`npm install --no-save playwright && npx playwright install chromium` in the
+project root, and it is skipped with a message if absent. Three unit tests
 open a live capture socket and need Linux and root, and skip elsewhere.
 
 Almost every bug this project has had was a layout or timing fault only a
@@ -695,6 +700,31 @@ names.
 ---
 
 ## Version history
+
+**1.21.2** — Fixes found in a bug sweep.
+- **FTP downloads were almost never reconstructed.** Real clients negotiate
+  the data port (`PASV`/`PORT`) *before* sending `RETR`, but NetScope only
+  armed a transfer when the `RETR` came first — so the first download on a
+  connection was missed and each later one was labelled with the previous
+  file's name. Both orders now work, and the extended `EPSV`/`EPRT` forms
+  that curl and most modern clients use are understood too.
+- **Active-mode FTP downloads came out empty.** In active mode (`PORT`/`EPRT`)
+  the server opens the data connection, and extraction read the side of it
+  that carries nothing. It now uses the endpoint the control channel named
+  to tell which side is sending.
+- **Longer FTP downloads never reached the Files tab.** The connection's
+  closing FIN usually carries no data, so a transfer the scanner had already
+  looked at once was never looked at again after it closed.
+- **An HTTP upload arriving after a download duplicated a file and lost the
+  upload.** Uploads and downloads are now counted separately, and an upload
+  whose body is still arriving is no longer extracted truncated.
+- **The port-scan alert fired on ordinary traffic** — a dozen DNS replies
+  read as a scan from the router, and one page load read as a browser
+  scanning the internet. It now only counts connection attempts, and leaves
+  web ports out of the outbound count.
+- **Pressing Start after importing a .pcap left the dashboard in offline
+  mode** — the status bar kept naming the file, and the Connections tab
+  stayed detached from the live socket table.
 
 **1.21.1** — Reverse DNS's safety cap was 2,000 lookups for the life of the
 process — plenty for a short session, too low for a tray instance left

@@ -41,6 +41,13 @@ INFO, WARN, HIGH = "info", "warn", "high"
 
 SCAN_WINDOW_SECS = 20.0     # how far back a burst is measured
 SCAN_PORT_THRESHOLD = 12   # distinct ports/pairs in the window before it's a scan
+# Destinations whose fan-out is ordinary: one web page pulls from dozens of
+# hosts on 443 within seconds, which is exactly the shape of a scan.
+SCAN_OUT_IGNORE_PORTS = {80, 443}
+# How long an outbound UDP (peer, local port) is remembered, so the replies
+# coming back to it are recognised as replies rather than probes.
+UDP_REPLY_TTL = 120.0
+UDP_SENT_MAX = 5000
 
 # Ports whose traffic is unencrypted by definition.
 CLEARTEXT_PORTS = {
@@ -84,12 +91,17 @@ RULE_WHY = {
                     "configured to use. Counted per interface, and checked "
                     "against the resolvers the OS reports, so a second "
                     "adapter's own resolver is not suspicious.",
-    "port_scan": "Fires when one remote host touches many distinct local "
-                 "ports in a short window — the signature of a port scan, "
-                 "not of any legitimate protocol. Also fires the other "
-                 "direction: one local process fanning out to many distinct "
-                 "host/port pairs at once, which is what a worm or a scanner "
-                 "looks like from here.",
+    "port_scan": "Fires when one remote host tries to open connections to "
+                 "many distinct local ports in a short window — the "
+                 "signature of a port scan, not of any legitimate protocol. "
+                 "Only connection attempts count (a TCP SYN, or UDP that is "
+                 "not a reply to something this machine sent), so replies to "
+                 "your own traffic never look like probes. Also fires the "
+                 "other direction: one local process opening connections to "
+                 "many distinct host/port pairs at once, which is what a "
+                 "worm or a scanner looks like from here. Web ports (80, 443) "
+                 "are left out of that count — a single page load reaches "
+                 "dozens of hosts on them.",
     "dhcp_rogue_server": "Fires when a DHCP OFFER or ACK arrives from a "
                          "server this machine has not seen answering before. "
                          "Anyone on the same broadcast domain can run a "
@@ -278,6 +290,7 @@ class AlertEngine:
         self._threshold_fired = set()
         self._scan_inbound = {}     # remote peer -> deque[(ts, dport)]
         self._scan_outbound = {}    # process -> deque[(ts, (peer, dport))]
+        self._udp_sent = {}         # (peer, local port) -> last outbound ts
         self.seen_dhcp_servers = set()
         # (iface, ip) -> mac last seen claiming it, so a later ARP claiming
         # the same IP with a different MAC can be told apart from the first
@@ -514,6 +527,7 @@ class AlertEngine:
         self._threshold_fired.clear()
         self._scan_inbound.clear()
         self._scan_outbound.clear()
+        self._udp_sent.clear()
         self.resolvers.clear()
         self.seen_dhcp_servers.clear()
         self.arp_bindings.clear()
@@ -782,16 +796,36 @@ class AlertEngine:
         once (a scan or worm-like fan-out). Each burst fires once — the
         window is cleared on fire rather than left to alert again on every
         packet that follows.
+
+        Only connection *attempts* count. Counting every packet made replies
+        look like probes: each DNS answer from the router arrives on a fresh
+        random local port, so a dozen lookups read as a port scan from the
+        router, and one page load reaching a dozen CDN hosts read as a worm.
         """
+        transport = rec.get("transport")
+        now = rec.get("ts") or _now()
+        inbound = rec.get("dir") == "in"
+        peer = rec.get("remote") or rec.get("rhost")
+        if transport == "udp" and not inbound and peer and rec.get("sport"):
+            # Remembered even with the rule off, so switching it on later
+            # does not mistake replies already in flight for probes.
+            self._note_udp_sent(peer, rec["sport"], now)
+
         if not self.rules["port_scan"]:
             return
         dport = rec.get("dport")
-        if not dport:
+        if not dport or transport not in ("tcp", "udp"):
             return
-        now = rec.get("ts") or _now()
+        if transport == "tcp":
+            flags = ((rec.get("decoded") or {}).get("tcp") or {}).get("flags") or ""
+            if "S" not in flags or "A" in flags:
+                return              # not an opening SYN (or flags unknown)
+        elif inbound:
+            last = self._udp_sent.get((peer, dport))
+            if last is not None and now - last <= UDP_REPLY_TTL:
+                return              # a reply to something this machine sent
 
-        if rec.get("dir") == "in":
-            peer = rec.get("remote") or rec.get("rhost")
+        if inbound:
             if not peer:
                 return
             win = self._scan_inbound.setdefault(peer, deque())
@@ -807,8 +841,7 @@ class AlertEngine:
                 win.clear()
         else:
             proc = rec.get("process") or "-"
-            peer = rec.get("remote") or rec.get("rhost")
-            if proc == "-" or not peer:
+            if proc == "-" or not peer or dport in SCAN_OUT_IGNORE_PORTS:
                 return
             win = self._scan_outbound.setdefault(proc, deque())
             win.append((now, (peer, dport)))
@@ -822,6 +855,18 @@ class AlertEngine:
                            f"{int(SCAN_WINDOW_SECS)}s — unusual unless this "
                            f"is a scanner you run on purpose", rec)
                 win.clear()
+
+    def _note_udp_sent(self, peer, sport, now):
+        self._udp_sent[(peer, sport)] = now
+        if len(self._udp_sent) > UDP_SENT_MAX:
+            for k, ts in list(self._udp_sent.items()):
+                if now - ts > UDP_REPLY_TTL:
+                    del self._udp_sent[k]
+            # Still full of live entries: drop the oldest half rather than
+            # grow without bound. Worst case a reply is counted as a probe.
+            if len(self._udp_sent) > UDP_SENT_MAX:
+                keep = sorted(self._udp_sent.items(), key=lambda kv: kv[1])
+                self._udp_sent = dict(keep[len(keep) // 2:])
 
     @staticmethod
     def _prune_window(win, now):

@@ -82,6 +82,10 @@ class TCPStream:
         self.packets = [0, 0]
         self.truncated = [False, False]
         self.objects_emitted = 0
+        # Emitted so far, per direction. Uploads and downloads are each in a
+        # stable order within their own kind, but not relative to each other:
+        # an upload that turns up later lands ahead of downloads already seen.
+        self.emitted = {"upload": 0, "download": 0}
         self.dirty = False
 
     # -- ingest ------------------------------------------------------------
@@ -223,8 +227,13 @@ class StreamTracker:
                 st.host = host
             if ftp_meta and not st.ftp_meta:
                 st.ftp_meta = ftp_meta
-            if "F" in flags or "R" in flags:
+            if ("F" in flags or "R" in flags) and not st.closed:
                 st.closed = True
+                # A FIN usually carries no data, so add() never marks the
+                # stream dirty for it — and closing is the very event an FTP
+                # data connection waits on. Without this, a transfer that the
+                # scanner had already looked at once was never looked at again.
+                st.dirty = True
             return st.id
 
     def get(self, sid):
@@ -328,7 +337,12 @@ def parse_requests(buf: bytes):
         line = _first_line(head)
         parts = line.split(" ")
         body_start = head_end + 4
-        clen = int(h.get("content-length", 0) or 0)
+        try:
+            clen = max(0, int(h.get("content-length", 0) or 0))
+        except ValueError:
+            clen = 0
+        if clen and body_start + clen > len(buf):
+            break                   # body still arriving; pick it up next pass
         body = buf[body_start:body_start + clen] if clen else b""
         reqs.append({
             "method": parts[0] if parts else "",
@@ -416,8 +430,11 @@ def extract_objects(stream: TCPStream):
     """
     Extract complete transferred files from one reassembled stream.
 
-    Returns a list of dicts; index in the list is stable across repeated calls
-    on a growing stream, which is what lets the scanner emit each file once.
+    Returns a list of dicts, uploads first. Within each direction the order is
+    stable across repeated calls on a growing stream, which is what lets the
+    scanner emit each file once — but only within a direction: an upload that
+    completes later is inserted ahead of every download, so callers must count
+    the two separately (see ObjectScanner.scan_once).
     """
     c2s, _ = stream.assemble(0)
     s2c, _ = stream.assemble(1)
@@ -477,6 +494,25 @@ def extract_objects(stream: TCPStream):
     return objs
 
 
+def _ftp_sending_side(stream, meta):
+    """
+    Which direction of a data connection carries the file (0: a->b, 1: b->a).
+
+    Not simply "server to client": stream.a is whoever was seen first, which
+    is whoever opened the connection — and in active mode (PORT/EPRT) that is
+    the FTP *server* connecting out, so assuming direction 1 read the empty
+    side. The correlator says which endpoint it armed and whether that end
+    sends or receives; when that endpoint cannot be matched (an address
+    written differently, say), the side that actually carried bytes wins.
+    """
+    ep, role = meta.get("endpoint"), meta.get("role")
+    a, b = getattr(stream, "a", None), getattr(stream, "b", None)
+    if ep and role in ("sender", "receiver") and tuple(ep) in (a, b):
+        sender_is_a = (tuple(ep) == a) == (role == "sender")
+        return 0 if sender_is_a else 1
+    return 0 if len(stream.assemble(0)[0]) > len(stream.assemble(1)[0]) else 1
+
+
 def extract_ftp_object(stream: TCPStream):
     """
     An FTP data connection carries nothing but the transferred file — unlike
@@ -494,7 +530,7 @@ def extract_ftp_object(stream: TCPStream):
     meta = stream.ftp_meta
     if not meta or meta.get("direction") != "download":
         return None
-    data, _gaps = stream.assemble(1)        # server -> client
+    data, _gaps = stream.assemble(_ftp_sending_side(stream, meta))
     if not data:
         return None
     if len(data) > MAX_SINGLE_OBJECT:
@@ -579,26 +615,32 @@ class ObjectScanner(threading.Thread):
 
     def run(self):
         while not self._stop.wait(self.interval):
-            if not self.enabled:
-                continue
-            for st in self.tracker.dirty_streams():
-                try:
-                    st.dirty = False
-                    if st.hint == "FTP-DATA":
-                        # Unlike HTTP, a data connection carries no length
-                        # header — it signals "done" by closing, so extracting
-                        # any earlier would ship a truncated file.
-                        if not st.objects_emitted and st.closed:
-                            obj = extract_ftp_object(st)
-                            if obj:
-                                self.store.add(obj, st)
-                                st.objects_emitted = 1
-                        continue
-                    if st.hint == "TLS" or not st.bytes[1]:
-                        continue            # nothing extractable
-                    objs = extract_objects(st)
-                    for obj in objs[st.objects_emitted:]:
+            if self.enabled:
+                self.scan_once()
+
+    def scan_once(self):
+        """One pass over the streams that changed. Split out so it is testable."""
+        for st in self.tracker.dirty_streams():
+            try:
+                st.dirty = False
+                if st.hint == "FTP-DATA":
+                    # Unlike HTTP, a data connection carries no length
+                    # header — it signals "done" by closing, so extracting
+                    # any earlier would ship a truncated file.
+                    if not st.objects_emitted and st.closed:
+                        obj = extract_ftp_object(st)
+                        if obj:
+                            self.store.add(obj, st)
+                            st.objects_emitted = 1
+                    continue
+                if st.hint == "TLS" or not st.bytes[1]:
+                    continue            # nothing extractable
+                objs = extract_objects(st)
+                for kind in ("upload", "download"):
+                    mine = [o for o in objs if o["direction"] == kind]
+                    for obj in mine[st.emitted[kind]:]:
                         self.store.add(obj, st)
-                    st.objects_emitted = len(objs)
-                except Exception:
-                    self.errors += 1
+                    st.emitted[kind] = len(mine)
+                st.objects_emitted = sum(st.emitted.values())
+            except Exception:
+                self.errors += 1

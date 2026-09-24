@@ -13,10 +13,11 @@ connection table and its quality metrics, alert rules and muting, filename
 sanitising, pcap link types, the scheduled-task helpers.
 
 **`ui/`** drives the real dashboard in a real browser via Playwright, against a
-demo server the runner starts and stops:
+demo server the runner starts and stops. The tests are Node scripts, so they
+need Playwright's npm package (pip's does not help). In the project root:
 
 ```
-pip install playwright && playwright install chromium
+npm install --no-save playwright && npx playwright install chromium
 ```
 
 Skipped with a message if Playwright is absent. Set `NETSCOPE_CHROMIUM` to use a

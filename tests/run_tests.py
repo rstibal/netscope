@@ -17,9 +17,11 @@ sanitising, pcap link types and the scheduled-task helpers.
 against a demo server this script starts and stops. Nearly every UI bug in this
 project's history was a layout or timing fault that only a browser could see —
 a column that truncated, a view that drifted while rows were trimmed, a save
-that gave no feedback — so they are worth the extra dependency:
+that gave no feedback — so they are worth the extra dependency. The tests are
+Node scripts, so they need Playwright's *npm* package (the pip one does not
+help); run this in the project root:
 
-    pip install playwright && playwright install chromium
+    npm install --no-save playwright && npx playwright install chromium
 
 If Playwright is missing the UI half is skipped and said so, rather than
 failing.
@@ -33,10 +35,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import queue
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,18 +58,35 @@ def free_port():
 
 def start_demo(port):
     """Start a demo server and return (process, dashboard_url)."""
+    # Unbuffered: with stdout on a pipe rather than a console, Python
+    # block-buffers it, so the banner carrying the URL could sit in the
+    # child's buffer indefinitely while readline() below waited for it.
     proc = subprocess.Popen(
-        [sys.executable, os.path.join(ROOT, "netscope.py"), "--demo",
+        [sys.executable, "-u", os.path.join(ROOT, "netscope.py"), "--demo",
          "--port", str(port), "--no-browser", "--no-history"],
-        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    # Read on a thread, for two reasons: readline() blocks with no timeout,
+    # so a silent child would hang the runner past any deadline; and the pipe
+    # must keep draining after the URL is found, or a chatty server fills it
+    # and blocks on its next print.
+    lines = queue.Queue()
+
+    def pump():
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
     url = None
     deadline = time.time() + 60
     while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            continue
+        try:
+            line = lines.get(timeout=max(0.1, deadline - time.time()))
+        except queue.Empty:
+            break
+        if line is None:
+            break                       # the server exited
         m = re.search(r"(http://127\.0\.0\.1:%d/\?t=\S+)" % port, line)
         if m:
             url = m.group(1)
@@ -131,8 +152,9 @@ def main():
     if do_ui:
         print("== dashboard ==")
         if not have_playwright():
-            print("  SKIP  Playwright is not installed here.")
-            print("        pip install playwright && playwright install chromium")
+            print("  SKIP  Node can't load Playwright (the npm package, not pip's).")
+            print("        npm install --no-save playwright && "
+                  "npx playwright install chromium")
             skipped.append("all dashboard tests")
         else:
             port = free_port()

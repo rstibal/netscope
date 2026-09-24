@@ -46,7 +46,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.21.1"
+VERSION = "1.21.2"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2724,6 +2724,12 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/control":
             action = body.get("action")
             eng = self.app.engine
+            if action in ("start", "restart"):
+                # Going live leaves offline mode. Nothing else ever cleared
+                # this, so after an import the status bar said "offline"
+                # forever and the Connections tab never re-attached to the
+                # real socket table.
+                self.app.source = None
             if action == "start":
                 want = body.get("iface") or None
                 eng.start(want, body.get("filter") or "")

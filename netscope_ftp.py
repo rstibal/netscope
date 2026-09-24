@@ -21,10 +21,18 @@ from __future__ import annotations
 import re
 
 # 227 (PASV) and its close cousins all end in "(a,b,c,d,p1,p2)". Active mode
-# has the client name the same six numbers in a PORT command instead.
+# has the client name the same six numbers in a PORT command instead. The
+# extended forms (RFC 2428) are what curl and most modern clients send first:
+# a 229 EPSV reply names only a port, on the server that sent it, and EPRT
+# carries an address in either family between "|" delimiters.
 PASV_RE = re.compile(rb"227[^(]*\(([\d,]+)\)")
-PORT_RE = re.compile(rb"PORT (\d+,\d+,\d+,\d+,\d+,\d+)", re.I)
-RETR_RE = re.compile(rb"^RETR\s+(.+?)\r?$", re.I | re.M)
+EPSV_RE = re.compile(rb"229[^(]*\((.)\1\1(\d+)\1\)")
+PORT_RE = re.compile(rb"^PORT (\d+,\d+,\d+,\d+,\d+,\d+)", re.I)
+EPRT_RE = re.compile(rb"^EPRT (.)\d\1([^|]+)\1(\d+)\1", re.I)
+RETR_RE = re.compile(rb"^RETR\s+(.+?)$", re.I)
+# Every other command that consumes a negotiated data connection. After one of
+# these the negotiation is spent, and a RETR that comes later needs its own.
+OTHER_XFER_RE = re.compile(rb"^(STOR|STOU|APPE|LIST|NLST|MLSD)\b", re.I)
 
 # How long a negotiated data endpoint is honored before it's forgotten — the
 # data connection normally opens within a second or two of PASV/PORT; a
@@ -44,7 +52,14 @@ class FTPCorrelator:
     """One instance shared across the whole capture."""
 
     def __init__(self):
-        self._pending_cmd = {}     # control-conn key -> filename
+        # RFC 959 order is negotiate first (PASV/PORT), then name the file
+        # (RETR) — the server only opens or accepts the data connection once
+        # it knows what to send. So a negotiation has to wait, unnamed, for
+        # the RETR that follows it. The reverse order is kept working too, in
+        # case a client ever sends it, but a name waiting for a negotiation is
+        # consumed by the first one, so it can never label a later transfer.
+        self._pending_cmd = {}     # control-conn key -> filename awaiting PASV/PORT
+        self._negotiated = {}      # control-conn key -> (ip, port, role, deadline)
         self._pending_addr = {}    # (ip, port) -> {"name": ...}
         self._expire = {}          # (ip, port) -> deadline
         self._last_sweep = 0.0
@@ -65,23 +80,61 @@ class FTPCorrelator:
         """
         ckey = self._ckey(src, sport, dst, dport)
         if to_server:
-            m = RETR_RE.search(payload)
-            if m:
-                name = m.group(1).decode("latin-1", "replace").strip()
-                self._pending_cmd[ckey] = name
-            m = PORT_RE.search(payload)
-            if m:
-                self._arm(ckey, *_addr(m.group(1)), ts)
+            # Line by line and in order: a client may pipeline a PORT and
+            # a RETR into one segment, and which came first matters.
+            for line in payload.split(b"\n"):
+                line = line.strip()
+                m = PORT_RE.match(line)
+                if m:
+                    self._negotiate(ckey, *_addr(m.group(1)), "receiver", ts)
+                    continue
+                m = EPRT_RE.match(line)
+                if m:
+                    self._negotiate(ckey, m.group(2).decode("latin-1"),
+                                    int(m.group(3)), "receiver", ts)
+                    continue
+                m = RETR_RE.match(line)
+                if m:
+                    name = m.group(1).decode("latin-1", "replace").strip()
+                    self._retr(ckey, name, ts)
+                    continue
+                if OTHER_XFER_RE.match(line):
+                    # Not a download: whatever was negotiated is spent on it.
+                    self._negotiated.pop(ckey, None)
+                    self._pending_cmd.pop(ckey, None)
         else:
             m = PASV_RE.search(payload)
             if m:
-                self._arm(ckey, *_addr(m.group(1)), ts)
+                self._negotiate(ckey, *_addr(m.group(1)), "sender", ts)
+                return
+            m = EPSV_RE.search(payload)
+            if m:
+                self._negotiate(ckey, src, int(m.group(2)), "sender", ts)
 
-    def _arm(self, ckey, ip, port, ts):
-        name = self._pending_cmd.get(ckey)
-        if not name:
-            return              # no pending RETR: not a download, not tracked
-        self._pending_addr[(ip, port)] = {"name": name, "direction": "download"}
+    def _negotiate(self, ckey, ip, port, role, ts):
+        """role says which end of the file transfer (ip, port) is: PASV/EPSV
+        name the server, which sends a download; PORT/EPRT name the client,
+        which receives it."""
+        name = self._pending_cmd.pop(ckey, None)
+        if name:
+            self._arm(ip, port, role, name, ts)
+        else:
+            self._negotiated[ckey] = (ip, port, role, ts + PENDING_TTL)
+
+    def _retr(self, ckey, name, ts):
+        neg = self._negotiated.pop(ckey, None)
+        if neg is not None:
+            self._arm(neg[0], neg[1], neg[2], name, ts)
+        else:
+            self._pending_cmd[ckey] = name
+
+    def _arm(self, ip, port, role, name, ts):
+        # The endpoint and its role travel with the name: whoever opens the
+        # data connection is not necessarily the FTP client (in active mode
+        # the server connects out), so extraction cannot assume which side of
+        # the stream carries the file.
+        self._pending_addr[(ip, port)] = {"name": name, "direction": "download",
+                                          "endpoint": (ip, port), "role": role}
         self._expire[(ip, port)] = ts + PENDING_TTL
 
     def match_data(self, src, sport, dst, dport):
@@ -105,3 +158,6 @@ class FTPCorrelator:
             if deadline < ts:
                 self._pending_addr.pop(k, None)
                 self._expire.pop(k, None)
+        for k, neg in list(self._negotiated.items()):
+            if neg[3] < ts:
+                self._negotiated.pop(k, None)
