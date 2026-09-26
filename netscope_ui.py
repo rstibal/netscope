@@ -2478,8 +2478,45 @@ function refreshTab(name){
   else if (name === 'streams') api('/api/streams').then(r=>r.json()).then(renderStreams).catch(()=>{});
   else if (name === 'dhcp')    api('/api/dhcp').then(r=>r.json()).then(renderDhcp).catch(()=>{});
   else if (name === 'alerts')  return api('/api/alerts').then(r=>r.json()).then(renderAlerts).catch(()=>{});
-  else if (name === 'history') return api('/api/history?days='+histDays)
-    .then(r=>r.json()).then(renderHistory).catch(()=>{});
+  else if (name === 'history') return loadHistory(false);
+}
+
+/* History is the tab the page opens on and the one people leave up, so it
+   refreshes itself on the database's own flush beat rather than only when its
+   tab is clicked — it used to show the page-load numbers for hours, and a
+   failed first fetch left "Loading history…" up for good. A redraw rebuilds
+   the whole pane, so the automatic one happens only when the data changed,
+   waits while a column's tooltip is showing, and keeps any Table view you
+   opened and where you had scrolled to. A newer request supersedes an older
+   one still in flight, so a slow refresh can't paint over a 7d/30d/90d click. */
+const HISTORY_REFRESH_MS = 10000;
+let histSeen = null, histSeq = 0, histInflight = 0;
+function loadHistory(auto){
+  if (auto && histInflight) return Promise.resolve();
+  const seq = ++histSeq;
+  histInflight++;
+  return api('/api/history?days='+histDays).then(r=>r.text()).then(t => {
+    if (seq !== histSeq) return;
+    const key = t + JSON.stringify((lastStatus && lastStatus.autostart) || null);
+    if (auto && (key === histSeen || document.querySelector('#tip-daily.on'))) return;
+    const d = JSON.parse(t);
+    histSeen = key;
+    redrawHistory(d);
+  }).catch(()=>{}).finally(() => { histInflight--; });
+}
+
+// Table views are remembered by their section's heading, not their position:
+// a section appearing (the first program recorded) would shift every index.
+function histSecName(x){
+  const h = x.closest('.sec') && x.closest('.sec').querySelector('h4');
+  return h ? h.textContent : '';
+}
+function redrawHistory(d){
+  const pane = $('p-history'), top = pane.scrollTop;
+  const open = new Set([...pane.querySelectorAll('details')].filter(x => x.open).map(histSecName));
+  renderHistory(d);
+  pane.querySelectorAll('details').forEach(x => { if (open.has(histSecName(x))) x.open = true; });
+  pane.scrollTop = top;
 }
 
 function showTab(name){
@@ -2602,6 +2639,7 @@ setInterval(() => {
   if (t === 'files' || t === 'streams' || t === 'alerts' || t === 'conns')
     refreshTab(t);
 }, 2500);
+setInterval(() => { if (activeTab() === 'history') loadHistory(true); }, HISTORY_REFRESH_MS);
 
 /* ---------------- pcap save / open ---------------- */
 

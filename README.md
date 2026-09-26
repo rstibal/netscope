@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.22.0**
+**Version 1.22.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -435,7 +435,8 @@ The History tab — the one the dashboard opens on — shows totals as a KPI row
 daily traffic as a stacked column chart over 7, 30 or 90 days (its scale
 follows your busiest day, so the tallest column fills most of the chart), per-program and per-host breakdowns, hosts first
 contacted in the last week, the alert log and recent sessions. Every chart has
-a table view underneath it, so no value is only reachable by hovering.
+a table view underneath it, so no value is only reachable by hovering. While
+it's showing it refreshes itself every 10 seconds.
 
 Writes never touch the capture path: packets accumulate in memory and a writer
 thread flushes to disk every ten seconds. If the database can't be opened,
@@ -702,6 +703,15 @@ names.
 ---
 
 ## Version history
+
+**1.22.1** — Fixed: the History tab only loaded when the page opened or you
+clicked its tab. Now that the dashboard opens on it and it tends to stay up,
+today's numbers could sit hours out of date. It now refreshes every 10
+seconds while it's showing (the rate history is written to disk). It only
+redraws when something changed, waits while a chart tooltip is showing, and
+keeps any Table view you opened and your scroll position. Also fixed: if the
+very first load failed, "Loading history…" stayed on screen until you clicked
+another tab and came back. The next refresh now recovers it.
 
 **1.22.0** — The dashboard opens on the **History** tab. Clicking a packet
 still fills in the Packet tab without switching to it, the same as on every
