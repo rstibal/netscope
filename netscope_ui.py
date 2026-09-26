@@ -226,11 +226,16 @@ footer b{font-variant-numeric:tabular-nums;display:inline-block}
 #sDrop{min-width:7ch;color:var(--out)}
 
 /* ---------- side panel ---------- */
-.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:8px 8px 0;
+.tabs{display:flex;flex-wrap:wrap;gap:1px;padding:8px 8px 0;
   border-bottom:1px solid var(--line);min-width:0}
-.tab{padding:6px 10px;border-radius:6px 6px 0 0;color:var(--dim);cursor:pointer;
+/* Eight tabs with 10px sides needed 563px against the 583px the 600px panel
+   gives them, so the first packet badge wrapped Talkers onto a second line
+   and every pane jumped down a row. At 6px, and with badges capped in width
+   (tabCount(), frameBadge()), the strip takes the same number of lines with
+   or without badges at every panel width: one at 600, two at 430 and 360. */
+.tab{padding:6px 6px;border-radius:6px 6px 0 0;color:var(--dim);cursor:pointer;
   font:600 12px var(--sans);border:1px solid transparent;border-bottom:none;
-  white-space:nowrap;display:flex;align-items:center;gap:5px}
+  white-space:nowrap;display:flex;align-items:center;gap:4px}
 .tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)}
 .tab .n{font:700 10px var(--mono);background:var(--accent);color:#fff;
   border-radius:8px;padding:1px 5px;min-width:16px;text-align:center}
@@ -1200,6 +1205,22 @@ $('fhelp').onclick = () => {
   b.style.display = b.style.display === 'none' ? 'block' : 'none';
 };
 
+/* Tab badges have to stay narrow, or a badge can wrap the tab strip (see
+   .tab). Counts past 99 read "99+"; frame numbers stay exact to 9999 and then
+   abbreviate — the Packet pane's header has the exact frame, and both badges
+   carry the exact value as a tooltip. */
+function tabCount(el, n){
+  el.textContent = !n ? '' : (n > 99 ? '99+' : String(n));
+  el.title = n > 99 ? String(n) : '';
+  el.classList.toggle('zero', !n);
+}
+function frameBadge(seq){
+  if (seq < 10000) return '#' + seq;
+  if (seq < 1e6) return '#' + Math.floor(seq / 1000) + 'k';
+  if (seq < 1e8) return '#' + (Math.floor(seq / 1e5) / 10) + 'M';
+  return '#' + Math.floor(seq / 1e6) + 'M';
+}
+
 function select(seq, tr){
   selected = seq;
   for (const r of $('rows').children) r.classList.toggle('sel', r === tr);
@@ -1209,7 +1230,8 @@ function select(seq, tr){
   // The Packet pane still updates underneath, and its tab shows the frame
   // number so it's clear the selection registered.
   const b = $('nPkt');
-  b.textContent = '#' + seq;
+  b.textContent = frameBadge(seq);
+  b.title = 'frame ' + seq;
   b.classList.remove('zero');
   api('/api/packet?seq='+seq).then(r=>r.json()).then(renderDetail).catch(()=>{});
 }
@@ -2362,17 +2384,12 @@ function renderStatus(st){
   $('toggle').classList.toggle('on', !st.running);
   if (st.error){ $('errBox').style.display = ''; $('errBox').textContent = 'Capture error: ' + st.error; }
   else $('errBox').style.display = 'none';
-  const n = $('nFiles');
-  n.textContent = st.objects || '';
-  n.classList.toggle('zero', !st.objects);
-  const nd = $('nDhcp');
-  nd.textContent = st.dhcp_leases || '';
-  nd.classList.toggle('zero', !st.dhcp_leases);
+  tabCount($('nFiles'), st.objects);
+  tabCount($('nDhcp'), st.dhcp_leases);
 
   const a = st.alerts || {};
   const na = $('nAlerts');
-  na.textContent = a.total || '';
-  na.classList.toggle('zero', !a.total);
+  tabCount(na, a.total);
   na.classList.toggle('high', (a.high || 0) > 0);
 }
 

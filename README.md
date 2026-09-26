@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.22.1**
+**Version 1.22.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -703,6 +703,15 @@ names.
 ---
 
 ## Version history
+
+**1.22.2** — Fixed: on a wide window, clicking a packet wrapped the side
+panel's last tab (Talkers) onto a second line and pushed every pane down a
+row. The eight tabs only just fitted, so the frame-number badge on the Packet
+tab was enough to overflow them. The tabs are a little more compact now, and
+badges can't grow without limit: counts above 99 read **99+**, and frame
+numbers above 9,999 are shortened (**#12k**, **#1.2M**). Hover a badge for the
+exact value; the Packet tab's header always shows the exact frame. The tab
+strip now keeps the same number of lines whatever the badges say.
 
 **1.22.1** — Fixed: the History tab only loaded when the page opened or you
 clicked its tab. Now that the dashboard opens on it and it tends to stay up,
