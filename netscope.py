@@ -47,7 +47,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.21.3"
+VERSION = "1.22.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000

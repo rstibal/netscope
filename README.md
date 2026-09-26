@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.21.3**
+**Version 1.22.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -179,8 +179,9 @@ the status line says which failed.
 filter bar hides any of them except Info, which always stays because it takes
 the leftover width. Your choice persists between runs.
 
-**A note on the side panel:** only the Packet tab reflects the row you clicked.
-Connections, Files, Streams and Talkers are session-wide — they show everything captured
+**A note on the side panel:** it opens on the History tab. Only the Packet tab
+reflects the row you clicked. Connections, Files, Streams and Talkers are
+session-wide — they show everything captured
 since the app started, and they do not change with your selection. Clicking a
 packet while one of them is open leaves it open; the Packet tab picks up the
 frame number so you can see the click registered.
@@ -430,8 +431,9 @@ every program and host, the alert log, and one row per session, into a SQLite
 database at `%LOCALAPPDATA%\NetScope\history.db` (override with `--db`, disable
 with `--no-history`).
 
-The History tab shows totals as a KPI row, daily traffic as a stacked column
-chart over 7, 30 or 90 days, per-program and per-host breakdowns, hosts first
+The History tab — the one the dashboard opens on — shows totals as a KPI row,
+daily traffic as a stacked column chart over 7, 30 or 90 days (its scale
+follows your busiest day, so the tallest column fills most of the chart), per-program and per-host breakdowns, hosts first
 contacted in the last week, the alert log and recent sessions. Every chart has
 a table view underneath it, so no value is only reachable by hovering.
 
@@ -700,6 +702,16 @@ names.
 ---
 
 ## Version history
+
+**1.22.0** — The dashboard opens on the **History** tab. Clicking a packet
+still fills in the Packet tab without switching to it, the same as on every
+other tab.
+
+Fixed: the History chart's scale could only step up by factors of 2 up to 8
+of a unit, then jumped straight to 1,024 of it — so any month whose busiest
+day was between 8 GB and 1 TB was drawn against a 1 TB axis with gridlines
+every 256 GB, and the bars were slivers. The scale now steps in finer, still
+round increments, and the busiest day fills most of the chart's height.
 
 **1.21.3** — The rest of the bug sweep.
 - **Clear didn't reset the Connections tab.** Its conversations and byte

@@ -604,8 +604,8 @@ back through the table while the capture continues."><input type="checkbox"
 
   <div id="side">
     <div class="tabs">
-      <div class="tab on" data-p="detail">Packet <span class="n zero" id="nPkt"></span></div>
-      <div class="tab" data-p="history">History</div>
+      <div class="tab" data-p="detail">Packet <span class="n zero" id="nPkt"></span></div>
+      <div class="tab on" data-p="history">History</div>
       <div class="tab" data-p="alerts">Alerts <span class="n zero" id="nAlerts"></span></div>
       <div class="tab" data-p="files">Files <span class="n zero" id="nFiles"></span></div>
       <div class="tab" data-p="conns" title="What is open right now, per program">Connections</div>
@@ -613,8 +613,8 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="tab" data-p="dhcp">DHCP <span class="n zero" id="nDhcp"></span></div>
       <div class="tab" data-p="talkers">Talkers</div>
     </div>
-    <div class="pane on" id="p-detail"><div class="empty">Click a packet to inspect it.</div></div>
-    <div class="pane viz" id="p-history"><div class="empty">Loading history…</div></div>
+    <div class="pane" id="p-detail"><div class="empty">Click a packet to inspect it.</div></div>
+    <div class="pane viz on" id="p-history"><div class="empty">Loading history…</div></div>
     <div class="pane" id="p-alerts"><div class="empty">No alerts.</div></div>
     <div class="pane" id="p-files"><div class="empty">No files rebuilt yet.</div></div>
     <div class="pane" id="p-conns"><div class="empty">Loading connections…</div></div>
@@ -1493,15 +1493,25 @@ let histDays = 30, histData = null;
 
 /* Round the axis top in binary units, not decimal ones. A "nice" 3,000,000
    renders as 2.9 MB and its quarters as 732.4 KB — the ticks have to be round
-   in the unit the labels are actually printed in. Powers of two keep every
-   quarter-step clean too. */
+   in the unit the labels are actually printed in.
+
+   Every top on this ladder has quarters hb()'s one decimal prints exactly:
+   whole numbers or halves, or (for 1 and 2) 256/512/768 of the unit below.
+   That rules out 3 (a 2.25 quarter) and 5 (1.25). From 6 up, consecutive
+   steps are at most 4/3 apart, so the tallest bar fills at least three
+   quarters of the chart; below that the gaps are wider, worst case half.
+   The ladder used to be only 1, 2, 4 and 8: anything from 8 GB to 1 TB got
+   a 1 TB axis, gridlines every 256 GB, and a month of ordinary use sat at
+   the bottom as a sliver. */
+const NICE_TOPS = [1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64,
+                   80, 96, 128, 160, 192, 256, 320, 384, 512, 640, 768, 1024];
 function niceMax(v){
   const K = 1024;
   if (v <= 0) return K;
   let unit = 1;
   while (v / unit >= K && unit < Math.pow(K, 4)) unit *= K;
   const scaled = v / unit;
-  for (const step of [1, 2, 4, 8]) if (scaled <= step) return step * unit;
+  for (const step of NICE_TOPS) if (scaled <= step) return step * unit;
   return K * unit;
 }
 
@@ -2583,6 +2593,9 @@ setInterval(() => {
 
 poll();
 setInterval(poll, 700);
+// History is the tab the page opens on, so fetch it now rather than waiting
+// for a click that will never come.
+refreshTab(activeTab());
 // The Files and Streams lists are heavier, so refresh them on a slower beat.
 setInterval(() => {
   const t = activeTab();
