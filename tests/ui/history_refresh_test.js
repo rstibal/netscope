@@ -82,6 +82,36 @@ function payload(){
   await tick();
   check('...and it catches up once the tooltip is gone', (await kpi())==='30.0 GB', await kpi());
 
+  // --- Selected text defers the redraw: while capturing, the data changes on
+  // every beat, so a rebuild would clear any selection before it was copied.
+  await p.evaluate(()=>{
+    const h = document.querySelector('#p-history h4'), r = document.createRange();
+    r.selectNodeContents(h); getSelection().removeAllRanges(); getSelection().addRange(r);
+  });
+  total = 40*G;
+  await tick();
+  check('no redraw while text in the pane is selected',
+        (await kpi())==='30.0 GB' && await p.evaluate(()=>String(getSelection()).length>0), await kpi());
+  await p.evaluate(()=>getSelection().removeAllRanges());
+  await tick();
+  check('...and it catches up once the selection is cleared', (await kpi())==='40.0 GB', await kpi());
+
+  // --- Keyboard focus survives the rebuild, on the matching control.
+  await p.focus('#p-history summary');
+  const had = await p.evaluate(()=>{
+    const a = document.activeElement; return a.closest('.sec').querySelector('h4').textContent; });
+  total = 50*G;
+  await tick();
+  const now = await p.evaluate(()=>{
+    const a = document.activeElement, s = a.closest && a.closest('.sec');
+    return {tag: a.tagName, sec: s ? s.querySelector('h4').textContent : null,
+            live: document.getElementById('p-history').contains(a)};
+  });
+  check('a focused control keeps focus across the refresh',
+        (await kpi())==='50.0 GB' && now.live && now.tag==='SUMMARY' && now.sec===had,
+        JSON.stringify(now)+' (was '+had+')');
+  await p.evaluate(()=>document.activeElement.blur());
+
   // --- Other tabs aren't charged for History's refresh.
   await p.click('.tab[data-p="alerts"]');
   const n = served;

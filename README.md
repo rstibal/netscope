@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.22.2**
+**Version 1.22.3**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -436,7 +436,8 @@ daily traffic as a stacked column chart over 7, 30 or 90 days (its scale
 follows your busiest day, so the tallest column fills most of the chart), per-program and per-host breakdowns, hosts first
 contacted in the last week, the alert log and recent sessions. Every chart has
 a table view underneath it, so no value is only reachable by hovering. While
-it's showing it refreshes itself every 10 seconds.
+it's showing it refreshes itself every 10 seconds, holding off while you
+have text in it selected.
 
 Writes never touch the capture path: packets accumulate in memory and a writer
 thread flushes to disk every ten seconds. If the database can't be opened,
@@ -703,6 +704,15 @@ names.
 ---
 
 ## Version history
+
+**1.22.3** — Fixed: while capturing, the History tab's 10-second refresh
+redraws the pane every time, since today's totals keep changing. Each redraw
+cleared any text you had selected and moved keyboard focus back to the top of
+the page. The refresh now waits while text in the pane is selected, and a
+focused control stays focused. The side panel's tabs also have more margin
+before a badge wraps them: they only just fitted before, and a slightly
+different font (Windows 10's, or another browser's) could have brought the
+wrapping back.
 
 **1.22.2** — Fixed: on a wide window, clicking a packet wrapped the side
 panel's last tab (Talkers) onto a second line and pushed every pane down a

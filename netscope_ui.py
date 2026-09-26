@@ -228,14 +228,20 @@ footer b{font-variant-numeric:tabular-nums;display:inline-block}
 /* ---------- side panel ---------- */
 .tabs{display:flex;flex-wrap:wrap;gap:1px;padding:8px 8px 0;
   border-bottom:1px solid var(--line);min-width:0}
-/* Eight tabs with 10px sides needed 563px against the 583px the 600px panel
-   gives them, so the first packet badge wrapped Talkers onto a second line
-   and every pane jumped down a row. At 6px, and with badges capped in width
-   (tabCount(), frameBadge()), the strip takes the same number of lines with
-   or without badges at every panel width: one at 600, two at 430 and 360. */
-.tab{padding:6px 6px;border-radius:6px 6px 0 0;color:var(--dim);cursor:pointer;
+/* The strip must take the same number of lines with or without badges, or
+   the first badge (clicking a packet) wraps a tab and every pane jumps down a
+   row. With badges capped in width (tabCount(), frameBadge()) that holds at
+   every panel width, but from opposite sides:
+   - 600px panel, one line: the widest badges must still fit its 583px. At
+     5px sides they need 557; at the old 10px, even the first badge wrapped.
+   - 430 and 360px panels, two lines: the bare strip must NOT fit on one. At
+     5px it measures 413 — exactly the 430 panel's room — so it takes 8px
+     there, 461. Either margin is kept at 16px+ so a Windows 10 font (plain
+     Segoe UI) or another browser's metrics can't tip it; tabs_test checks. */
+.tab{padding:6px 8px;border-radius:6px 6px 0 0;color:var(--dim);cursor:pointer;
   font:600 12px var(--sans);border:1px solid transparent;border-bottom:none;
   white-space:nowrap;display:flex;align-items:center;gap:4px}
+@media(min-width:1750px){.tab{padding:6px 5px}}
 .tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)}
 .tab .n{font:700 10px var(--mono);background:var(--accent);color:#fff;
   border-radius:8px;padding:1px 5px;min-width:16px;text-align:center}
@@ -2504,7 +2510,10 @@ function refreshTab(name){
    failed first fetch left "Loading history…" up for good. A redraw rebuilds
    the whole pane, so the automatic one happens only when the data changed,
    waits while a column's tooltip is showing, and keeps any Table view you
-   opened and where you had scrolled to. A newer request supersedes an older
+   opened, where you had scrolled to, and which control had keyboard focus.
+   It also waits while text in the pane is selected — while capturing, the
+   data changes on every beat, so otherwise nothing could be copied from it.
+   A newer request supersedes an older
    one still in flight, so a slow refresh can't paint over a 7d/30d/90d click. */
 const HISTORY_REFRESH_MS = 10000;
 let histSeen = null, histSeq = 0, histInflight = 0;
@@ -2515,7 +2524,7 @@ function loadHistory(auto){
   return api('/api/history?days='+histDays).then(r=>r.text()).then(t => {
     if (seq !== histSeq) return;
     const key = t + JSON.stringify((lastStatus && lastStatus.autostart) || null);
-    if (auto && (key === histSeen || document.querySelector('#tip-daily.on'))) return;
+    if (auto && (key === histSeen || document.querySelector('#tip-daily.on') || histSelecting())) return;
     const d = JSON.parse(t);
     histSeen = key;
     redrawHistory(d);
@@ -2528,11 +2537,28 @@ function histSecName(x){
   const h = x.closest('.sec') && x.closest('.sec').querySelector('h4');
   return h ? h.textContent : '';
 }
+function histSelecting(){
+  const s = window.getSelection();
+  return !!(s && !s.isCollapsed && s.rangeCount &&
+            $('p-history').contains(s.getRangeAt(0).commonAncestorContainer));
+}
+// Focus is found again the same way: by section, tag and label, since the
+// element itself is gone once the pane is rebuilt.
+function histFocusKey(x){
+  return [histSecName(x), x.tagName, x.dataset.days || '', x.dataset.i || '', x.id,
+          x.textContent.trim()].join('|');
+}
 function redrawHistory(d){
   const pane = $('p-history'), top = pane.scrollTop;
   const open = new Set([...pane.querySelectorAll('details')].filter(x => x.open).map(histSecName));
+  const act = document.activeElement;
+  const focus = act && act !== pane && pane.contains(act) ? histFocusKey(act) : null;
   renderHistory(d);
   pane.querySelectorAll('details').forEach(x => { if (open.has(histSecName(x))) x.open = true; });
+  if (focus){
+    const el = [...pane.querySelectorAll(act.tagName)].find(x => histFocusKey(x) === focus);
+    if (el) el.focus({preventScroll: true});
+  }
   pane.scrollTop = top;
 }
 
