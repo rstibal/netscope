@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.23.0**
+**Version 1.23.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -361,7 +361,9 @@ tcp[tcpflags] & tcp-syn != 0  only connection openings
 Press **Apply** after changing it.
 
 **Keyboard:** `space` pauses the incoming feed (the capture keeps running),
-`/` jumps to the filter box.
+`/` jumps to the filter box. When you have tabbed to a button, space presses
+that button instead, as usual. After clicking a button with the mouse, space
+still pauses.
 
 ### Saving and opening captures
 
@@ -745,6 +747,12 @@ names.
 ---
 
 ## Version history
+
+**1.23.1** — Fixed: space couldn't press buttons. The page-wide pause shortcut
+took the space key even when a button had keyboard focus, so a keyboard user
+couldn't press any button with space. A button you tabbed to now gets the
+space key. After a mouse click, space still pauses the feed rather than
+pressing the button you just clicked a second time.
 
 **1.23.0** — New: keep programs and hosts out of History. A **Not recorded**
 list on the History tab stops them being written to the database, and after

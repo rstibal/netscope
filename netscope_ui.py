@@ -1334,8 +1334,8 @@ $('rowmenu').addEventListener('keydown', e => {
   else if (e.key === 'ArrowDown') bs[(i + 1) % bs.length].focus();
   else if (e.key === 'ArrowUp')   bs[(i - 1 + bs.length) % bs.length].focus();
   else if (e.key !== 'Enter' && e.key !== ' ') return;
-  // Kept from the page-wide keys, where space would pause the feed; Enter
-  // and space still reach the focused button.
+  // Arrows and Escape are the menu's own; Enter and space still reach the
+  // focused button.
   e.stopPropagation();
   if (e.key !== 'Enter' && e.key !== ' ') e.preventDefault();
 });
@@ -2798,8 +2798,26 @@ function setPaused(v){
 }
 $('pause').onclick = () => setPaused(!paused);
 
+// Space pauses the feed unless a control was reached from the keyboard. It
+// used to take space from focused buttons too, so no button on the page could
+// be pressed with space. But a button clicked with the mouse keeps focus as
+// well, and handing it space would make "click Clear, press space to pause"
+// clear again. :focus-visible can't tell the two apart — Chrome turns it on
+// for a mouse-focused button as soon as any key is pressed — so how focus
+// arrived is noted here: within a moment of a pointer press means the mouse,
+// and any pointer press ends keyboard focus even on an already-focused button.
+const SPACE_OWNERS = 'button, summary, a[href], [role=button], [role=menuitem], [role=checkbox]';
+let lastPointer = -Infinity, keyFocus = null;   // not 0: now() counts from page load
+document.addEventListener('pointerdown', () => { lastPointer = performance.now(); keyFocus = null; }, true);
+document.addEventListener('focusin', e => {
+  keyFocus = performance.now() - lastPointer < 500 ? null : e.target;
+}, true);
 document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const t = e.target;
+  if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' ||
+      t.isContentEditable) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ' ' && t === keyFocus && t.closest && t.closest(SPACE_OWNERS)) return;
   if (e.key === ' '){ e.preventDefault(); setPaused(!paused); }
   if (e.key === '/'){ e.preventDefault(); $('find').focus(); }
 });
