@@ -47,7 +47,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.22.3"
+VERSION = "1.23.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -92,7 +92,7 @@ from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
                          owner_label, parse_ra, UNOWNED)
 from netscope_nbns import parse as parse_nbns, summarise as nbns_summary
-from netscope_history import (HistoryStore, default_db_path,
+from netscope_history import (HistoryStore, default_db_path, clean_patterns,
                               load_settings, save_setting)
 import netscope_tray as tray
 
@@ -2604,8 +2604,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/history":
             h = self.app.history
+            ex = h.exclusions() if h else {"programs": [], "hosts": []}
             if h is None or not h.enabled:
-                return self._send(200, {"enabled": False,
+                return self._send(200, {"enabled": False, "exclude": ex,
                                         "error": (h.error if h else "disabled")})
             days = max(1, min(365, int(qs.get("days", ["30"])[0])))
             return self._send(200, {
@@ -2618,6 +2619,7 @@ class Handler(BaseHTTPRequestHandler):
                 "new_hosts": h.new_hosts(7, 20),
                 "alerts": h.alert_history(days, 100),
                 "sessions": h.sessions(10),
+                "exclude": ex,
                 "days": days,
             })
 
@@ -2840,6 +2842,31 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "history_wipe":
                 if self.app.history:
                     self.app.history.wipe()
+            elif action == "history_exclude":
+                # One entry added or removed, never the whole list: the packet
+                # menu can add without having loaded History first, and two
+                # open tabs can't overwrite each other's edits.
+                h = self.app.history
+                ex = h.exclusions() if h else {"programs": [], "hosts": []}
+                key = {"program": "programs", "host": "hosts"}.get(body.get("kind"))
+                pat = (clean_patterns([body.get("pattern")]) or [None])[0]
+                if h and key and pat:
+                    if body.get("remove"):
+                        ex[key] = [x for x in ex[key] if x != pat]
+                    elif pat not in ex[key]:
+                        ex[key].append(pat)
+                    h.set_exclusions(ex["programs"], ex["hosts"])
+                    save_setting("history_exclude", h.exclusions())
+                    ex = h.exclusions()
+                return self._send(200, {
+                    "status": self.status(), "exclude": ex,
+                    # False when the list was already full.
+                    "listed": bool(key and pat and pat in ex[key])})
+            elif action == "history_purge":
+                h = self.app.history
+                gone = (h.purge(body.get("kind"), body.get("pattern"))
+                        if h else {"usage": 0, "hosts": 0, "alerts": 0})
+                return self._send(200, {"status": self.status(), "purged": gone})
             elif action == "history_retain":
                 h = self.app.history
                 if h:
@@ -3118,6 +3145,9 @@ def main(argv=None):
     scanner.start()
     history = HistoryStore(path=args.db, retain_days=args.retain_days,
                            enabled=not args.no_history)
+    ex = load_settings().get("history_exclude") or {}
+    if isinstance(ex, dict):
+        history.set_exclusions(ex.get("programs"), ex.get("hosts"))
     alerts = AlertEngine(DesktopNotifier(enabled=args.toasts), history=history)
     alerts.attach_settings(load_settings, save_setting)
     dhcp = DhcpTracker()

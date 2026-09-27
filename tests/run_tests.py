@@ -34,12 +34,15 @@ skipped elsewhere rather than reported as failures.
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import queue
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -56,6 +59,19 @@ def free_port():
         return s.getsockname()[1]
 
 
+def scratch_home():
+    """
+    Somewhere empty for the server's settings.json. It lives beside the history
+    database under LOCALAPPDATA (~/.netscope elsewhere), and tests change
+    alert rules, mutes and history exclusions through the real API — against
+    the default location, that rewrote the settings of whoever ran the suite.
+    Fresh per server, so no test inherits another's choices.
+    """
+    d = tempfile.mkdtemp(prefix="netscope-test-")
+    atexit.register(shutil.rmtree, d, True)
+    return {"LOCALAPPDATA": d, "HOME": d}
+
+
 def start_demo(port):
     """Start a demo server and return (process, dashboard_url)."""
     # Unbuffered: with stdout on a pipe rather than a console, Python
@@ -65,7 +81,7 @@ def start_demo(port):
         [sys.executable, "-u", os.path.join(ROOT, "netscope.py"), "--demo",
          "--port", str(port), "--no-browser", "--no-history"],
         cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        env={**os.environ, "PYTHONUNBUFFERED": "1", **scratch_home()})
     # Read on a thread, for two reasons: readline() blocks with no timeout,
     # so a silent child would hang the runner past any deadline; and the pipe
     # must keep draining after the URL is found, or a chatty server fills it

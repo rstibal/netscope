@@ -16,6 +16,7 @@ unavailable the accumulator is simply discarded and capture carries on.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import sqlite3
 import threading
@@ -148,6 +149,43 @@ def _day_hour(ts):
     return dt.strftime("%Y-%m-%d"), dt.hour
 
 
+# ---------------------------------------------------------------------------
+# Exclusions — programs and hosts the user asked not to have recorded
+# ---------------------------------------------------------------------------
+
+MAX_EXCLUDE = 100          # entries per list
+MAX_PATTERN = 253          # the longest a DNS name can be
+
+
+def clean_patterns(items):
+    """Lower-cased, trimmed, de-duplicated, capped. Anything else is dropped."""
+    out = []
+    for x in items or []:
+        if not isinstance(x, str):
+            continue
+        x = x.strip().lower()
+        if x and len(x) <= MAX_PATTERN and x not in out:
+            out.append(x)
+    return out[:MAX_EXCLUDE]
+
+
+def program_matches(pattern, name):
+    """Exact name, or a * / ? wildcard: chrome.exe, chrome*."""
+    name = (name or "").lower()
+    return name == pattern or fnmatch.fnmatchcase(name, pattern)
+
+
+def host_matches(pattern, host):
+    """
+    As program_matches, and a plain name also covers its subdomains, so
+    example.com takes www.example.com with it — the way people mean a site.
+    """
+    host = (host or "").lower().rstrip(".")
+    if host == pattern or fnmatch.fnmatchcase(host, pattern):
+        return True
+    return "*" not in pattern and "?" not in pattern and host.endswith("." + pattern)
+
+
 class HistoryStore:
     def __init__(self, path=None, retain_days=DEFAULT_RETAIN_DAYS,
                  alert_retain_days=DEFAULT_ALERT_RETAIN_DAYS, enabled=True):
@@ -173,6 +211,12 @@ class HistoryStore:
         self._known_procs = set()
         self._known_hosts = set()
         self.was_empty = True
+        self.exclude_programs = []
+        self.exclude_hosts = []
+        # Decisions per name, since record() runs for every packet and a
+        # wildcard match per packet per pattern is not free. Rebuilt whenever
+        # the lists change.
+        self._ex_cache = {}
 
         if self.enabled:
             self._open()
@@ -254,26 +298,45 @@ class HistoryStore:
         ts = rec.get("ts", time.time())
         inbound = rec.get("dir") != "out"
         day, hour = _day_hour(ts)
+        # An excluded program keeps only its name and first/last seen — the
+        # new-program alert asks the database whether a program is new, so
+        # dropping the name too would make it "new" every session. Its usage
+        # goes, and so do the hosts it talked to. An excluded host is not
+        # written at all: the name is the thing being kept private.
+        proc_out = self.excluded_program(proc)
+        host_out = proc_out or self.excluded_host(host)
 
         with self._lock:
-            slot = self._acc.get((day, hour, proc))
-            if slot is None:
-                slot = self._acc[(day, hour, proc)] = [0, 0, 0]
-            slot[0 if inbound else 1] += size
-            slot[2] += 1
+            if not proc_out:
+                slot = self._acc.get((day, hour, proc))
+                if slot is None:
+                    slot = self._acc[(day, hour, proc)] = [0, 0, 0]
+                slot[0 if inbound else 1] += size
+                slot[2] += 1
 
-            for table, key in ((self._procs, proc), (self._hosts, host)):
+            for table, key, counts in ((self._procs, proc, not proc_out),
+                                       (self._hosts, host if not host_out else "", True)):
                 if not key:
                     continue
                 row = table.get(key)
                 if row is None:
                     row = table[key] = [ts, ts, 0, 0, 0]
                 row[1] = ts
-                row[2 if inbound else 3] += size
-                row[4] += 1
+                if counts:
+                    row[2 if inbound else 3] += size
+                    row[4] += 1
 
     def record_alert(self, alert):
         if not self.enabled:
+            return
+        # A note-level alert about an excluded program or host is only a
+        # record of activity ("chrome.exe connected to x, first time this
+        # session") — the very thing excluded. Warnings and above are kept:
+        # they are the security record, whoever they are about.
+        if alert.get("severity", "info") == "info" and (
+                self.excluded_program(alert.get("process"))
+                or (alert.get("rule") == "new_host"
+                    and self.excluded_host(alert.get("subject")))):
             return
         with self._lock:
             self._pending_alerts.append((
@@ -294,13 +357,118 @@ class HistoryStore:
                 lease.get("first_seen", time.time()),
                 lease.get("last_seen", time.time())))
 
+    # -- exclusions ---------------------------------------------------------
+
+    def set_exclusions(self, programs=None, hosts=None):
+        """
+        Replace the lists. What is still waiting for the next flush and
+        matches is dropped too — it would otherwise land on disk a few seconds
+        after being excluded. What is already on disk stays until purge().
+        """
+        self.exclude_programs = clean_patterns(programs)
+        self.exclude_hosts = clean_patterns(hosts)
+        self._ex_cache = {}
+        with self._lock:
+            self._acc = {k: v for k, v in self._acc.items()
+                         if not self.excluded_program(k[2])}
+            for name, row in self._procs.items():
+                if self.excluded_program(name):
+                    row[2] = row[3] = row[4] = 0
+            self._hosts = {k: v for k, v in self._hosts.items()
+                           if not self.excluded_host(k)}
+
+    def exclusions(self):
+        return {"programs": list(self.exclude_programs),
+                "hosts": list(self.exclude_hosts)}
+
+    def excluded_program(self, name):
+        if not self.exclude_programs or not name:
+            return False
+        key = ("p", name)
+        hit = self._ex_cache.get(key)
+        if hit is None:
+            hit = any(program_matches(p, name) for p in self.exclude_programs)
+            self._remember(key, hit)
+        return hit
+
+    def excluded_host(self, host):
+        if not self.exclude_hosts or not host:
+            return False
+        key = ("h", host)
+        hit = self._ex_cache.get(key)
+        if hit is None:
+            hit = any(host_matches(p, host) for p in self.exclude_hosts)
+            self._remember(key, hit)
+        return hit
+
+    def _remember(self, key, hit):
+        cache = self._ex_cache
+        if len(cache) > 50000:          # a scan's worth of one-off IPs
+            cache = self._ex_cache = {}
+        cache[key] = hit
+
+    def purge(self, kind, pattern):
+        """
+        Erase what is already recorded for one exclusion pattern. A program
+        loses its usage and its note-level alerts; its name and first/last
+        seen stay, for the same reason record() keeps them. A host loses its
+        row and the note-level alerts that name it. Returns what went.
+
+        The hosts an excluded program talked to in the past can't be told
+        apart from anyone else's — the hosts table has no program column —
+        so they stay; exclude the hosts too if that matters.
+        """
+        pattern = (clean_patterns([pattern]) or [None])[0]
+        if not self.enabled or self._db is None or not pattern \
+                or kind not in ("program", "host"):
+            return {"usage": 0, "hosts": 0, "alerts": 0}
+        match = program_matches if kind == "program" else host_matches
+        gone = {"usage": 0, "hosts": 0, "alerts": 0}
+        try:
+            with self._db_lock:
+                db = self._db
+                if kind == "program":
+                    names = [r[0] for r in db.execute("SELECT DISTINCT process FROM usage")
+                             if match(pattern, r[0])]
+                    for n in names:
+                        gone["usage"] += db.execute(
+                            "DELETE FROM usage WHERE process=?", (n,)).rowcount
+                        db.execute("UPDATE processes SET bytes_in=0, bytes_out=0, "
+                                   "packets=0 WHERE name=?", (n,))
+                    ids = [r[0] for r in db.execute(
+                        "SELECT id, process FROM alerts WHERE severity='info'")
+                        if match(pattern, r[1])]
+                else:
+                    names = [r[0] for r in db.execute("SELECT host FROM hosts")
+                             if match(pattern, r[0])]
+                    for n in names:
+                        gone["hosts"] += db.execute(
+                            "DELETE FROM hosts WHERE host=?", (n,)).rowcount
+                    ids = [r[0] for r in db.execute(
+                        "SELECT id, detail FROM alerts WHERE severity='info' "
+                        "AND rule='new_host'")
+                        if any(match(pattern, w.strip(",.;:()'\""))
+                               for w in (r[1] or "").split())]
+                for i in ids:
+                    gone["alerts"] += db.execute(
+                        "DELETE FROM alerts WHERE id=?", (i,)).rowcount
+                db.commit()
+            if kind == "host":
+                self._known_hosts = {h for h in self._known_hosts
+                                     if not match(pattern, h)}
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        return gone
+
     # -- first-seen lookups -------------------------------------------------
 
     def known_process(self, name):
         return name in self._known_procs
 
     def known_host(self, host):
-        return host in self._known_hosts
+        # An excluded host is never written, so the database can't remember
+        # it; one you named yourself isn't a first contact worth a warning.
+        return host in self._known_hosts or self.excluded_host(host)
 
     def note_process(self, name):
         self._known_procs.add(name)

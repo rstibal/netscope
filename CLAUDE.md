@@ -206,6 +206,31 @@ cache spent budget too, so a few hundred long-lived unnamed IPs would still
 exhaust 20,000 in under a day — the same failure the raise was meant to fix.
 Retrying an IP already tried is free at the cap.
 
+**History exclusions keep an excluded program's name but not an excluded
+host's.** `HistoryStore.record()` still writes an excluded program's
+`processes` row, with zero counters, because the new-program alert asks the
+database whether a program is new. Without the row, the program would be new
+every session and warn every time. An excluded host is not written at all:
+the name *is* the private part. Instead, `known_host()` treats it as known,
+so it never warns as a first contact. Note-level alerts about an excluded
+subject are not logged (they are activity records). Warnings and above always
+are, since the alert log is the security record. Purging a program can't
+remove the hosts it talked to: the `hosts` table has no program column, and
+the README says so rather than implying otherwise.
+
+**Hiding packets goes through the display filter, never a separate list.** The
+row menu's "Hide program/host/address" appends a `!=` clause to the filter
+box. A hide list kept somewhere else is invisible once set. In a monitor, that
+is exactly where the traffic that mattered goes unseen, and malware named
+`svchost.exe` benefits from a "hide svchost" rule. What is hidden should always
+be on screen. History exclusions are the one persistent list, and the History
+tab shows their count for the same reason.
+
+**UI tests run against a scratch settings folder.** `run_tests.py` points each
+demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
+Tests change alert rules, mutes and history exclusions through the real API,
+which used to write to the settings of whoever ran the suite.
+
 **An imported .pcap is offline: no history, no live attribution.**
 `CaptureEngine.ingest_file()` sets `_offline` so imported packets are not
 written to the history database (they are another machine's traffic, or

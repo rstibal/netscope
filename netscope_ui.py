@@ -188,6 +188,17 @@ td.info{color:var(--dim)}
 .hint{color:var(--faint);font-size:10.5px;margin-top:6px}
 .colmenu .hint{color:var(--faint);font-size:10.5px;margin-top:6px;
   padding-top:6px;border-top:1px solid var(--line)}
+/* Right-click on a packet row: hide it from view, or keep it out of History. */
+.rowmenu{position:fixed;z-index:45;background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;padding:4px;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);display:none;min-width:220px;max-width:380px}
+.rowmenu.on{display:block}
+.rowmenu button{display:block;width:100%;text-align:left;border:none;background:none;
+  padding:5px 8px;border-radius:5px;font:12px var(--sans);color:var(--fg);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rowmenu button:hover,.rowmenu button:focus{background:var(--panel2);color:var(--fg);outline:none}
+.rowmenu .sep{height:1px;background:var(--line);margin:4px 2px}
+.rowmenu .hint{padding:0 8px 4px;margin:0}
 .pr.FTP{color:var(--http);background:#e3b3411a;border-color:#e3b34133}
 .pr.ICMPv6{color:var(--icmp);background:#f0883e1a;border-color:#f0883e33}
 .pr.IGMP{color:var(--icmp);background:#f0883e1a;border-color:#f0883e33}
@@ -487,6 +498,12 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .dayrange{display:flex;gap:6px;align-items:center;margin-bottom:10px}
 .dayrange button{padding:3px 10px;font:600 11px var(--sans)}
 .dayrange button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.dayrange a{color:var(--faint);font:11px var(--mono)}
+.exrow{align-items:center}
+.exrow span:first-child{flex:1 1 auto;color:var(--fg);word-break:break-all}
+.exrow .kind{color:var(--faint);font:10.5px var(--sans);margin-left:8px}
+.exadd{display:flex;gap:6px;margin-top:8px}
+.exadd input{flex:1 1 auto}
 table.tv{width:100%;border-collapse:collapse;font:11px var(--mono);margin-top:6px}
 table.tv th{text-align:left;color:var(--dim);font:600 9.5px var(--sans);
   letter-spacing:.4px;text-transform:uppercase;padding:4px 6px;
@@ -552,6 +569,7 @@ back through the table while the capture continues."><input type="checkbox"
 </div>
 <style id="colhide"></style>
 <div class="colmenu" id="colmenu"></div>
+<div class="rowmenu" id="rowmenu" role="menu"></div>
 <div id="fhelpbox" style="display:none">
   <b>Fields</b> proto · process · src · dst · ip · host · port · sport · dport ·
   bytes · info · dir · pid · iface · stream · seq
@@ -1242,6 +1260,92 @@ function select(seq, tr){
   api('/api/packet?seq='+seq).then(r=>r.json()).then(renderDetail).catch(()=>{});
 }
 
+/* ---------------- row menu ----------------
+   Right-click a packet to hide its program, host or address. Hiding writes
+   a clause into the display filter rather than into a hidden list of its
+   own, so what is hidden is always on screen in the filter box and undone by
+   editing it — a monitor that silently hides things is where the one packet
+   that mattered goes unseen. The last items keep a program or host out of
+   History, which is a setting of its own (History tab, Not recorded). */
+function hideClause(field, value){
+  const text = $('find').value.trim();
+  const clause = field + ' != "' + value + '"';
+  // && binds tighter than ||, so an expression with an || is wrapped first.
+  const base = /\|\||\bor\b/i.test(text) ? '(' + text + ')' : text;
+  $('find').value = text ? base + ' && ' + clause : clause;
+  $('find').dispatchEvent(new Event('input'));
+}
+
+let rowMenuFrom = null;
+function closeRowMenu(){
+  const m = $('rowmenu');
+  if (!m.classList.contains('on')) return;
+  m.classList.remove('on');
+  if (rowMenuFrom && document.contains(rowMenuFrom) && rowMenuFrom.focus)
+    rowMenuFrom.focus({preventScroll: true});
+  rowMenuFrom = null;
+}
+
+function openRowMenu(rec, x, y){
+  const m = $('rowmenu'), hide = [], keep = [];
+  const remote = rec.dir === 'out' ? rec.dst : rec.src;
+  const proc = rec.process && rec.process !== '-' ? rec.process : '';
+  if (proc)      hide.push(['Hide program ' + proc, () => hideClause('process', proc)]);
+  if (rec.rhost) hide.push(['Hide host ' + rec.rhost, () => hideClause('host', rec.rhost)]);
+  if (remote)    hide.push(['Hide address ' + remote, () => hideClause('ip', remote)]);
+  if (!hide.length) return;
+  // Only a real program name: "(System)" and the like are Windows' own
+  // stand-ins, not something anyone means to stop recording.
+  if (proc && !/^\(/.test(proc))
+    keep.push(['Don\'t record ' + proc + ' in History', () => addExclusion('program', proc)]);
+  const host = rec.rhost || remote;
+  if (host) keep.push(['Don\'t record ' + host + ' in History', () => addExclusion('host', host)]);
+  const list = hide.concat(keep.length ? [null] : [], keep);
+  m.innerHTML = list.map((it, i) => it
+    ? '<button role="menuitem" data-i="' + i + '" title="' + esc(it[0]) + '">' + esc(it[0]) + '</button>'
+    : '<div class="sep"></div>').join('') +
+    '<div class="hint">Hiding edits the filter box; clear it to show them again.</div>';
+  m.querySelectorAll('button').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const fn = list[Number(b.dataset.i)][1];
+    closeRowMenu();
+    fn();
+  });
+  rowMenuFrom = document.activeElement;
+  m.classList.add('on');
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, x)) + 'px';
+  m.style.top  = Math.max(4, Math.min(window.innerHeight - h - 4, y)) + 'px';
+  m.querySelector('button').focus();
+}
+
+$('rows').addEventListener('contextmenu', e => {
+  const tr = e.target.closest && e.target.closest('tr');
+  const rec = tr && records.get(Number(tr.dataset.seq));
+  if (!rec) return;                 // the browser's own menu, then
+  e.preventDefault();
+  openRowMenu(rec, e.clientX, e.clientY);
+});
+$('rowmenu').addEventListener('keydown', e => {
+  const bs = [...$('rowmenu').querySelectorAll('button')];
+  const i = bs.indexOf(document.activeElement);
+  if (e.key === 'Tab'){ closeRowMenu(); return; }
+  if (e.key === 'Escape') closeRowMenu();
+  else if (e.key === 'ArrowDown') bs[(i + 1) % bs.length].focus();
+  else if (e.key === 'ArrowUp')   bs[(i - 1 + bs.length) % bs.length].focus();
+  else if (e.key !== 'Enter' && e.key !== ' ') return;
+  // Kept from the page-wide keys, where space would pause the feed; Enter
+  // and space still reach the focused button.
+  e.stopPropagation();
+  if (e.key !== 'Enter' && e.key !== ' ') e.preventDefault();
+});
+// Not closed on scroll: the live table scrolls itself as packets arrive.
+document.addEventListener('mousedown', e => {
+  if (!e.target.closest || !e.target.closest('#rowmenu')) closeRowMenu();
+});
+window.addEventListener('blur', closeRowMenu);
+window.addEventListener('resize', closeRowMenu);
+
 /* ---------------- detail pane ---------------- */
 
 /* Pick 8 or 16 bytes per line so a full line always fits the panel width. */
@@ -1654,12 +1758,15 @@ function renderHistory(d){
   histData = d;
   const s = d.summary, daily = d.daily;
   const tot = s.bytes_in + s.bytes_out;
+  const ex = d.exclude || {programs: [], hosts: []};
+  const exN = ex.programs.length + ex.hosts.length;
 
   let h = '<div class="dayrange">' +
     [7,30,90].map(n => '<button class="btn-sm'+(n===histDays?' on':'')+
       '" data-days="'+n+'">'+n+'d</button>').join('') +
     '<span style="color:var(--faint);font:11px var(--mono);margin-left:6px">'+
-    (s.since ? 'since '+esc(s.since) : 'no data yet')+'</span></div>';
+    (s.since ? 'since '+esc(s.since) : 'no data yet')+'</span>' +
+    (exN ? '<a href="#" id="exJump">· '+exN+' not recorded</a>' : '') + '</div>';
 
   h += '<div class="kpirow">' +
     '<div class="kpi"><div class="k">Total</div><div class="v">'+esc(hb(tot))+
@@ -1726,6 +1833,25 @@ function renderHistory(d){
       {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) + '</div>';
   }
 
+  // Said on the tab itself, count and all, so an exclusion added months ago
+  // can't quietly go on hiding things from someone who has forgotten it.
+  h += '<div class="sec" id="histEx"><h4>Not recorded' + (exN ? ' · ' + exN : '') + '</h4>' +
+    '<div class="io">Left out of history. Capture, the live tabs and alerts still see them. ' +
+    'A program keeps only its name and when it was first and last seen, so a ' +
+    'new one is still noticed; a host is not written at all. A plain host name ' +
+    'covers its subdomains, and <code class="k">*</code> matches anything.</div>' +
+    ex.programs.map(p => ['program', p]).concat(ex.hosts.map(p => ['host', p])).map(([k, p]) =>
+      '<div class="row exrow"><span>' + esc(p) + '<span class="kind">' + k + '</span></span>' +
+      '<button class="btn-sm" data-exdel="' + k + '" data-pat="' + esc(p) + '" ' +
+      'aria-label="Record ' + esc(p) + ' again">Remove</button></div>').join('') +
+    '<div class="exadd"><select id="exKind" aria-label="What to leave out">' +
+      '<option value="program">Program</option><option value="host">Host</option></select>' +
+      '<input type="text" id="exPat" maxlength="253" placeholder="chrome.exe · example.com" ' +
+      'aria-label="Program or host to leave out of history">' +
+      '<button class="btn-sm" id="exAdd">Add</button></div>' +
+    (histExMsg ? '<div class="io" role="status" id="exMsg">' + esc(histExMsg) + '</div>' : '') +
+    '</div>';
+
   h += '<div class="sec"><h4>Storage</h4><div class="row"><span>File</span>'+
        '<span>'+esc(s.path)+'</span></div>'+
        '<div class="rowbtns"><button class="btn-sm" id="histFlush">Flush now</button>'+
@@ -1755,6 +1881,12 @@ function renderHistory(d){
 
   document.querySelectorAll('#p-history [data-days]').forEach(b =>
     b.onclick = () => { histDays = Number(b.dataset.days); refreshTab('history'); });
+  $('p-history').querySelectorAll('[data-exdel]').forEach(b =>
+    b.onclick = () => removeExclusion(b.dataset.exdel, b.dataset.pat));
+  $('exAdd').onclick = () => addExclusion($('exKind').value, $('exPat').value);
+  $('exPat').onkeydown = e => { if (e.key === 'Enter') $('exAdd').click(); };
+  const ej = $('exJump');
+  if (ej) ej.onclick = e => { e.preventDefault(); $('histEx').scrollIntoView({block: 'start'}); $('exPat').focus({preventScroll: true}); };
   const fl = $('histFlush');
   if (fl) fl.onclick = () => control({action:'history_flush'})
     .then(() => refreshTab('history'));
@@ -2553,13 +2685,69 @@ function redrawHistory(d){
   const open = new Set([...pane.querySelectorAll('details')].filter(x => x.open).map(histSecName));
   const act = document.activeElement;
   const focus = act && act !== pane && pane.contains(act) ? histFocusKey(act) : null;
+  // Half-typed text in the pane's own fields, and where the caret was.
+  const typed = [...pane.querySelectorAll('input[id],select[id]')].map(x =>
+    [x.id, x.value, x.selectionStart, x.selectionEnd]);
   renderHistory(d);
   pane.querySelectorAll('details').forEach(x => { if (open.has(histSecName(x))) x.open = true; });
+  for (const [id, v, a, b] of typed){
+    const x = $(id);
+    if (x && pane.contains(x)){
+      x.value = v;
+      if (a != null) try { x.setSelectionRange(a, b); } catch (e){}
+    }
+  }
   if (focus){
     const el = [...pane.querySelectorAll(act.tagName)].find(x => histFocusKey(x) === focus);
     if (el) el.focus({preventScroll: true});
   }
   pane.scrollTop = top;
+}
+
+/* ---------------- not recorded ----------------
+   Programs and hosts kept out of the history database. Adding one stops
+   future writes; erasing what is already there is a second, confirmed step,
+   since "stop recording this" and "delete what you have" are different
+   decisions. Removing one only resumes recording. */
+let histExMsg = '';
+
+function excludeCall(body){
+  return api('/api/control', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)}).then(r => r.json()).then(d => { renderStatus(d.status); return d; });
+}
+
+function addExclusion(kind, pattern){
+  const pat = String(pattern || '').trim().toLowerCase();
+  if (!pat) return Promise.resolve();
+  return excludeCall({action: 'history_exclude', kind, pattern: pat}).then(d => {
+    if (!d.listed){
+      histExMsg = 'The list is full. Remove an entry first.';
+      return refreshTab('history');
+    }
+    histExMsg = pat + ' is no longer recorded.';
+    if ($('exPat') && $('exPat').value.trim().toLowerCase() === pat) $('exPat').value = '';
+    const ask = kind === 'host'
+      ? 'Also erase what is already recorded for ' + pat + ' (and its subdomains)?'
+      : 'Also erase what is already recorded for ' + pat + '?\n\nIts usage is erased. ' +
+        'The hosts it talked to stay: history does not record which program ' +
+        'contacted a host, so they cannot be told apart from anyone else\'s.';
+    if (!confirm(ask)) return refreshTab('history');
+    return excludeCall({action: 'history_purge', kind, pattern: pat}).then(r => {
+      const g = r.purged || {}, bits = [];
+      const n = (k, one) => g[k] ? bits.push(g[k] + ' ' + one + (g[k] === 1 ? '' : 's')) : 0;
+      n('usage', 'hourly usage row'); n('hosts', 'host'); n('alerts', 'alert');
+      histExMsg = pat + ' is no longer recorded. Erased ' +
+                  (bits.length ? bits.join(', ') : 'nothing, none was recorded') + '.';
+      return refreshTab('history');
+    });
+  }).catch(() => { histExMsg = 'Could not reach NetScope.'; return refreshTab('history'); });
+}
+
+function removeExclusion(kind, pattern){
+  return excludeCall({action: 'history_exclude', kind, pattern, remove: true}).then(() => {
+    histExMsg = pattern + ' is recorded again from now on.';
+    return refreshTab('history');
+  }).catch(() => {});
 }
 
 function showTab(name){

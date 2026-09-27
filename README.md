@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.22.3**
+**Version 1.23.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -331,6 +331,13 @@ bigger than the table, a **Search buffer** button appears: it pulls the whole
 ring down and filters all of it, which is how you find a handshake that has
 scrolled out of the live view but is still captured. **← Live** goes back.
 
+**Right-click a packet** to hide its program, host or address. This adds a
+clause to the display filter, for example `host != "files.example.com"`,
+after whatever is already in the box. It doesn't keep a separate hidden list:
+everything hidden is right there in the filter box, and clearing the box
+shows it again. The same menu can keep the program or host out of History
+(see below). Use the arrow keys to move through it and Escape to close it.
+
 Type text with no operator and it falls back to a plain substring search across
 every column, so `chrome` on its own does what you'd expect. A malformed
 expression turns the box red and says what's wrong, leaving the previous filter
@@ -442,6 +449,40 @@ have text in it selected.
 Writes never touch the capture path: packets accumulate in memory and a writer
 thread flushes to disk every ten seconds. If the database can't be opened,
 NetScope says so at startup and keeps capturing without it.
+
+**Keeping something out of history.** The **Not recorded** section of the
+History tab lists programs and hosts that history leaves out. You can add them
+there, or from a packet's right-click menu. The count shows at the top of the
+tab, so you can't forget an entry is there. Capture, the live tabs and alerts
+still see the traffic. Only what is written to disk changes:
+
+- **An excluded program** keeps only its name and when it was first and last
+  seen. Its usage and the hosts it talked to are not written. The name stays
+  because the "new program on the network" alert checks history to decide
+  whether a program is new. Without it, the program would count as new in
+  every session.
+- **An excluded host** is not written at all, since the name itself is what
+  you are keeping private. It also never raises a "first contact" warning,
+  because you named it yourself. A plain name covers its subdomains:
+  `example.com` also covers `www.example.com`. `*` matches anything, for
+  example `chrome*` or `10.0.0.*`.
+- **Alerts:** note-level alerts about an excluded program or host (the "used
+  the network / contacted again this session" kind) are not logged. Warnings
+  and higher are always logged, whoever they are about. They are the security
+  record.
+
+Excluding something stops future recording. Afterwards NetScope asks, as a
+separate step, whether to erase what is already recorded. For a program that
+erases its usage. The hosts it contacted in the past stay, because history
+doesn't record which program contacted which host; exclude those hosts too if
+that matters. Removing an entry resumes recording from then on. The list is
+kept in `settings.json` beside the database, and **Erase all history** keeps
+it.
+
+Two limits. Program names can be spoofed: excluding `chrome.exe` excludes
+anything with that name. And a host pattern only matches traffic that has a
+name, so connections to an IP nothing has named yet are recorded under the IP
+until a name turns up.
 
 Old data is pruned hourly — 90 days of usage and 30 days of alerts by default,
 adjustable with `--retain-days`. **Erase all history** in the History tab wipes
@@ -704,6 +745,18 @@ names.
 ---
 
 ## Version history
+
+**1.23.0** — New: keep programs and hosts out of History. A **Not recorded**
+list on the History tab stops them being written to the database, and after
+adding an entry NetScope asks whether to erase what is already recorded.
+Capture, the live tabs and alerts are unaffected. An excluded program keeps
+its name, so it doesn't look new every session. An excluded host isn't
+written at all. New: right-click a packet to hide its program, host or address.
+That adds a clause to the display filter, so what is hidden is always visible
+in the filter box. The same menu can also exclude the program or host from
+History. The test runner now gives its demo servers a scratch settings
+folder. Before, UI tests that changed alert rules or mutes wrote to the
+settings of whoever ran the suite.
 
 **1.22.3** — Fixed: while capturing, the History tab's 10-second refresh
 redraws the pane every time, since today's totals keep changing. Each redraw
