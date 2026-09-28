@@ -43,6 +43,7 @@ python -m PyInstaller --noconfirm --clean ^
   --hidden-import netscope_tray ^
   --hidden-import netscope_l2 ^
   --hidden-import netscope_conn ^
+  --hidden-import netscope_timeline ^
   --collect-submodules cryptography ^
   --collect-submodules pystray ^
   --uac-admin ^
@@ -73,6 +74,7 @@ python -m PyInstaller --noconfirm --clean ^
   --hidden-import netscope_tray ^
   --hidden-import netscope_l2 ^
   --hidden-import netscope_conn ^
+  --hidden-import netscope_timeline ^
   --collect-submodules cryptography ^
   --collect-submodules pystray ^
   --uac-admin ^

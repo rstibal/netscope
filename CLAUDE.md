@@ -10,6 +10,7 @@ user documentation and the version history are in `README.md`.
 netscope.py           capture engine, decoders, HTTP API, DemoEngine, CLI
 netscope_ui.py        the entire dashboard as one PAGE_HTML string
 netscope_conn.py      connection table: flow accounting joined to the socket table
+netscope_timeline.py  per-second totals per (program, host, port, ...) for the Timeline view
 netscope_alerts.py    alert rules, muting, Windows toasts
 netscope_history.py   SQLite history and the settings file
 netscope_streams.py   TCP reassembly and HTTP/FTP file extraction
@@ -225,6 +226,27 @@ is exactly where the traffic that mattered goes unseen, and malware named
 `svchost.exe` benefits from a "hide svchost" rule. What is hidden should always
 be on screen. History exclusions are the one persistent list, and the History
 tab shows their count for the same reason.
+
+**The Timeline's data is aggregated on the server, not from what the page
+polls.** `/api/state` hands the page at most 600 packets per poll, and the
+ring holds under a minute on a busy machine. A page-side tally would
+undercount exactly when traffic is heavy, and forget everything on reload.
+`PacketStore.add()` feeds `Timeline`, which keeps an hour of per-second
+totals keyed by the fields a conversation's packets share. Per-packet fields
+(info, length, pid, stream, local port) are not in the key.
+
+**A filter the Timeline can't apply draws nothing and says so.** It must
+never ignore the clause: ignoring one inside `!` or `||` turns its meaning
+around, and showing everything while the filter box says otherwise breaks
+"what is hidden is on screen". Plain words match the key's fields only, not
+Info.
+
+**Timeline marks are log-scaled with a 1px floor, lanes ranked busiest-first
+but held for 10 s.** On a linear scale, a 200-byte check-in vanishes next to
+a download, and the check-in is what the view is for. The "every ~Ns" mark
+requires short bursts at a steady interval (80% of gaps within 10%), so a
+steady stream with pauses doesn't qualify. Re-ranking every second made lanes
+jump under the pointer.
 
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.

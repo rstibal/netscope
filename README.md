@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.23.1**
+**Version 1.24.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -280,6 +280,41 @@ finished and a listener has none.
 
 **The Talkers tab** ranks processes and remote hosts by total bytes moved, with
 the in/out split for each — this is the "what is eating my bandwidth" view.
+
+### The timeline
+
+**Timeline**, at the left of the filter bar, swaps the packet table for one
+lane per program against time. **Table** switches back. The table shows what
+each packet was; the timeline shows *when* things happen: what woke up when
+you unlocked the machine, what talks at 3 a.m., and what checks in on a
+schedule.
+
+- **Sent** marks rise above each lane's midline, **received** hang below it.
+  Their height is on a log scale shared by every lane, so a 200-byte check-in
+  still shows next to a download. Any traffic at all gets at least a pixel.
+- **1 min / 5 min / 15 min / 1 hour** sets the span. NetScope keeps an hour of
+  per-second totals for this, separately from the packet buffer, which on a
+  busy machine holds well under a minute.
+- **Programs / Hosts** chooses what a lane is. Host lanes use the hostname when
+  one is known, the address when not.
+- **every ~30s** on a lane means its bursts of traffic come at a steady
+  interval and are short compared with the gap. Updaters, sync clients and
+  telemetry look like that. So does malware calling home, which is the reason
+  it's marked. The demo includes one (`AgentSvc.exe`, every 20 seconds).
+- **Hover** a lane for the time, bytes each way and packet count at that point.
+  **Click a lane's name** to filter to it; **right-click** it for the same
+  hide and don't-record menu the packet table has.
+- Lanes are ordered busiest first, and the order holds for ten seconds at a
+  time so lanes don't swap places under the pointer.
+
+The display filter applies here too, with one limit. The timeline keeps
+totals per program, host, address, protocol, remote port and adapter, not
+each packet, so it can't apply `info`, `bytes`, `payload`, `pid`, `stream` or
+`seq`, and it doesn't know local port numbers. A filter using one of those
+draws nothing and says why, rather than quietly showing everything. Plain text
+with no operator searches the program, host, addresses, protocol and port
+here, not the Info column. Pause (`space`) freezes the timeline as it does the
+table.
 
 ### Checking the capture is keeping up
 
@@ -698,6 +733,7 @@ netscope_streams.py TCP reassembly and HTTP file extraction
 netscope_quic.py    QUIC decoding, Initial-packet key derivation, SNI recovery
 netscope_alerts.py  alert rules and Windows toast notifications
 netscope_conn.py    connection table — flow accounting joined to the socket table
+netscope_timeline.py per-second totals for the Timeline view
 netscope_pcap.py    .pcap writing and reading
 netscope_history.py SQLite history — rollups, first-seen records, alert log
 netscope_tray.py    tray icon, console hiding, start-on-login
@@ -747,6 +783,17 @@ names.
 ---
 
 ## Version history
+
+**1.24.0** — New: the **Timeline** view, next to the packet table. It shows one
+lane per program (or per host) against time, over the last minute up to the
+last hour. Marks use a log scale, so a single small packet stays visible. A
+lane whose traffic comes in short bursts at a steady interval is marked
+**every ~Ns**, which is how scheduled check-ins, including malware beacons,
+look. The display filter applies, except for per-packet fields, which the
+timeline says it can't apply. Clicking a lane filters to it, and
+right-clicking it opens the hide menu. NetScope keeps an hour of per-second
+totals for the view, separate from the packet buffer. The demo gains a
+program that checks in every 20 seconds.
 
 **1.23.1** — Fixed: space couldn't press buttons. The page-wide pause shortcut
 took the space key even when a button had keyboard focus, so a keyboard user

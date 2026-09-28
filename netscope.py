@@ -47,7 +47,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.23.1"
+VERSION = "1.24.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -89,6 +89,7 @@ from netscope_quic import (parse_quic, summarise as quic_summary,
                            CRYPTO_OK as QUIC_CRYPTO_OK)
 from netscope_alerts import AlertEngine, DesktopNotifier, RULE_WHY
 from netscope_conn import FlowTable, SocketTable, build_view
+from netscope_timeline import Timeline
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
                          owner_label, parse_ra, UNOWNED)
 from netscope_nbns import parse as parse_nbns, summarise as nbns_summary
@@ -535,6 +536,9 @@ class PacketStore:
         # which is the one choke point every record passes through — live
         # capture, demo, an imported pcap and --read all land here.
         self.flows = FlowTable()
+        # An hour of per-second totals for the Timeline view, which needs far
+        # longer than the ring holds.
+        self.timeline = Timeline()
 
     def add(self, rec: dict, raw: bytes):
         with self._lock:
@@ -570,6 +574,10 @@ class PacketStore:
                 self.flows.observe(rec)
             except Exception:
                 pass                    # accounting must never drop a packet
+            try:
+                self.timeline.observe(rec)
+            except Exception:
+                pass
             if rec["process"] in UNOWNED:
                 self.unowned += 1
 
@@ -666,6 +674,7 @@ class PacketStore:
             # conversations and totals from before. The hostname cache stays:
             # a name learned earlier is still true.
             self.flows.clear()
+            self.timeline.clear()
 
 
 class ReverseResolver:
@@ -1876,6 +1885,45 @@ class DemoEngine:
 
     # -- QUIC ---------------------------------------------------------------
 
+    # A program that checks in on a fixed schedule: a small request and a
+    # small reply, every HEARTBEAT_EVERY seconds. That shape is what the
+    # Timeline's "regular" mark is for, and random traffic never makes it.
+    HEARTBEAT = ("203.0.113.45", "checkin.example.net", "AgentSvc.exe")
+    HEARTBEAT_EVERY = 20
+
+    def _heartbeat(self):
+        ip, host, proc = self.HEARTBEAT
+        sport = random.randint(49152, 65535)
+        for outbound, size in ((True, 220), (False, 160)):
+            now = time.time()
+            src, dst = (self.LOCAL, ip) if outbound else (ip, self.LOCAL)
+            rec = {
+                "ts": now,
+                "time": datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3],
+                "src": src, "dst": dst,
+                "sport": sport if outbound else 443,
+                "dport": 443 if outbound else sport,
+                "proto": "TLS", "length": size,
+                "process": proc, "pid": 4412,
+                "dir": "out" if outbound else "in",
+                "remote": ip, "rhost": host,
+                "info": f"ApplicationData  TLS 1.3  len={size - 66}",
+                "ipver": 4, "ttl": 64 if outbound else 117,
+                "payload_len": size - 66, "stream": None, "iface": "demo0",
+                "transport": "tcp",
+                "decoded": {"tls": {"record": "ApplicationData",
+                                    "version": "TLS 1.3", "length": size - 66}},
+            }
+            raw = self.frame(src, rec["sport"], dst, rec["dport"],
+                             os.urandom(size - 66), "tcp",
+                             random.randint(0, 2**30), outbound, rec["ttl"])
+            rec["length"] = len(raw)
+            self.store.add(rec, raw)
+            if self.alerts is not None:
+                self.alerts.inspect(rec, b"")
+            if self.history is not None:
+                self.history.record(rec)
+
     def _emit_udp(self, payload, outbound, server_ip, server_port, cport, proc,
                   host):
         now = time.time()
@@ -2336,8 +2384,15 @@ class DemoEngine:
         late = [("198.51.100.9", "updates.vendor.example", "SilentUpdater.exe"),
                 ("203.0.113.200", "telemetry.example.net", "CrashReporter.exe")]
         started = time.time()
+        next_beat = started + 3
 
         while not self._stop.is_set():
+            if time.time() >= next_beat:
+                next_beat += self.HEARTBEAT_EVERY
+                try:
+                    self._heartbeat()
+                except Exception:
+                    pass
             if time.time() - started > 25 and random.random() < 0.03 and late:
                 ip, host, proc = late.pop(0)
             else:
@@ -2565,6 +2620,19 @@ class Handler(BaseHTTPRequestHandler):
                 "stats": self.app.store.stats(),
                 "status": self.status(),
             })
+
+        if path == "/api/timeline":
+            def num(name, default=None):
+                try:
+                    return int(qs[name][0])
+                except (KeyError, ValueError, IndexError):
+                    return default
+            snap = self.app.store.timeline.snapshot(
+                since=num("since"), kfrom=num("kfrom", 0), gen=num("gen"))
+            # A loaded .pcap ends when it ends; live data ends now.
+            snap["now"] = snap["newest"] if self.app.source else time.time()
+            snap["offline"] = bool(self.app.source)
+            return self._send(200, snap)
 
         if path == "/api/packet":
             seq = int(qs.get("seq", ["0"])[0])

@@ -213,6 +213,46 @@ td.info{color:var(--dim)}
 .proc{color:var(--fg)}
 .host{color:var(--accent)}
 
+/* ---------- timeline view ----------
+   The same capture as the table, drawn as one lane per program (or host)
+   against time. Its job is rhythm: what checks in every minute, what woke up
+   when, what talks at 3 a.m. The table can't show any of that. */
+.viewsw{display:inline-flex;flex:0 0 auto}
+.viewsw .btn-sm{border-radius:0}
+.viewsw .btn-sm:first-child{border-radius:5px 0 0 5px}
+.viewsw .btn-sm:last-child{border-radius:0 5px 5px 0;margin-left:-1px}
+/* The table stays laid out at full width while the timeline is shown, only
+   zero height: display:none would report a zero width to the column fitting,
+   and rows keep arriving underneath either way. */
+body.tlmode #tw{flex:0 0 0;height:0;overflow:hidden}
+body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none !important}
+#tlview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;
+  position:relative}
+.tlbar{display:flex;align-items:center;gap:10px;padding:6px 14px;flex:0 0 auto;
+  flex-wrap:wrap;border-bottom:1px solid var(--line);min-width:0}
+.tlbar .legend{margin:0}
+.tlnote{color:var(--dim);font-size:11.5px;min-width:0}
+.tlnote.warn{color:var(--http)}
+/* Axis and lanes share one grid, and both reserve the scrollbar's width, so
+   a tick sits exactly above the moment it labels. */
+.tlaxis,.tlscroll{display:grid;grid-template-columns:var(--tl-lw,250px) minmax(0,1fr);
+  scrollbar-gutter:stable;overflow-x:hidden}
+.tlaxis{flex:0 0 auto;overflow-y:hidden;border-bottom:1px solid var(--line);height:22px}
+.tlscroll{flex:1 1 auto;overflow-y:auto;min-height:0;align-content:start}
+#tlAxis,#tlCanvas{display:block;width:100%}
+#tlAxis{height:22px}
+#tlLabels{min-width:0}
+.ln{display:flex;align-items:center;gap:6px;width:100%;height:26px;padding:0 8px 0 14px;
+  border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;
+  color:var(--fg);font:12px var(--mono);text-align:left;cursor:pointer;min-width:0}
+.ln:hover,.ln:focus-visible{background:var(--panel2);color:var(--fg);outline:none}
+.ln .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ln.sys .nm{color:var(--dim)}
+.ln .tot{flex:0 0 auto;color:var(--faint);font-size:10.5px}
+.ln .rg{flex:0 0 auto;font:700 9.5px var(--sans);color:var(--accent);
+  border:1px solid var(--accent);border-radius:3px;padding:0 4px;letter-spacing:.2px}
+#tlEmpty{grid-column:1 / -1}
+
 /* ---------- footer stats ---------- */
 footer{
   flex:0 0 auto;display:flex;align-items:center;gap:18px;padding:7px 14px;
@@ -551,6 +591,11 @@ back through the table while the capture continues."><input type="checkbox"
 </header>
 
 <div id="filterbar">
+  <span class="viewsw" role="group" aria-label="View">
+    <button id="vTable" class="btn-sm on" aria-pressed="true">Table</button>
+    <button id="vTime" class="btn-sm" aria-pressed="false"
+            title="One lane per program or host against time: what runs when, and what checks in on a schedule">Timeline</button>
+  </span>
   <span class="flabel">filter</span>
   <input type="text" id="find" spellcheck="false"
          placeholder="proto == QUIC &amp;&amp; process ~ chrome   —   or just type text to search">
@@ -614,6 +659,25 @@ back through the table while the capture continues."><input type="checkbox"
         <tbody id="rows"></tbody>
       </table>
       <div class="empty" id="emptyMsg">Waiting for packets…</div>
+    </div>
+    <div id="tlview" class="viz" style="display:none">
+      <div class="tlbar">
+        <span class="viewsw" id="tlWin" role="group" aria-label="Time window">
+          <button class="btn-sm" data-w="60">1 min</button><button class="btn-sm" data-w="300">5 min</button><button class="btn-sm" data-w="900">15 min</button><button class="btn-sm" data-w="3600">1 hour</button>
+        </span>
+        <span class="viewsw" id="tlGroup" role="group" aria-label="One lane per">
+          <button class="btn-sm" data-g="process">Programs</button><button class="btn-sm" data-g="host">Hosts</button>
+        </span>
+        <span class="tlnote" id="tlNote"></span>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--series-out)"></i>▲ sent</span><span><i style="background:var(--series-in)"></i>▼ received</span></div>
+      </div>
+      <div class="tlaxis"><span></span><canvas id="tlAxis" height="22"></canvas></div>
+      <div class="tlscroll" id="tlScroll">
+        <div id="tlLabels"></div><canvas id="tlCanvas"></canvas>
+        <div class="empty" id="tlEmpty" style="display:none"></div>
+      </div>
+      <div class="tip" id="tlTip"></div>
     </div>
     <footer>
       <!-- The chart goes first so nothing upstream of it can move it. It used
@@ -1121,6 +1185,7 @@ function applyFind(){
   $('fcount').textContent = filterFn ? shown + ' of ' + total : total + ' packets';
   $('emptyMsg').style.display = shown ? 'none' : 'block';
   $('emptyMsg').textContent = filterFn ? 'No packets match this filter.' : 'Waiting for packets…';
+  tlDraw();
 }
 
 function rowVisible(rec){
@@ -1267,9 +1332,10 @@ function select(seq, tr){
    editing it — a monitor that silently hides things is where the one packet
    that mattered goes unseen. The last items keep a program or host out of
    History, which is a setting of its own (History tab, Not recorded). */
-function hideClause(field, value){
+function hideClause(field, value){ addClause(field, '!=', value); }
+function addClause(field, op, value){
   const text = $('find').value.trim();
-  const clause = field + ' != "' + value + '"';
+  const clause = field + ' ' + op + ' "' + value + '"';
   // && binds tighter than ||, so an expression with an || is wrapped first.
   const base = /\|\||\bor\b/i.test(text) ? '(' + text + ')' : text;
   $('find').value = text ? base + ' && ' + clause : clause;
@@ -2468,6 +2534,352 @@ function renderTalkers(s){
     '<div class="sec"><h4>By remote host</h4>' + list(s.hosts, 'host') + '</div>';
 }
 
+/* ================= timeline =================
+   An hour of per-second totals from /api/timeline, one lane per program or
+   per host. The server keeps them (the packet ring is far too short), keyed
+   by what a conversation's packets have in common; the page draws lanes from
+   those keys. So the display filter applies here as it does to the table,
+   except for per-packet fields, which the timeline says it can't apply
+   rather than quietly showing everything.
+
+   The marks use a log scale shared by every lane. A linear one would make a
+   200-byte check-in invisible next to a download, and the check-in is the
+   thing worth seeing: a lane whose bursts come at a steady interval is
+   marked "every ~Ns". Updaters and sync clients look like that; so does
+   malware calling home. */
+const TL_LANE = 26;
+const TL_NO_FIELDS = {bytes: 'size', len: 'size', payload: 'payload size', info: 'Info',
+                      pid: 'PID', stream: 'stream', seq: 'packet number'};
+// var, not const: applyFind() redraws the timeline and can run while the
+// page is still starting, before this line has been reached.
+var TL = {gen: null, keys: [], secs: new Map(), newest: 0, now: 0, offline: false,
+            win: 300, group: 'process', lanes: [], order: [], orderSig: '', orderAt: 0,
+            sig: '', busy: false, bins: 0, start: 0};
+var viewMode = 'table', tableTop = 0;
+try {
+  const saved = JSON.parse(localStorage.getItem('netscope-tl') || '{}');
+  if ([60, 300, 900, 3600].includes(saved.win)) TL.win = saved.win;
+  if (saved.group === 'host') TL.group = 'host';
+} catch (e){}
+
+function tlRecord(k){
+  const [process, rhost, remote, local, dir, proto, rport, iface] = k;
+  const out = dir === 'out';
+  const r = {process, rhost, remote, dir, proto, iface,
+             src: out ? local : remote, dst: out ? remote : local,
+             sport: out ? null : rport, dport: out ? rport : null};
+  r._hay = (process + ' ' + rhost + ' ' + remote + ' ' + local + ' ' + proto + ' ' +
+            (rport == null ? '' : rport) + ' ' + iface).toLowerCase();
+  return r;
+}
+
+async function tlFetch(){
+  if (TL.busy) return;
+  TL.busy = true;
+  try {
+    // The last second may still have been filling, so it is fetched again.
+    const q = TL.gen == null ? '' : '?gen=' + TL.gen + '&kfrom=' + TL.keys.length +
+              (TL.newest ? '&since=' + (TL.newest - 1) : '');
+    const d = await (await api('/api/timeline' + q)).json();
+    if (d.full || d.gen !== TL.gen){ TL.keys = []; TL.secs.clear(); TL.newest = 0; }
+    if (d.kfrom !== TL.keys.length){ TL.gen = null; return; }   // start over next time
+    TL.gen = d.gen;
+    for (const k of d.keys) TL.keys.push(tlRecord(k));
+    for (const [sec, list] of d.buckets) TL.secs.set(sec, list);
+    TL.newest = d.newest; TL.now = d.now; TL.offline = d.offline;
+    const cut = d.newest - d.retain;
+    for (const sec of TL.secs.keys()) if (sec < cut) TL.secs.delete(sec);
+  } catch (e){
+  } finally { TL.busy = false; }
+}
+
+function tlUnsupported(text){
+  const toks = tokenize(text), bad = [];
+  for (let i = 0; i + 1 < toks.length; i++){
+    const k = toks[i].toLowerCase();
+    if (TL_NO_FIELDS[k] && /^(==|!=|=|~|!~|>=?|<=?)$/.test(toks[i + 1]) &&
+        !bad.includes(TL_NO_FIELDS[k])) bad.push(TL_NO_FIELDS[k]);
+  }
+  return bad;
+}
+
+// Seconds between check-ins if a lane's bursts come at a steady interval,
+// else 0. Bursts are runs of active seconds; the gaps between their starts
+// must mostly agree, and the bursts must be short against the gap, so a
+// steady stream with a few pauses doesn't qualify.
+function tlRegular(secs){
+  if (secs.length < 5) return 0;
+  const starts = [], ends = [];
+  for (const t of secs){
+    if (!starts.length || t - ends[ends.length - 1] > 2){ starts.push(t); ends.push(t); }
+    else ends[ends.length - 1] = t;
+  }
+  if (starts.length < 5) return 0;
+  const gaps = [];
+  for (let i = 1; i < starts.length; i++) gaps.push(starts[i] - starts[i - 1]);
+  const med = gaps.slice().sort((a, b) => a - b)[gaps.length >> 1];
+  if (med < 5) return 0;
+  const tol = Math.max(2, med * 0.1);
+  const fit = gaps.filter(g => Math.abs(g - med) <= tol).length;
+  if (fit < 4 || fit / gaps.length < 0.8) return 0;
+  const busy = starts.reduce((a, t, i) => a + ends[i] - t + 1, 0) / starts.length;
+  return busy <= med / 3 ? med : 0;
+}
+
+function tlPeriod(sec){
+  return sec < 120 ? '~' + sec + 's' : '~' + Math.round(sec / 60) + ' min';
+}
+
+function tlIsIP(s){ return /^[\d.]+$/.test(s) || s.includes(':'); }
+
+function tlBuild(W){
+  const bad = tlUnsupported($('find').value);
+  const pass = TL.keys.map(r => !bad.length && rowVisible(r));
+  const end = TL.offline ? TL.newest + 1 : Math.floor(TL.now) + 1;
+  const start = end - TL.win;
+  const B = Math.max(1, Math.min(W, TL.win));
+  const byName = new Map();
+  for (const [sec, list] of TL.secs){
+    const inWin = sec >= start && sec < end;
+    const j = Math.floor((sec - start) / TL.win * B);
+    for (const [k, bytes, pkts] of list){
+      if (!pass[k]) continue;
+      const r = TL.keys[k];
+      const name = TL.group === 'host' ? (r.rhost || r.remote || '(none)') : (r.process || '-');
+      let ln = byName.get(name);
+      if (!ln){
+        ln = {name, bytes: 0, pkts: 0, active: new Set(), bins: null, regular: 0};
+        byName.set(name, ln);
+      }
+      ln.active.add(sec);
+      if (!inWin) continue;
+      if (!ln.bins) ln.bins = new Float64Array(B * 3);
+      ln.bins[j * 3 + (r.dir === 'out' ? 1 : 0)] += bytes;
+      ln.bins[j * 3 + 2] += pkts;
+      ln.bytes += bytes; ln.pkts += pkts;
+    }
+  }
+  let lanes = [...byName.values()].filter(l => l.bins);
+  for (const l of lanes) l.regular = tlRegular([...l.active].sort((a, b) => a - b));
+  // Busiest first, but not re-ranked every second: lanes swapping places
+  // under the pointer is noise. The order holds for ten seconds, or until
+  // the window, grouping or filter changes; new lanes join at the end.
+  const sig = TL.win + '|' + TL.group + '|' + $('find').value;
+  lanes.sort((a, b) => b.bytes - a.bytes);
+  if (sig === TL.orderSig && Date.now() - TL.orderAt < 10000){
+    const rank = new Map(TL.order.map((n, i) => [n, i]));
+    const busiest = new Map(lanes.map((l, i) => [l.name, i]));
+    const at = l => rank.has(l.name) ? rank.get(l.name) : 1e9 + busiest.get(l.name);
+    lanes.sort((a, b) => at(a) - at(b));
+  } else { TL.orderSig = sig; TL.orderAt = Date.now(); }
+  TL.order = lanes.map(l => l.name);
+  TL.lanes = lanes; TL.bins = B; TL.start = start;
+  return bad;
+}
+
+function tlDraw(){
+  if (viewMode !== 'timeline') return;
+  const cv = $('tlCanvas'), ax = $('tlAxis');
+  const W = Math.max(60, Math.floor(ax.clientWidth || cv.clientWidth));
+  const bad = tlBuild(W);
+  const lanes = TL.lanes, B = TL.bins, binW = W / B;
+  const cs = getComputedStyle($('tlview'));
+  const col = n => cs.getPropertyValue(n).trim();
+  const cIn = col('--series-in'), cOut = col('--series-out'), cGrid = col('--grid');
+  const dpr = window.devicePixelRatio || 1;
+
+  // Note, empty state.
+  const what = TL.group === 'host' ? 'host' : 'program';
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const regular = lanes.filter(l => l.regular).length;
+  const note = $('tlNote');
+  if (bad.length){
+    note.className = 'tlnote warn';
+    note.textContent = 'The filter uses ' + bad.join(', ') + ', which the timeline doesn\'t ' +
+      'keep: it holds totals per program, host and port, not each packet.';
+  } else {
+    note.className = 'tlnote';
+    note.textContent = lanes.length ? lanes.length + ' ' + what + (lanes.length === 1 ? '' : 's') +
+      (regular ? ' · ' + regular + ' check' + (regular === 1 ? 's' : '') + ' in on a schedule' : '') : '';
+  }
+  const empty = $('tlEmpty');
+  empty.style.display = lanes.length ? 'none' : 'block';
+  empty.textContent = bad.length ? 'Nothing to draw with this filter.'
+    : !TL.keys.length ? 'Waiting for packets…'
+    : filterFn ? 'Nothing matching this filter in the last ' + span + '.'
+    : 'No traffic in the last ' + span + '.';
+
+  // Lane labels: rebuilt only when the lanes change, so hover and focus hold.
+  const sigL = TL.group + '|' + lanes.map(l => l.name + '/' + l.regular).join('\n');
+  const box = $('tlLabels');
+  if (sigL !== TL.sig){
+    TL.sig = sigL;
+    const had = document.activeElement && box.contains(document.activeElement)
+      ? document.activeElement.dataset.name : null;
+    box.innerHTML = lanes.map((l, i) =>
+      '<button class="ln' + (/^[-(]/.test(l.name) ? ' sys' : '') + '" data-i="' + i + '" data-name="' +
+      esc(l.name) + '"><span class="nm">' + esc(l.name) + '</span>' +
+      (l.regular ? '<span class="rg" title="Active every ' + tlPeriod(l.regular) +
+        ', like clockwork. Updaters and sync clients check in like this; so does malware ' +
+        'calling home.">every ' + tlPeriod(l.regular) + '</span>' : '') +
+      '<span class="tot"></span></button>').join('');
+    if (had){
+      const b = [...box.children].find(x => x.dataset.name === had);
+      if (b) b.focus({preventScroll: true});
+    }
+  }
+  [...box.children].forEach((b, i) => {
+    const l = lanes[i];
+    b.querySelector('.tot').textContent = hb(l.bytes);
+    b.title = l.name + ' — ' + hb(l.bytes) + ', ' + l.pkts.toLocaleString() +
+      ' packets in the last ' + span + '.\nClick to filter to it; right-click to hide it.';
+  });
+
+  // Lanes.
+  const H = Math.max(1, lanes.length * TL_LANE);
+  cv.style.height = H + 'px';
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  let max = 1;
+  for (const l of lanes) for (let j = 0; j < B; j++)
+    max = Math.max(max, l.bins[j * 3], l.bins[j * 3 + 1]);
+  const lmax = Math.log1p(max), half = TL_LANE / 2 - 3;
+  const ticks = tlTicks(W);
+  g.fillStyle = cGrid;
+  for (const t of ticks) g.fillRect(Math.round(t.x), 0, 1, H);
+  const bw = binW > 3 ? binW - 1 : Math.max(1, binW);
+  lanes.forEach((l, i) => {
+    const y0 = i * TL_LANE, mid = y0 + TL_LANE / 2;
+    g.fillStyle = cGrid;
+    g.fillRect(0, y0 + TL_LANE - 1, W, 1);
+    g.fillRect(0, Math.round(mid), W, 1);
+    for (let j = 0; j < B; j++){
+      const x = j * binW, vin = l.bins[j * 3], vout = l.bins[j * 3 + 1];
+      // At least a pixel for any traffic at all: one small packet is still
+      // a check-in, and that is what this view is for.
+      if (vout > 0){
+        const h = Math.max(1, Math.round(Math.log1p(vout) / lmax * half));
+        g.fillStyle = cOut; g.fillRect(x, Math.round(mid) - h, bw, h);
+      }
+      if (vin > 0){
+        const h = Math.max(1, Math.round(Math.log1p(vin) / lmax * half));
+        g.fillStyle = cIn; g.fillRect(x, Math.round(mid) + 1, bw, h);
+      }
+    }
+  });
+
+  // Axis.
+  ax.width = Math.round(W * dpr); ax.height = Math.round(22 * dpr);
+  const a = ax.getContext('2d');
+  a.setTransform(dpr, 0, 0, dpr, 0, 0);
+  a.clearRect(0, 0, W, 22);
+  a.font = '10px ' + col('--mono');
+  a.textBaseline = 'middle';
+  for (const t of ticks){
+    a.fillStyle = cGrid; a.fillRect(Math.round(t.x), 15, 1, 7);
+    a.fillStyle = col('--faint');
+    const w = a.measureText(t.label).width;
+    a.fillText(t.label, Math.max(0, Math.min(W - w, t.x - w / 2)), 9);
+  }
+}
+
+// Tick marks on round local times, at least ~90px apart.
+function tlTicks(W){
+  const pxPerSec = W / TL.win;
+  const step = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800].find(s => s * pxPerSec >= 90) || 3600;
+  const tz = new Date().getTimezoneOffset() * 60;
+  const out = [];
+  for (let t = Math.ceil((TL.start - tz) / step) * step + tz; t <= TL.start + TL.win; t += step){
+    const d = new Date(t * 1000), p = n => String(n).padStart(2, '0');
+    out.push({x: (t - TL.start) * pxPerSec,
+              label: p(d.getHours()) + ':' + p(d.getMinutes()) + (step < 60 ? ':' + p(d.getSeconds()) : '')});
+  }
+  return out;
+}
+
+function tlLaneRec(name){
+  if (TL.group === 'process') return {process: name};
+  return tlIsIP(name) ? {dir: 'out', dst: name} : {rhost: name};
+}
+
+function setView(v){
+  const tl = v === 'timeline';
+  if (tl === (viewMode === 'timeline')) return;
+  if (tl) tableTop = $('tw').scrollTop;
+  viewMode = tl ? 'timeline' : 'table';
+  document.body.classList.toggle('tlmode', tl);
+  $('tlview').style.display = tl ? '' : 'none';
+  $('vTable').classList.toggle('on', !tl); $('vTable').setAttribute('aria-pressed', !tl);
+  $('vTime').classList.toggle('on', tl);   $('vTime').setAttribute('aria-pressed', tl);
+  try { localStorage.setItem('netscope-view', viewMode); } catch (e){}
+  if (tl){ tlDraw(); tlFetch().then(tlDraw); }
+  else {
+    $('tlTip').classList.remove('on');
+    const w = $('tw');
+    w.scrollTop = $('follow').checked ? w.scrollHeight : tableTop;
+    refit();
+  }
+}
+
+function tlSetting(){
+  document.querySelectorAll('#tlWin button').forEach(b =>
+    b.classList.toggle('on', Number(b.dataset.w) === TL.win));
+  document.querySelectorAll('#tlGroup button').forEach(b =>
+    b.classList.toggle('on', b.dataset.g === TL.group));
+  try { localStorage.setItem('netscope-tl', JSON.stringify({win: TL.win, group: TL.group})); } catch (e){}
+}
+
+$('vTable').onclick = () => setView('table');
+$('vTime').onclick = () => setView('timeline');
+document.querySelectorAll('#tlWin button').forEach(b => b.onclick = () => {
+  TL.win = Number(b.dataset.w); tlSetting(); tlDraw();
+});
+document.querySelectorAll('#tlGroup button').forEach(b => b.onclick = () => {
+  TL.group = b.dataset.g; tlSetting(); $('tlScroll').scrollTop = 0; tlDraw();
+});
+tlSetting();
+
+$('tlLabels').addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.ln');
+  if (!b) return;
+  const name = b.dataset.name;
+  if (name === '(none)') return;
+  const field = TL.group === 'process' ? 'process' : tlIsIP(name) ? 'ip' : 'host';
+  addClause(field, '==', name);
+});
+$('tlLabels').addEventListener('contextmenu', e => {
+  const b = e.target.closest && e.target.closest('.ln');
+  if (!b || b.dataset.name === '(none)') return;
+  e.preventDefault();
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y){ const r = b.getBoundingClientRect(); x = r.left + 20; y = r.bottom; }
+  openRowMenu(tlLaneRec(b.dataset.name), x, y);
+});
+
+$('tlCanvas').addEventListener('mousemove', e => {
+  const cv = $('tlCanvas'), r = cv.getBoundingClientRect(), tip = $('tlTip');
+  const i = Math.floor((e.clientY - r.top) / TL_LANE), l = TL.lanes[i];
+  const j = Math.floor((e.clientX - r.left) / (r.width / TL.bins));
+  if (!l || j < 0 || j >= TL.bins){ tip.classList.remove('on'); return; }
+  const per = TL.win / TL.bins, t0 = TL.start + j * per;
+  const f = t => new Date(t * 1000).toLocaleTimeString([], {hour12: false});
+  const vin = l.bins[j * 3], vout = l.bins[j * 3 + 1], n = l.bins[j * 3 + 2];
+  tip.innerHTML = '<b>' + esc(l.name) + '</b><br>' + esc(f(t0)) +
+    (per >= 2 ? '–' + esc(f(t0 + per)) : '') + '<br>' +
+    (n ? '▲ ' + esc(hb(vout)) + ' &nbsp;▼ ' + esc(hb(vin)) + ' &nbsp;' + n + ' pkt' + (n === 1 ? '' : 's')
+       : 'nothing') +
+    (l.regular ? '<br>active every ' + tlPeriod(l.regular) : '');
+  const v = $('tlview').getBoundingClientRect();
+  tip.classList.add('on');
+  const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;
+  tip.style.left = Math.min(x, v.width - tip.offsetWidth - 6) + 'px';
+  tip.style.top = (y + tip.offsetHeight > v.height ? y - tip.offsetHeight - 20 : y) + 'px';
+});
+$('tlCanvas').addEventListener('mouseleave', () => $('tlTip').classList.remove('on'));
+try { new ResizeObserver(() => tlDraw()).observe($('tlScroll')); } catch (e){}
+
 /* ---------------- sparkline ---------------- */
 
 function drawSpark(tl){
@@ -2575,6 +2987,7 @@ async function poll(){
     const d = await r.json();
     renderStatus(d.status);
     renderStats(d.stats);
+    if (viewMode === 'timeline' && !paused) tlFetch().then(tlDraw);
     if (!paused && d.packets.length){
       const tb = $('rows'), w = $('tw'), frag = document.createDocumentFragment();
       const following = $('follow').checked;
@@ -2766,6 +3179,7 @@ $('toggle').onclick = () => {
 $('clear').onclick = () => {
   control({action:'clear'});
   $('rows').innerHTML = ''; records.clear(); lastSeq = 0; prevTotals = null;
+  TL.gen = null; TL.keys = []; TL.secs.clear(); TL.newest = 0; tlDraw();
   $('p-detail').innerHTML = '<div class="empty">Click a packet to inspect it.</div>';
   $('emptyMsg').style.display = 'block';
   selected = null;
@@ -2779,6 +3193,7 @@ $('theme').onclick = () => {
   document.documentElement.dataset.theme = next;
   try{ localStorage.setItem('netscope-theme', next); }catch(e){}
   drawSpark(lastStats && lastStats.timeline);
+  tlDraw();
 };
 /* Pause was a spacebar shortcut with no control and no label — the only sign
    it had happened was the status text dimming. "Follow" was then the only
@@ -2792,7 +3207,8 @@ function setPaused(v){
   b.classList.toggle('on', paused);
   $('statusText').style.opacity = paused ? .5 : 1;
   $('fcount').textContent = paused
-    ? 'paused — the capture is still running, the table is not updating'
+    ? 'paused — the capture is still running, the ' +
+      (viewMode === 'timeline' ? 'timeline' : 'table') + ' is not updating'
     : '';
   if (!paused) updateCount();
 }
@@ -2877,6 +3293,7 @@ setInterval(() => {
   if (document.activeElement !== $('iface')) loadInterfaces();
 }, 15000);
 
+try { if (localStorage.getItem('netscope-view') === 'timeline') setView('timeline'); } catch (e){}
 poll();
 setInterval(poll, 700);
 // History is the tab the page opens on, so fetch it now rather than waiting
