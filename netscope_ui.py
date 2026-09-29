@@ -1887,12 +1887,17 @@ function renderHistory(d){
         '</div></div>').join('') + '</div></div>';
   }
 
-  if (d.alerts.length){
-    h += '<div class="sec"><h4>Alert history</h4>' + d.alerts.slice(0,40).map(a =>
-      '<div class="alert '+esc(a.severity)+'"><div class="t">'+
-      '<span class="ti">'+esc(a.title)+'</span><span class="when">'+
-      esc(new Date(a.ts*1000).toLocaleString())+'</span></div>'+
-      '<div class="d">'+esc(a.detail)+'</div></div>').join('') + '</div>';
+  // The alerts themselves are on the Alerts tab ("Past N days"), where they
+  // can be muted and explained. This used to repeat them here in the same
+  // cards, which read as a duplicate of that tab rather than as the log.
+  const ac = d.alert_counts;
+  if (ac && ac.total){
+    h += '<div class="sec"><h4>Alerts</h4><div class="hint" style="margin-top:0">' +
+      ac.total.toLocaleString() + ' alert' + (ac.total === 1 ? '' : 's') +
+      ' logged in this period' +
+      (ac.high || ac.warn ? ' (' + [ac.high ? ac.high + ' high' : '', ac.warn ? ac.warn + ' warn' : '']
+        .filter(Boolean).join(', ') + ')' : '') +
+      '. <a href="#" id="alertsJump">See them on the Alerts tab</a>.</div></div>';
   }
 
   if (d.sessions.length){
@@ -1963,7 +1968,7 @@ function renderHistory(d){
   const wp = $('histWipe');
   if (wp) wp.onclick = () => {
     if (confirm('Erase all recorded history? This cannot be undone.'))
-      control({action:'history_wipe'}).then(() => refreshTab('history'));
+      control({action:'history_wipe'}).then(() => { alertLog = null; refreshTab('history'); });
   };
   wireDailyHover(daily);
 }
@@ -2029,10 +2034,88 @@ function ago(ts){
 // "why did this fire?" open survives the next poll instead of snapping shut
 // under you.
 let rulesCollapsed = false;
+/* Two views of alerts. "This session" is the alert engine's own list, in
+   memory: repeats folded together, dismissable, gone after Clear alerts or a
+   restart. "Past N days" is the log in the history database, which outlives
+   both — the security record, so it has no Dismiss. They used to be split
+   across two tabs in identical cards, which read as one list shown twice. */
+let alertView = 'session', alertLog = null, lastAlerts = null;
+try { if (localStorage.getItem('netscope-alertview') === 'log') alertView = 'log'; } catch (e){}
+
+async function loadAlertLog(more){
+  const have = alertLog && alertLog.enabled && alertLog.rows.length;
+  const q = more && have ? '?before=' + alertLog.rows[alertLog.rows.length - 1].id
+          : have ? '?after=' + alertLog.rows[0].id + '&limit=500' : '';
+  const d = await (await api('/api/alert_log' + q)).json();
+  if (!d.enabled){ alertLog = {enabled: false, error: d.error, rows: []}; return; }
+  if (q && !more && (d.more || d.counts.newest < alertLog.rows[0].id)){
+    // Too many new ones to join up, or the log was erased: start over.
+    alertLog = null;
+    return loadAlertLog(false);
+  }
+  if (!q) alertLog = {enabled: true, rows: d.alerts, more: d.more};
+  else if (more){ alertLog.rows.push(...d.alerts); alertLog.more = d.more; }
+  else alertLog.rows = d.alerts.concat(alertLog.rows);
+  alertLog.counts = d.counts; alertLog.days = d.retain_days;
+}
+
+function alertLogHTML(d){
+  const days = d.log_days;
+  const L = alertLog;
+  if (!L) return '<div class="empty">Loading the alert log…</div>';
+  if (!L.enabled) return '<div class="empty">History is off, so alerts are only kept for ' +
+    'this session.<br><br>Start without <code class="k">--no-history</code> to keep a log.</div>';
+  const c = L.counts || {total: 0, high: 0, warn: 0};
+  let h = '<h4 style="margin-bottom:4px">' + (c.total ? c.total.toLocaleString() + ' alerts · ' +
+    c.high + ' high · ' + c.warn + ' warn' : 'Alerts') + '</h4>' +
+    '<div class="hint" style="margin:0 0 8px">Logged on disk for ' + (L.days || days) +
+    ' days, including earlier sessions. Clear alerts and restarts don\'t remove them.</div>';
+  if (!L.rows.length)
+    return h + '<div class="empty">No alerts logged in the past ' + (L.days || days) + ' days.</div>';
+  const muted = new Set((d.mutes || []).map(m => m.rule + '\u0000' + m.subject));
+  h += L.rows.map(a => {
+    const isMuted = a.subject && muted.has(a.rule + '\u0000' + a.subject);
+    return '<div class="alert logrow ' + esc(a.severity) + '">' +
+      '<div class="t"><span class="ti">' + esc(a.title) + '</span>' +
+      '<span class="when">' + esc(new Date(a.ts * 1000).toLocaleString()) + '</span></div>' +
+      '<div class="d">' + esc(a.detail) + '</div>' +
+      '<div class="rl" title="' + esc((d.why || {})[a.rule] || '') + '">' + esc(a.rule) +
+        (a.process ? ' · ' + esc(a.process) : '') + '</div>' +
+      ((d.why || {})[a.rule] ? '<details class="why" data-lid="' + a.id + '"><summary>Why did this fire?</summary>' +
+        esc(d.why[a.rule]) + '</details>' : '') +
+      (a.subject ? '<div class="rowbtns">' + (isMuted
+        ? '<button class="btn-sm" data-unmute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
+          '" title="' + esc(a.subject) + ' is muted for this rule">Unmute ' + esc(a.subject) + '</button>'
+        : '<button class="btn-sm" data-mute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
+          '" title="Stop this rule reporting ' + esc(a.subject) + ', and leave it watching ' +
+          'everything else">Mute ' + esc(a.subject) + '</button>') + '</div>' : '') +
+      '</div>';
+  }).join('');
+  if (L.more) h += '<div class="rowbtns"><button class="btn-sm" id="alertMore">Show older</button></div>';
+  return h;
+}
+
+function setAlertView(v){
+  alertView = v === 'log' ? 'log' : 'session';
+  try { localStorage.setItem('netscope-alertview', alertView); } catch (e){}
+  if (lastAlerts) renderAlerts(lastAlerts);
+  if (alertView === 'log') loadAlertLog(false).then(() => {
+    if (alertView === 'log' && lastAlerts) renderAlerts(lastAlerts);
+  }).catch(() => {});
+}
+// History's "See them on the Alerts tab" opens the log view there.
+$('p-history').addEventListener('click', e => {
+  if (e.target.id !== 'alertsJump') return;
+  e.preventDefault();
+  alertView = 'log';
+  try { localStorage.setItem('netscope-alertview', 'log'); } catch (e2){}
+  showTab('alerts');
+});
 try { rulesCollapsed = localStorage.getItem('rulesCollapsed') === '1'; } catch(e) {}
 let openWhy = new Set();
 
 function renderAlerts(d){
+  lastAlerts = d;
   let h = '';
   if (!rulesCollapsed){
     h += '<div class="sec"><h4>Rules</h4><div class="rulegrid">';
@@ -2080,12 +2163,28 @@ function renderAlerts(d){
       '</div>';
   }
 
+  // The switch only appears when there is a log to switch to.
+  const logView = alertView === 'log' && d.log_days;
+  if (d.log_days){
+    h += '<div class="rowbtns" style="margin:0 0 10px"><span class="viewsw" id="alertSw" ' +
+      'role="group" aria-label="Which alerts">' +
+      '<button class="btn-sm' + (logView ? '' : ' on') + '" data-av="session" aria-pressed="' +
+        !logView + '">This session</button>' +
+      '<button class="btn-sm' + (logView ? ' on' : '') + '" data-av="log" aria-pressed="' +
+        !!logView + '" title="Every alert logged in the history database, from this and ' +
+        'earlier sessions">Past ' + d.log_days + ' days</button></span>' +
+      '<button class="btn-sm" id="toggleRules" style="margin-left:auto">' +
+      (rulesCollapsed ? 'Show rules' : 'Hide rules') + '</button></div>';
+  }
   const list = d.alerts || [];
+  if (logView){
+    h += '<div class="sec">' + alertLogHTML(d) + '</div>';
+  } else {
   h += '<div class="sec"><div class="sechead"><h4>'+
        (list.length ? list.length+' alerts · '+d.counts.high+' high · '+d.counts.warn+' warn'
                     : 'Alerts')+
-       '</h4><button class="btn-sm" id="toggleRules">'+
-       (rulesCollapsed ? 'Show rules' : 'Hide rules')+'</button></div>';
+       '</h4>'+(d.log_days ? '' : '<button class="btn-sm" id="toggleRules">'+
+       (rulesCollapsed ? 'Show rules' : 'Hide rules')+'</button>')+'</div>';
   if (!list.length){
     h += '<div class="empty">Nothing flagged yet. Rules run on every packet; '+
          'alerts appear here and repeat counts are folded together.</div>';
@@ -2112,12 +2211,25 @@ function renderAlerts(d){
       '</div>').join('');
   }
   h += '</div>';
-  $('p-alerts').innerHTML = h;
+  }
+  const pane0 = $('p-alerts'), openLog = new Set();
+  // Keep open "why" boxes in the log open across the 2.5 s redraw; the
+  // session list does this with alert ids, which log rows don't share.
+  pane0.querySelectorAll('.logrow details.why[open]').forEach(x => openLog.add(x.dataset.lid));
+  pane0.innerHTML = h;
 
   // Alerts that no longer exist (dismissed, muted, cleared) don't need to be
   // remembered as "open" forever.
-  const liveIds = new Set(list.map(a => a.id));
-  openWhy.forEach(id => { if (!liveIds.has(id)) openWhy.delete(id); });
+  pane0.querySelectorAll('.logrow details.why').forEach(x => {
+    if (openLog.has(x.dataset.lid)) x.open = true; });
+  if (!logView){
+    const liveIds = new Set(list.map(a => a.id));
+    openWhy.forEach(id => { if (!liveIds.has(id)) openWhy.delete(id); });
+  }
+  pane0.querySelectorAll('#alertSw [data-av]').forEach(b => b.onclick = () => setAlertView(b.dataset.av));
+  const more = $('alertMore');
+  if (more) more.onclick = () => { more.disabled = true;
+    loadAlertLog(true).then(() => renderAlerts(lastAlerts)).catch(() => { more.disabled = false; }); };
 
   const toggleRules = $('toggleRules');
   if (toggleRules) toggleRules.onclick = () => {
@@ -2125,7 +2237,7 @@ function renderAlerts(d){
     try { localStorage.setItem('rulesCollapsed', rulesCollapsed ? '1' : '0'); } catch(e) {}
     renderAlerts(d);
   };
-  document.querySelectorAll('#p-alerts details.why').forEach(det => {
+  document.querySelectorAll('#p-alerts details.why[data-aid]').forEach(det => {
     det.addEventListener('toggle', () => {
       const id = Number(det.dataset.aid);
       if (det.open) openWhy.add(id); else openWhy.delete(id);
@@ -3101,7 +3213,9 @@ function refreshTab(name){
   else if (name === 'files')   api('/api/objects').then(r=>r.json()).then(renderFiles).catch(()=>{});
   else if (name === 'streams') api('/api/streams').then(r=>r.json()).then(renderStreams).catch(()=>{});
   else if (name === 'dhcp')    api('/api/dhcp').then(r=>r.json()).then(renderDhcp).catch(()=>{});
-  else if (name === 'alerts')  return api('/api/alerts').then(r=>r.json()).then(renderAlerts).catch(()=>{});
+  else if (name === 'alerts')  return api('/api/alerts').then(r=>r.json()).then(d =>
+    alertView === 'log' && d.log_days ? loadAlertLog(false).then(() => d) : d)
+    .then(renderAlerts).catch(()=>{});
   else if (name === 'history') return loadHistory(false);
 }
 

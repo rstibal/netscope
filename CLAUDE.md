@@ -254,6 +254,15 @@ real machine the Programs view tagged nothing while Claude.exe checked in with
 and svchost plus unattributed teardown packets did the same to the host lane.
 Only the pair showed the schedule. The lane's box names the pair it found.
 
+**Alerts have two stores, shown as two views of one tab.** `AlertEngine`
+holds this session's alerts in memory: repeats folded, dismissable, emptied by
+Clear alerts. The history database logs each one for `alert_retain_days` and
+never forgets on Clear, since it is the security record. They used to be on
+two tabs in identical cards and read as a duplicate. The log view has Mute but
+no Dismiss. It pages by id, not timestamp, because alerts can share a
+timestamp. `subject` was added to the `alerts` table in 1.25.1, with an
+`ALTER TABLE` on open; older rows have none and can't be muted.
+
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
 Tests change alert rules, mutes and history exclusions through the real API,

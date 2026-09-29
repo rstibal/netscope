@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     title    TEXT NOT NULL,
     detail   TEXT NOT NULL,
     process  TEXT,
-    peer     TEXT
+    peer     TEXT,
+    subject  TEXT
 );
 CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
 
@@ -229,6 +230,12 @@ class HistoryStore:
             self._db.row_factory = sqlite3.Row
             with self._db_lock:
                 self._db.executescript(SCHEMA)
+                # `subject` (what a mute is keyed on) arrived in 1.25.1; a
+                # database from before has the table without it. Old rows stay
+                # without one, so they can't be muted from the log.
+                cols = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
+                if "subject" not in cols:
+                    self._db.execute("ALTER TABLE alerts ADD COLUMN subject TEXT")
                 self._db.commit()
                 # Cache what we already know, so first-seen checks are a set
                 # lookup on the hot path rather than a query per packet.
@@ -343,7 +350,7 @@ class HistoryStore:
                 alert.get("ts", time.time()), alert.get("severity", "info"),
                 alert.get("rule", ""), alert.get("title", ""),
                 alert.get("detail", ""), alert.get("process", ""),
-                alert.get("peer", "")))
+                alert.get("peer", ""), alert.get("subject") or None))
 
     def record_dhcp_lease(self, lease):
         """A completed lease (a DHCP ACK), queued for the next flush."""
@@ -515,8 +522,8 @@ class HistoryStore:
 
                 if alerts:
                     self._db.executemany(
-                        "INSERT INTO alerts(ts,severity,rule,title,detail,process,peer)"
-                        " VALUES (?,?,?,?,?,?,?)", alerts)
+                        "INSERT INTO alerts(ts,severity,rule,title,detail,process,"
+                        "peer,subject) VALUES (?,?,?,?,?,?,?,?)", alerts)
 
                 if leases:
                     self._db.executemany(
@@ -612,11 +619,37 @@ class HistoryStore:
             "FROM hosts WHERE first_seen >= ? ORDER BY first_seen DESC LIMIT ?",
             (since, limit))
 
-    def alert_history(self, days=30, limit=200):
-        since = time.time() - days * 86400
-        return self._q(
-            "SELECT id, ts, severity, rule, title, detail, process, peer "
-            "FROM alerts WHERE ts >= ? ORDER BY ts DESC LIMIT ?", (since, limit))
+    def alert_log(self, before=None, after=None, limit=100):
+        """
+        Logged alerts, newest first, as (rows, more). `before` pages back from
+        an id; `after` returns only ids newer than one the caller already has.
+        Ids, not timestamps: two alerts can share a timestamp, and a page
+        boundary between them would drop one.
+        """
+        where, args = [], []
+        if before is not None:
+            where.append("id < ?")
+            args.append(int(before))
+        if after is not None:
+            where.append("id > ?")
+            args.append(int(after))
+        rows = self._q(
+            "SELECT id, ts, severity, rule, title, detail, process, peer, subject "
+            "FROM alerts" + (" WHERE " + " AND ".join(where) if where else "") +
+            " ORDER BY id DESC LIMIT ?", args + [int(limit) + 1])
+        return rows[:limit], len(rows) > limit
+
+    def alert_counts(self, days=None):
+        """{"total", "high", "warn", "info", "newest"} over `days`, or all kept."""
+        since = 0 if days is None else time.time() - days * 86400
+        out = {"total": 0, "high": 0, "warn": 0, "info": 0}
+        for r in self._q("SELECT severity, COUNT(*) AS n FROM alerts WHERE ts >= ? "
+                         "GROUP BY severity", (since,)):
+            out[r["severity"]] = r["n"]
+            out["total"] += r["n"]
+        top = self._q("SELECT MAX(id) AS m FROM alerts")
+        out["newest"] = (top[0]["m"] if top else None) or 0
+        return out
 
     def dhcp_leases(self, limit=100):
         return self._q(

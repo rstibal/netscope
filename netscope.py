@@ -47,7 +47,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.25.0"
+VERSION = "1.25.1"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2685,7 +2685,7 @@ class Handler(BaseHTTPRequestHandler):
                 "processes": h.by_process(days, 15),
                 "hosts": h.top_hosts(15),
                 "new_hosts": h.new_hosts(7, 20),
-                "alerts": h.alert_history(days, 100),
+                "alert_counts": h.alert_counts(days),
                 "sessions": h.sessions(10),
                 "exclude": ex,
                 "days": days,
@@ -2732,7 +2732,34 @@ class Handler(BaseHTTPRequestHandler):
                 "toasts_supported": IS_WINDOWS,
                 "reverse_dns": bool(self.app.reverse and self.app.reverse.enabled),
                 "reverse_dns_stats": self.app.reverse.stats() if self.app.reverse else None,
+                # How far back the alert log reaches, for the tab's switch;
+                # None when there is no log to switch to.
+                "log_days": (self.app.history.alert_retain_days
+                             if self.app.history and self.app.history.enabled
+                             else None),
             })
+
+        if path == "/api/alert_log":
+            # Every logged alert from the history database, which outlives
+            # restarts and Clear alerts; the Alerts tab's other view is only
+            # this session's, held in memory.
+            h = self.app.history
+            if h is None or not h.enabled:
+                return self._send(200, {"enabled": False, "alerts": [], "more": False,
+                                        "error": (h.error if h else "disabled")})
+            h.flush()               # so an alert from seconds ago is already there
+
+            def num(name):
+                try:
+                    return int(qs[name][0])
+                except (KeyError, ValueError, IndexError):
+                    return None
+            limit = max(1, min(500, num("limit") or 100))
+            rows, more = h.alert_log(before=num("before"), after=num("after"),
+                                     limit=limit)
+            return self._send(200, {"enabled": True, "alerts": rows, "more": more,
+                                    "counts": h.alert_counts(),
+                                    "retain_days": h.alert_retain_days})
 
         if path == "/api/streams":
             return self._send(200, {"streams": self.app.streams.list()})

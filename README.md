@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.25.0**
+**Version 1.25.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -486,7 +486,9 @@ with `--no-history`).
 The History tab — the one the dashboard opens on — shows totals as a KPI row,
 daily traffic as a stacked column chart over 7, 30 or 90 days (its scale
 follows your busiest day, so the tallest column fills most of the chart), per-program and per-host breakdowns, hosts first
-contacted in the last week, the alert log and recent sessions. Every chart has
+contacted in the last week, how many alerts were logged (the alerts
+themselves are on the Alerts tab, under **Past 30 days**) and recent
+sessions. Every chart has
 a table view underneath it, so no value is only reachable by hovering. While
 it's showing it refreshes itself every 10 seconds, holding off while you
 have text in it selected.
@@ -585,6 +587,17 @@ a mute is always visible and always reversible, they persist across restarts, an
 they survive **Clear alerts**. Each alert also carries a **Why did this fire?**
 disclosure stating what its rule compares, and **Dismiss** drops a single alert
 without touching the rest.
+
+**This session / Past 30 days.** The list above is this session's alerts,
+held in memory: repeats fold into a count, and Clear alerts or a restart
+empties it. **Past 30 days** switches to the alert log in the history
+database instead, which keeps every alert from this and earlier sessions for
+30 days (see History), whatever you cleared. It shows the newest 100 first,
+with **Show older** for the rest, and new alerts appear at the top as they
+are logged. You can mute from the log. There's no Dismiss there, since the
+log is the record of what happened. Alerts logged before 1.25.1 don't store
+what they were about, so they can't be muted from the log. The switch only
+appears when history is on.
 
 Rule switches, the bandwidth threshold and the notification toggle are remembered
 between runs, which matters most when NetScope starts from a logon task and
@@ -791,6 +804,17 @@ names.
 ---
 
 ## Version history
+
+**1.25.1** — The alert log moved from the History tab to the Alerts tab. It
+used to appear on History in the same cards as the Alerts tab, so it read as
+the same list shown twice. They differ: the Alerts tab holds this session's
+alerts, which Clear alerts or a restart remove, while the log keeps every
+alert on disk for 30 days. The Alerts tab now has a **This session / Past 30
+days** switch. The log view shows dates, pages back with **Show older**
+rather than stopping at 40, updates as new alerts are logged, and can mute an
+alert's subject. History keeps a one-line count with a link to it. The history
+database gains a `subject` column so logged alerts can be muted; an existing
+database is upgraded when it opens.
 
 **1.25.0** — The Timeline now finds check-ins inside busy programs. On a real
 machine the Programs view marked nothing, even though the Claude app was
