@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.27.0**
+**Version 1.27.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -506,7 +506,7 @@ history has. Darker is busier, on a log scale covering three orders of
 magnitude below the busiest hour, so quiet hours are still told apart from
 each other and from an hour with nothing at all (drawn grey). It shows what
 a normal week looks like on this machine, which makes traffic at an hour
-that is usually quiet easy to spot. The current hour is outlined. Hover a
+that is usually quiet easy to spot. Hover a
 square for the exact figures and how many days they average; the table view
 underneath lists every hour.
 
@@ -834,6 +834,12 @@ names.
 ---
 
 ## Version history
+
+**1.27.1** — The Busy hours heatmap no longer outlines the current hour. The
+outline looked like a selected square, and nothing in the grid is
+selectable. Clicking a square also no longer leaves it outlined; the outline
+now shows only while hovering, or when moving through the squares with the
+keyboard.
 
 **1.27.0** — New: a **Busy hours** heatmap on the History tab, weekday
 against hour of day, showing the average traffic for each hour over the

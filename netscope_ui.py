@@ -516,9 +516,11 @@ code.k{color:var(--accent);font-family:var(--mono)}
    a measured nothing rather than a gap in the chart. */
 .hm-empty{fill:var(--grid)}
 .hm-cell{fill:var(--series-in)}
-.hm-now{fill:none;stroke:var(--fg);stroke-width:1.5}
 .hm-hit{fill:transparent;cursor:crosshair}
-.hm-hit:hover,.hm-hit:focus{stroke:var(--fg);stroke-width:1;outline:none}
+/* Outlined while hovered, or focused from the keyboard. Not after a click:
+   a square that stays outlined reads as selected, and nothing is. */
+.hm-hit:hover,.hm-hit:focus-visible{stroke:var(--fg);stroke-width:1}
+.hm-hit:focus{outline:none}
 .hmkey{display:flex;align-items:center;gap:3px;color:var(--faint);font:10.5px var(--mono);
   margin:2px 0 8px}
 .hmkey i{display:inline-block;width:12px;height:10px;border-radius:2px;background:var(--series-in)}
@@ -2015,12 +2017,12 @@ function hmLevel(v, max){
   const f = (Math.log10(v) - Math.log10(max) + HM_DECADES) / HM_DECADES;
   return Math.max(1, Math.min(HM_STEPS.length, Math.ceil(f * HM_STEPS.length)));
 }
+// No marker for the current hour: an outlined square read as a selection.
 function weekHoursChart(w){
   const W = 560, L = 40, T = 16, CW = (W - L - 2) / 24, CH = 18, G = 2;
   const H = T + 7 * CH + 2;
   let max = 0;
   for (const row of w.cells) for (const c of row) max = Math.max(max, c[0] + c[1]);
-  const now = new Date(), nowD = (now.getDay() + 6) % 7, nowH = now.getHours();
   let g = '';
   for (let h = 0; h < 24; h += 3)
     g += '<text class="axlbl" x="' + (L + h * CW + 1) + '" y="10">' + String(h).padStart(2, '0') + '</text>';
@@ -2035,9 +2037,6 @@ function weekHoursChart(w){
            (lv ? ' fill-opacity="' + HM_STEPS[lv - 1] + '"' : '') + '/>';
     }
   }
-  // Where "now" falls, so the pattern can be read against the present.
-  g += '<rect class="hm-now" x="' + (L + nowH * CW + G / 2) + '" y="' + (T + nowD * CH + G / 2) +
-       '" width="' + (CW - G) + '" height="' + (CH - G) + '" rx="2"/>';
   for (let d = 0; d < 7; d++) for (let h = 0; h < 24; h++)
     g += '<rect class="hm-hit" data-d="' + d + '" data-h="' + h + '" x="' + (L + h * CW) + '" y="' +
          (T + d * CH) + '" width="' + CW + '" height="' + CH + '"/>';

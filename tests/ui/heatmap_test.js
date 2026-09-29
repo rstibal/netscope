@@ -40,13 +40,10 @@ function history(){
   const g = await p.evaluate(()=>{
     const cells = [...document.querySelectorAll('#cw-week rect.hm-cell, #cw-week rect.hm-empty')];
     const op = (d, h) => { const r = cells[d*24+h]; return r.classList.contains('hm-empty') ? 0 : Number(r.getAttribute('fill-opacity')); };
-    const now = new Date(), nd = (now.getDay()+6)%7, nh = now.getHours();
-    const mark = document.querySelector('#cw-week .hm-now'), hit = document.querySelector('#cw-week .hm-hit[data-d="'+nd+'"][data-h="'+nh+'"]');
     return {n: cells.length, hits: document.querySelectorAll('#cw-week .hm-hit').length,
             work: op(1, 10), night: op(1, 2), empty: op(1, 5), odd: op(2, 3), evening: op(5, 21),
             days: [...document.querySelectorAll('#cw-week text')].filter(t=>t.getAttribute('text-anchor')==='end').map(t=>t.textContent),
-            nowAt: mark && Math.abs(Number(mark.getAttribute('x')) - Number(hit.getAttribute('x'))) < 2 &&
-                   Math.abs(Number(mark.getAttribute('y')) - Number(hit.getAttribute('y'))) < 2,
+            marked: document.querySelectorAll('#cw-week .hm-now').length,
             title: document.querySelector('#cw-week').closest('.sec').querySelector('h4').textContent};
   });
   check('a 7 × 24 grid, under its own heading', g.n===168 && g.hits===168 && g.title==='Busy hours · last 30 days', JSON.stringify(g));
@@ -55,7 +52,7 @@ function history(){
   check('busy hours are darkest, quiet nights pale, but still shown', g.work===1 && g.night>0 && g.night<=0.36, JSON.stringify(g));
   check('an hour with nothing is drawn as empty', g.empty===0);
   check('one odd busy night stands out from the nights around it', g.odd>=0.78 && g.odd>g.night, JSON.stringify(g));
-  check('the current hour is outlined', g.nowAt);
+  check('no square is outlined as if selected', g.marked===0);
 
   await p.hover('#cw-week .hm-hit[data-d="2"][data-h="3"]');
   const tip = await p.evaluate(()=>{ const t = document.getElementById('tip-week');
@@ -66,6 +63,12 @@ function history(){
         tip.on && tip.text.startsWith(wed+' 03:00–04:00') && /▼ received1\.1 GB/.test(tip.text) &&
         /▲ sent384\.0 MB/.test(tip.text) && tip.text.endsWith('average of4 '+wed+'s'), tip.text);
   check('...inside the chart', tip.inside);
+  // A click focuses the square; it must not stay outlined once the pointer leaves.
+  await p.click('#cw-week .hm-hit[data-d="2"][data-h="3"]');
+  await p.mouse.move(5, 5);
+  const stuck = await p.evaluate(()=>getComputedStyle(document.querySelector('#cw-week .hm-hit[data-d="2"][data-h="3"]')).stroke);
+  check('a clicked square is not left outlined', stuck==='none', stuck);
+  await p.hover('#cw-week .hm-hit[data-d="2"][data-h="3"]');
 
   // The 10-second refresh waits while the tooltip is up.
   total = 9*G;
