@@ -20,8 +20,47 @@ import bisect
 import threading
 
 RETAIN = 3600               # seconds kept, counted back from the newest packet
+BURST_GAP = 2               # active seconds this close together are one burst
 MAX_KEYS_PER_SEC = 400      # a scan would otherwise make one key per probe
 MAX_KEYS = 20000
+
+
+def bursts(secs):
+    """[(start, end)] runs of active seconds, from a sorted list of seconds."""
+    out = []
+    for t in secs:
+        if not out or t - out[-1][1] > BURST_GAP:
+            out.append([t, t])
+        else:
+            out[-1][1] = t
+    return out
+
+
+def regular_interval(secs):
+    """
+    Seconds between check-ins if activity comes in short bursts at a steady
+    interval, else 0. The same test the dashboard's Timeline draws its
+    "every ~Ns" box from (tlRegular in netscope_ui.py), so an alert and the
+    box never disagree; tests/unit/test_checkin.py runs both on the same
+    input. At least 5 bursts, a median gap of 5 s or more, 80% of gaps
+    within 10% (or 2 s) of it, and bursts no longer than a third of the gap,
+    so a steady stream with a few pauses doesn't count.
+    """
+    if len(secs) < 5:
+        return 0
+    b = bursts(secs)
+    if len(b) < 5:
+        return 0
+    gaps = [b[i][0] - b[i - 1][0] for i in range(1, len(b))]
+    med = sorted(gaps)[len(gaps) >> 1]
+    if med < 5:
+        return 0
+    tol = max(2, med * 0.1)
+    fit = sum(1 for g in gaps if abs(g - med) <= tol)
+    if fit < 4 or fit / len(gaps) < 0.8:
+        return 0
+    busy = sum(e - s + 1 for s, e in b) / len(b)
+    return med if busy <= med / 3 else 0
 
 
 class Timeline:
@@ -130,6 +169,27 @@ class Timeline:
                     "keys": [list(k) for k in self._keys[kfrom:]],
                     "buckets": buckets, "newest": self.newest,
                     "retain": self.retain}
+
+    def pair_activity(self):
+        """
+        {(program, host): sorted active seconds} over everything held, host
+        being the name when known and the address when not. What the
+        check-in alert tests for regularity: a check-in is often one pair
+        inside a busy program, whose other traffic fills the gaps.
+        """
+        with self._lock:
+            keys = self._keys
+            secs = {}
+            for sec in self._order:
+                for k in self._secs[sec]:
+                    key = keys[k]
+                    pair = (key[0], key[1] or key[2])
+                    s = secs.get(pair)
+                    if s is None:
+                        secs[pair] = [sec]
+                    elif s[-1] != sec:
+                        s.append(sec)
+        return secs
 
     def clear(self):
         with self._lock:

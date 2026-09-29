@@ -254,6 +254,18 @@ real machine the Programs view tagged nothing while Claude.exe checked in with
 and svchost plus unattributed teardown packets did the same to the host lane.
 Only the pair showed the schedule. The lane's box names the pair it found.
 
+**The check-in alert runs on a beat over the Timeline, not per packet, and
+learns before it warns.** Regularity is a property of an hour, so
+`AlertEngine.check_checkins()` runs every `CHECKIN_EVERY` seconds over
+`Timeline.pair_activity()`. `regular_interval()` in `netscope_timeline.py`
+must stay the same test as `tlRegular` in the page; `test_checkin.py` runs
+both on the same inputs. A real machine had ten scheduled pairs, all
+legitimate, so pairs are remembered in the `checkins` table and nothing is
+reported during `CHECKIN_BASELINE` (a day) from the first one seen. That
+covers the first run after upgrading an existing database, where
+`was_empty` is false. Lanes in parentheses are skipped: infrastructure runs
+on timers, and there is no program to act on.
+
 **Alerts have two stores, shown as two views of one tab.** `AlertEngine`
 holds this session's alerts in memory: repeats folded, dismissable, emptied by
 Clear alerts. The history database logs each one for `alert_retain_days` and

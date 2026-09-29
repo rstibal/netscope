@@ -29,6 +29,8 @@ import threading
 import time
 from collections import OrderedDict, deque
 
+from netscope_timeline import regular_interval, bursts
+
 try:
     from cryptography import x509
     X509_OK = True
@@ -117,6 +119,16 @@ RULE_WHY = {
                  "restarting with a new virtual MAC, or a DHCP lease moving "
                  "to a different device can cause the same thing "
                  "legitimately.",
+    "checkin": "Fires when a program starts contacting a host on a fixed "
+               "schedule: short bursts at a steady interval, at least five "
+               "times in the last hour, the same test as the Timeline's "
+               "'every ~Ns' box. Updaters, sync clients and telemetry do "
+               "this, and so does malware calling home, so each program and "
+               "host is reported once and then remembered. For the first "
+               "day it only learns. A warning if the program itself is new "
+               "on this machine in the last week, otherwise a note. Traffic "
+               "with no program behind it (broadcast, link layer, no "
+               "socket) is never reported.",
     "rogue_ra": "Fires when an IPv6 Router Advertisement arrives from a "
                "router this machine has not seen on this adapter before. A "
                "fake RA can redirect IPv6 traffic through an attacker's "
@@ -349,7 +361,11 @@ class AlertEngine:
             "dhcp_rogue_server": True,
             "arp_spoof": True,
             "rogue_ra": True,
+            "checkin": True,
         }
+        # (program, host) pairs already judged this session, regular or not
+        # reported, so the half-minute check doesn't redo them.
+        self._checkins_seen = set()
         self.threshold_mb = 500
         # Rule switches, the threshold and the toast toggle used to live only
         # in memory. Anyone running this from a logon task had their tuning
@@ -562,6 +578,7 @@ class AlertEngine:
         self.seen_dhcp_servers.clear()
         self.arp_bindings.clear()
         self.seen_routers.clear()
+        self._checkins_seen.clear()
         # Mutes deliberately survive: Clear means "I have read these", not
         # "forget everything I told you to ignore".
         self.warmup_until = _now() + 5.0
@@ -570,6 +587,51 @@ class AlertEngine:
         self.refresh_dns_config(background=True)
 
     # -- the rules ----------------------------------------------------------
+
+    def check_checkins(self, timeline):
+        """
+        Look for program-and-host pairs that have started contacting each
+        other on a schedule. Runs every half minute over the Timeline's hour
+        of per-second totals, not per packet: regularity is a property of an
+        hour, not of one packet. Returns the alerts it raised.
+        """
+        if not self.rules.get("checkin"):
+            return []
+        fired = []
+        new_week = _now() - 7 * 86400
+        for (proc, host), secs in timeline.pair_activity().items():
+            # "(broadcast)", "(no socket)" and the like: nothing to act on,
+            # and infrastructure traffic runs on timers by nature.
+            if not proc or proc == "-" or proc.startswith("(") or not host:
+                continue
+            if (proc, host) in self._checkins_seen:
+                continue
+            period = regular_interval(secs)
+            if not period:
+                continue
+            self._checkins_seen.add((proc, host))
+            h = self.history
+            sev, title = INFO, "New scheduled check-in"
+            if h is not None:
+                if h.known_checkin(proc, host):
+                    continue
+                learning = self.baselining or h.checkin_baselining()
+                h.note_checkin(proc, host, period)
+                if learning:
+                    continue
+                first = h.process_first_seen(proc)
+                if first is None or first >= new_week:
+                    sev, title = WARN, "New program checking in on a schedule"
+            every = (f"{period}s" if period < 120 else f"{round(period / 60)} min")
+            detail = (f"{proc} contacts {host} every ~{every} "
+                      f"({len(bursts(secs))} times in the last hour)")
+            if sev == WARN:
+                detail += f"; {proc} is new on this machine this week"
+            a = self._fire(("checkin", proc, host), sev, "checkin", title, detail,
+                           {"process": proc, "remote": host})
+            if a:
+                fired.append(a)
+        return fired
 
     def inspect(self, rec, payload: bytes):
         """Run every enabled rule over one packet. Cheap checks first."""

@@ -27,6 +27,11 @@ FLUSH_INTERVAL = 10.0          # seconds between disk writes
 PRUNE_INTERVAL = 3600.0        # seconds between retention sweeps
 DEFAULT_RETAIN_DAYS = 90
 DEFAULT_ALERT_RETAIN_DAYS = 30
+# How long the check-in rule learns before it warns. It starts the first time
+# NetScope sees a check-in, which on an existing database is the first run of
+# 1.26.0: everything already on a schedule then is learned, not reported. A
+# day, because an hourly check-in needs five hours to be recognised at all.
+CHECKIN_BASELINE = 86400.0
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -73,6 +78,17 @@ CREATE TABLE IF NOT EXISTS alerts (
     subject  TEXT
 );
 CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
+
+-- Program-and-host pairs seen contacting each other on a schedule, so the
+-- check-in alert only reports a pair once, ever.
+CREATE TABLE IF NOT EXISTS checkins (
+    program    TEXT NOT NULL,
+    host       TEXT NOT NULL,
+    period     INTEGER NOT NULL,
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL,
+    PRIMARY KEY (program, host)
+);
 
 CREATE TABLE IF NOT EXISTS dhcp_leases (
     mac        TEXT PRIMARY KEY,
@@ -211,6 +227,8 @@ class HistoryStore:
         self._db = None
         self._known_procs = set()
         self._known_hosts = set()
+        self._known_checkins = set()
+        self._checkin_since = None
         self.was_empty = True
         self.exclude_programs = []
         self.exclude_hosts = []
@@ -243,6 +261,10 @@ class HistoryStore:
                                      self._db.execute("SELECT name FROM processes")}
                 self._known_hosts = {r[0] for r in
                                      self._db.execute("SELECT host FROM hosts")}
+                self._known_checkins = {(r[0], r[1]) for r in self._db.execute(
+                    "SELECT program, host FROM checkins")}
+                self._checkin_since = self._db.execute(
+                    "SELECT MIN(first_seen) FROM checkins").fetchone()[0]
                 # A fresh database has never seen anything, so every program
                 # would look brand new. The first run is a baseline, not a
                 # pile of alerts.
@@ -459,6 +481,11 @@ class HistoryStore:
                 for i in ids:
                     gone["alerts"] += db.execute(
                         "DELETE FROM alerts WHERE id=?", (i,)).rowcount
+                col = "program" if kind == "program" else "host"
+                for (p, h) in list(self._known_checkins):
+                    if match(pattern, p if kind == "program" else h):
+                        db.execute(f"DELETE FROM checkins WHERE {col}=?",
+                                   (p if kind == "program" else h,))
                 db.commit()
             if kind == "host":
                 self._known_hosts = {h for h in self._known_hosts
@@ -479,6 +506,41 @@ class HistoryStore:
 
     def note_process(self, name):
         self._known_procs.add(name)
+
+    def process_first_seen(self, name):
+        """When a program first used the network, or None if never recorded."""
+        r = self._q("SELECT first_seen FROM processes WHERE name=?", (name,))
+        return r[0]["first_seen"] if r else None
+
+    def known_checkin(self, program, host):
+        # An excluded host isn't stored, so it can't be remembered; like
+        # known_host(), one you named yourself isn't news.
+        return (program, host) in self._known_checkins or self.excluded_host(host)
+
+    def checkin_baselining(self):
+        """True while the check-in rule is still learning this machine."""
+        return (self._checkin_since is None or
+                time.time() < self._checkin_since + CHECKIN_BASELINE)
+
+    def note_checkin(self, program, host, period):
+        """Remember a scheduled pair. Written at once: they are rare."""
+        self._known_checkins.add((program, host))
+        now = time.time()
+        if self._checkin_since is None:
+            self._checkin_since = now
+        if (not self.enabled or self._db is None or self.excluded_host(host)
+                or self.excluded_program(program)):
+            return
+        try:
+            with self._db_lock:
+                self._db.execute(
+                    "INSERT INTO checkins(program,host,period,first_seen,last_seen) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(program,host) DO UPDATE SET "
+                    "period=excluded.period, last_seen=excluded.last_seen",
+                    (program, host, int(period), now, now))
+                self._db.commit()
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
 
     def note_host(self, host):
         self._known_hosts.add(host)
@@ -704,12 +766,14 @@ class HistoryStore:
         try:
             with self._db_lock:
                 for t in ("usage", "processes", "hosts", "alerts",
-                          "dhcp_leases", "sessions"):
+                          "dhcp_leases", "sessions", "checkins"):
                     self._db.execute(f"DELETE FROM {t}")
                 self._db.commit()
                 self._db.execute("VACUUM")
             self._known_procs.clear()
             self._known_hosts.clear()
+            self._known_checkins.clear()
+            self._checkin_since = None
             self.session_id = None
         except Exception:
             pass

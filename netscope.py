@@ -47,7 +47,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.25.1"
+VERSION = "1.26.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2496,6 +2496,9 @@ class DemoEngine:
 from netscope_ui import PAGE_HTML  # noqa: E402
 
 
+# Seconds between check-in rule passes over the Timeline's hour.
+CHECKIN_EVERY = 15
+
 # Most a single /api/stream call will hand the browser, per direction.
 STREAM_VIEW_CAP = 512 * 1024
 
@@ -3292,6 +3295,20 @@ def main(argv=None):
                       dhcp=dhcp, reverse=reverse)
     if args.read:
         Handler.app.source = os.path.basename(args.read)
+
+    # The check-in rule looks at an hour at a time, so it runs on a beat
+    # rather than per packet. Not against a loaded .pcap: "never seen
+    # before" means on this machine, now.
+    def watch_checkins(app=Handler.app):
+        while True:
+            time.sleep(CHECKIN_EVERY)
+            if app.source or app.alerts is None:
+                continue
+            try:
+                app.alerts.check_checkins(app.store.timeline)
+            except Exception:
+                pass
+    threading.Thread(target=watch_checkins, daemon=True, name="checkins").start()
 
     try:
         httpd = DashboardServer(("127.0.0.1", args.port), Handler)

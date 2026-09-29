@@ -255,6 +255,9 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
   font:700 9.5px var(--sans);color:var(--accent);
   border:1px solid var(--accent);border-radius:3px;padding:0 4px;letter-spacing:.2px}
 .ln .rg:hover{background:var(--accent);color:#fff}
+/* "(broadcast)", "(no socket)" and the like run on timers by nature, and the
+   check-in alert skips them; the box is still true, just not news. */
+.ln.sys .rg{opacity:.55}
 #tlEmpty{grid-column:1 / -1}
 
 /* ---------- footer stats ---------- */
@@ -2020,6 +2023,7 @@ const RULE_LABELS = {
   dhcp_rogue_server: 'An unexpected DHCP server hands out a lease',
   arp_spoof:       'The MAC address answering for an IP changes',
   rogue_ra:        'An unexpected IPv6 router advertises itself',
+  checkin:         'A program starts checking in with a host on a schedule',
 };
 
 function ago(ts){

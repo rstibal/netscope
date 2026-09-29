@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.25.1**
+**Version 1.26.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -576,6 +576,19 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
   isn't a reply to something this machine sent — and web ports (80/443) are
   left out of the outbound count, since one page load reaches dozens of hosts.
   Fires once per burst, high severity.
+- **Scheduled check-in** — a program starts contacting a host on a fixed
+  schedule: short bursts at a steady interval, at least five times in the last
+  hour. It's the same test as the Timeline's **every ~Ns** box, run on each
+  program-and-host pair every 15 seconds. Updaters, sync clients and telemetry
+  do this, and so does malware calling home, so each pair is reported once and
+  then remembered in the history database. For the first day it only learns
+  what already checks in, without reporting anything. After that, a new pair
+  is a note, or a warning (with a desktop notification) when the program
+  itself first used the network in the last week. Traffic with no program
+  behind it, like `(broadcast)` or `(no socket)`, is never reported. Muting
+  one mutes that host. Because it needs five check-ins inside the hour it
+  sees, it catches schedules of up to about 15 minutes. Without history it
+  can't remember anything, so each pair is a note once per session.
 
 Repeat alerts fold into a count rather than filling the list. **Windows desktop
 notifications** sends warnings and high-severity alerts as toasts (Windows only,
@@ -809,6 +822,18 @@ names.
 ---
 
 ## Version history
+
+**1.26.0** — New alert: **Scheduled check-in**. When a program starts
+contacting a host on a fixed schedule, NetScope says so. It uses the same test
+as the Timeline's **every ~Ns** box, per program-and-host pair. Each pair is
+reported once and then remembered in the history database, and the first day
+only learns: on a real machine about ten programs check in on a schedule
+(Steam, OneDrive, Windows services, the browser), and none of them should
+alert. A program that is new on the machine this week and immediately starts
+checking in gets a warning with a desktop notification; anything else, a
+note. Traffic with no program behind it (`(broadcast)`, `(no socket)` and
+the like) is never reported, and its box on the Timeline is dimmed. The
+demo's `AgentSvc.exe` raises one after about a minute and a half.
 
 **1.25.1** — The alert log moved from the History tab to the Alerts tab. It
 used to appear on History in the same cards as the Alerts tab, so it read as
