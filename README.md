@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.26.0**
+**Version 1.27.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -490,13 +490,25 @@ with `--no-history`).
 
 The History tab — the one the dashboard opens on — shows totals as a KPI row,
 daily traffic as a stacked column chart over 7, 30 or 90 days (its scale
-follows your busiest day, so the tallest column fills most of the chart), per-program and per-host breakdowns, hosts first
+follows your busiest day, so the tallest column fills most of the chart), a
+**busy hours** heatmap, per-program and per-host breakdowns, hosts first
 contacted in the last week, how many alerts were logged (the alerts
 themselves are on the Alerts tab, under **Past 30 days**) and recent
 sessions. Every chart has
 a table view underneath it, so no value is only reachable by hovering. While
 it's showing it refreshes itself every 10 seconds, holding off while you
 have text in it selected.
+
+**Busy hours** is a grid of weekday against hour of day, in local time. Each
+square is the average traffic for that hour on that weekday, over the same
+7, 30 or 90 days as the rest of the tab, counted only from the first day
+history has. Darker is busier, on a log scale covering three orders of
+magnitude below the busiest hour, so quiet hours are still told apart from
+each other and from an hour with nothing at all (drawn grey). It shows what
+a normal week looks like on this machine, which makes traffic at an hour
+that is usually quiet easy to spot. The current hour is outlined. Hover a
+square for the exact figures and how many days they average; the table view
+underneath lists every hour.
 
 Writes never touch the capture path: packets accumulate in memory and a writer
 thread flushes to disk every ten seconds. If the database can't be opened,
@@ -822,6 +834,13 @@ names.
 ---
 
 ## Version history
+
+**1.27.0** — New: a **Busy hours** heatmap on the History tab, weekday
+against hour of day, showing the average traffic for each hour over the
+selected 7, 30 or 90 days. It shows the shape of a normal week on the
+machine, so traffic at a usually quiet hour stands out. It uses a log scale,
+so quiet hours are still distinct, and outlines the current hour. Hovering
+gives exact figures, and there's a table view.
 
 **1.26.0** — New alert: **Scheduled check-in**. When a program starts
 contacting a host on a fixed schedule, NetScope says so. It uses the same test

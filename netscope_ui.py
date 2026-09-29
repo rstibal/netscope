@@ -512,6 +512,16 @@ code.k{color:var(--accent);font-family:var(--mono)}
   box-shadow:0 6px 18px rgba(0,0,0,.32);font:11.5px var(--mono);
   white-space:nowrap;opacity:0;transition:opacity .08s}
 .tip.on{opacity:1}
+/* Busy-hours heatmap. Empty hours are drawn, faintly, so "nothing" reads as
+   a measured nothing rather than a gap in the chart. */
+.hm-empty{fill:var(--grid)}
+.hm-cell{fill:var(--series-in)}
+.hm-now{fill:none;stroke:var(--fg);stroke-width:1.5}
+.hm-hit{fill:transparent;cursor:crosshair}
+.hm-hit:hover,.hm-hit:focus{stroke:var(--fg);stroke-width:1;outline:none}
+.hmkey{display:flex;align-items:center;gap:3px;color:var(--faint);font:10.5px var(--mono);
+  margin:2px 0 8px}
+.hmkey i{display:inline-block;width:12px;height:10px;border-radius:2px;background:var(--series-in)}
 
 /* Transient confirmation. Downloads used to happen in complete silence — the
    anchor is clicked, the browser takes over, and nothing in the page changes.
@@ -1862,6 +1872,12 @@ function renderHistory(d){
          {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) +
        '</div>';
 
+  if (d.week_hours){
+    h += '<div class="sec"><h4>Busy hours · last '+d.days+' days</h4>' + weekHoursKey() +
+         '<div class="chartwrap" id="cw-week">' + weekHoursChart(d.week_hours) +
+         '<div class="tip" id="tip-week"></div></div>' + weekHoursTable(d.week_hours) + '</div>';
+  }
+
   if (d.processes.length){
     h += '<div class="sec"><h4>By program · last '+d.days+' days</h4>' +
          hbars(d.processes, 'name') +
@@ -1974,6 +1990,96 @@ function renderHistory(d){
       control({action:'history_wipe'}).then(() => { alertLog = null; refreshTab('history'); });
   };
   wireDailyHover(daily);
+  if (d.week_hours) wireWeekHours(d.week_hours);
+}
+
+/* ---------------- busy hours ----------------
+   Hour of day against weekday, averaged per day over the selected range, in
+   local time. The point is the shape of a normal week, so traffic at an hour
+   this machine is usually quiet stands out. One hue in five steps, on a log
+   scale like the Timeline's: a linear scale turns every hour outside the
+   busiest few into the same pale square, and the quiet hours are the ones
+   worth reading. Exact values are in the tooltip and the table view. */
+const HM_STEPS = [.18, .36, .56, .78, 1];
+function hmDayName(i, style){
+  // 2024-01-01 was a Monday.
+  return new Date(2024, 0, 1 + i).toLocaleDateString([], {weekday: style || 'short'});
+}
+// Five steps over three decades below the busiest hour. A log of the raw
+// byte count put 20 MB and 2.5 GB one shade apart, which hid exactly the
+// quiet hours this is for; anything under a thousandth of the peak still
+// gets the palest shade rather than disappearing.
+const HM_DECADES = 3;
+function hmLevel(v, max){
+  if (!(v > 0)) return 0;
+  const f = (Math.log10(v) - Math.log10(max) + HM_DECADES) / HM_DECADES;
+  return Math.max(1, Math.min(HM_STEPS.length, Math.ceil(f * HM_STEPS.length)));
+}
+function weekHoursChart(w){
+  const W = 560, L = 40, T = 16, CW = (W - L - 2) / 24, CH = 18, G = 2;
+  const H = T + 7 * CH + 2;
+  let max = 0;
+  for (const row of w.cells) for (const c of row) max = Math.max(max, c[0] + c[1]);
+  const now = new Date(), nowD = (now.getDay() + 6) % 7, nowH = now.getHours();
+  let g = '';
+  for (let h = 0; h < 24; h += 3)
+    g += '<text class="axlbl" x="' + (L + h * CW + 1) + '" y="10">' + String(h).padStart(2, '0') + '</text>';
+  for (let d = 0; d < 7; d++){
+    const y = T + d * CH;
+    g += '<text class="axlbl" x="' + (L - 6) + '" y="' + (y + CH / 2 + 3.5) + '" text-anchor="end">' +
+         esc(hmDayName(d)) + '</text>';
+    for (let h = 0; h < 24; h++){
+      const x = L + h * CW, v = w.cells[d][h][0] + w.cells[d][h][1], lv = hmLevel(v, max);
+      g += '<rect class="' + (lv ? 'hm-cell' : 'hm-empty') + '" x="' + (x + G / 2) + '" y="' + (y + G / 2) +
+           '" width="' + (CW - G) + '" height="' + (CH - G) + '" rx="2"' +
+           (lv ? ' fill-opacity="' + HM_STEPS[lv - 1] + '"' : '') + '/>';
+    }
+  }
+  // Where "now" falls, so the pattern can be read against the present.
+  g += '<rect class="hm-now" x="' + (L + nowH * CW + G / 2) + '" y="' + (T + nowD * CH + G / 2) +
+       '" width="' + (CW - G) + '" height="' + (CH - G) + '" rx="2"/>';
+  for (let d = 0; d < 7; d++) for (let h = 0; h < 24; h++)
+    g += '<rect class="hm-hit" data-d="' + d + '" data-h="' + h + '" x="' + (L + h * CW) + '" y="' +
+         (T + d * CH) + '" width="' + CW + '" height="' + CH + '"/>';
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Average traffic by weekday and hour">' +
+         g + '</svg>';
+}
+function weekHoursKey(){
+  return '<div class="hmkey">less ' + HM_STEPS.map(o => '<i style="opacity:' + o + '"></i>').join('') +
+         ' more <span style="margin-left:8px">per day, local time</span></div>';
+}
+function weekHoursTable(w){
+  const rows = [];
+  for (let h = 0; h < 24; h++) rows.push({h, v: w.cells.map(r => r[h][0] + r[h][1])});
+  return tableView(rows, [{h: 'Hour', f: r => String(r.h).padStart(2, '0') + ':00'}]
+    .concat([0, 1, 2, 3, 4, 5, 6].map(d => ({h: hmDayName(d), n: 1, f: r => r.v[d] ? hb(r.v[d]) : '–'}))));
+}
+function wireWeekHours(w){
+  const wrap = $('cw-week'), tip = $('tip-week');
+  if (!wrap || !tip) return;
+  wrap.querySelectorAll('.hm-hit').forEach(hit => {
+    const d = Number(hit.dataset.d), h = Number(hit.dataset.h), c = w.cells[d][h], n = w.counts[d];
+    const show = ev => {
+      const hh = x => String(x % 24).padStart(2, '0') + ':00';
+      tip.innerHTML = '<div class="th">' + esc(hmDayName(d, 'long')) + ' ' + hh(h) + '–' + hh(h + 1) + '</div>' +
+        '<div class="tr"><span><span class="sw" style="background:var(--series-in)"></span>▼ received</span><b>' +
+          esc(hb(c[0])) + '</b></div>' +
+        '<div class="tr"><span><span class="sw" style="background:var(--series-out)"></span>▲ sent</span><b>' +
+          esc(hb(c[1])) + '</b></div>' +
+        '<div class="tr"><span>average of</span><b>' + n + ' ' + esc(hmDayName(d, 'long')) + (n === 1 ? '' : 's') + '</b></div>';
+      tip.classList.add('on');
+      const box = wrap.getBoundingClientRect(), r = hit.getBoundingClientRect();
+      const tw = tip.offsetWidth, x = r.left - box.left + r.width / 2;
+      tip.style.left = Math.max(4, Math.min(box.width - tw - 4, x > box.width / 2 ? x - tw - 10 : x + 10)) + 'px';
+      tip.style.top = Math.max(0, r.bottom - box.top + 4) + 'px';
+    };
+    const hide = () => tip.classList.remove('on');
+    hit.addEventListener('pointerenter', show);
+    hit.addEventListener('pointerleave', hide);
+    hit.addEventListener('focus', show);
+    hit.addEventListener('blur', hide);
+    hit.setAttribute('tabindex', '0');
+  });
 }
 
 function wireDailyHover(rows){
@@ -3243,7 +3349,7 @@ function loadHistory(auto){
   return api('/api/history?days='+histDays).then(r=>r.text()).then(t => {
     if (seq !== histSeq) return;
     const key = t + JSON.stringify((lastStatus && lastStatus.autostart) || null);
-    if (auto && (key === histSeen || document.querySelector('#tip-daily.on') || histSelecting())) return;
+    if (auto && (key === histSeen || document.querySelector('#p-history .tip.on') || histSelecting())) return;
     const d = JSON.parse(t);
     histSeen = key;
     redrawHistory(d);
