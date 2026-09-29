@@ -22,6 +22,11 @@ The live packet table, with columns and filter presets:
 
 ![Packet table](screenshot.png)
 
+The Timeline, one lane per program, with a program that checks in every 20
+seconds picked out:
+
+![Timeline](screenshot-timeline.png)
+
 The History tab, showing traffic over time by program:
 
 ![History tab](screenshot-history.png)
