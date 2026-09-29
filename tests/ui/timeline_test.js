@@ -28,6 +28,34 @@ function payload(){
           buckets: [...secs.entries()].sort((a,b)=>a[0]-b[0])};
 }
 
+// A busy program that also checks in with one host every 45 s — the shape
+// found on a real machine, where the Programs view tagged nothing because the
+// program's other traffic filled the gaps. The host also sees irregular
+// traffic from another program, so the host lane as a whole isn't regular
+// either: only the program-and-host pair is.
+const KEYS2 = [
+  ['Claude.exe',   'api.example.com',       '192.0.2.10', '10.0.0.2', 'out', 'TLS', 443, 'eth0'], // 0
+  ['Claude.exe',   'downloads.example.com', '192.0.2.20', '10.0.0.2', 'out', 'TLS', 443, 'eth0'], // 1
+  ['(no socket)',  'downloads.example.com', '192.0.2.20', '10.0.0.2', 'in',  'TCP', 443, 'eth0'], // 2
+  ['svchost.exe',  'downloads.example.com', '192.0.2.20', '10.0.0.2', 'out', 'TLS', 443, 'eth0'], // 3
+];
+function payload2(){
+  const secs = new Map();
+  const add = (t, k, b, p) => { if (!secs.has(t)) secs.set(t, []); secs.get(t).push([k, b, p]); };
+  for (let t = NOW - 3599; t <= NOW; t++){
+    add(t, 0, 20000, 20);                                  // never idle
+    if ((NOW - t) % 45 === 0){ add(t, 1, 2000, 6); if (t + 2 <= NOW) add(t + 2, 2, 120, 2); }
+  }
+  // Uneven gaps of 20-200 s, from a fixed seed so every run is the same.
+  let t = NOW - 3580, seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  while ((t += 20 + Math.floor(rnd() * 180)) < NOW) add(t, 3, 800, 4);
+  return {gen: 8, full: true, kfrom: 0, keys: KEYS2, now: NOW + 0.5, newest: NOW,
+          offline: false, retain: 3600,
+          buckets: [...secs.entries()].sort((a,b)=>a[0]-b[0])};
+}
+let mode = 1;
+
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.NETSCOPE_CHROMIUM || undefined });
   const ctx = await b.newContext({ viewport:{width:1680,height:900} });
@@ -49,7 +77,7 @@ function payload(){
 
   let fetches = 0;
   await p.route('**/api/timeline*', route => { fetches++;
-    route.fulfill({status:200, contentType:'application/json', body: JSON.stringify(payload())}); });
+    route.fulfill({status:200, contentType:'application/json', body: JSON.stringify(mode===1 ? payload() : payload2())}); });
 
   // ---------------- switching ----------------
   const twTopBefore = await p.evaluate(()=>{ const w=document.getElementById('tw'); return w.scrollHeight; });
@@ -77,7 +105,7 @@ function payload(){
   check('one lane per program, busiest first',
         lanes.map(l=>l.name).join()==='chrome.exe,beacon.exe,random.exe', JSON.stringify(lanes));
   check('the program that checks in every 30 s is marked as such',
-        lanes[1].rg==='every ~30s', JSON.stringify(lanes));
+        lanes[1].rg==='every ~30s · c2.example.net', JSON.stringify(lanes));
   check('...a steady stream and an irregular one are not',
         lanes[0].rg==='' && lanes[2].rg==='', JSON.stringify(lanes));
   check('the note counts lanes and scheduled check-ins',
@@ -135,7 +163,7 @@ function payload(){
 
   // ---------------- lanes act on the filter ----------------
   await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length===3);
-  await p.click('#tlLabels .ln[data-name="beacon.exe"]');
+  await p.click('#tlLabels .ln[data-name="beacon.exe"] .nm');
   check('clicking a lane filters to it', await p.inputValue('#find')==='process == "beacon.exe"', await p.inputValue('#find'));
   await p.fill('#find', '');
   await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length===3);
@@ -153,9 +181,56 @@ function payload(){
   const hosts = await p.evaluate(()=>[...document.querySelectorAll('#tlLabels .ln')].map(b=>b.dataset.name));
   check('grouped by host: named hosts, and the address where there is no name',
         hosts.join()==='www.example.com,c2.example.net,198.51.100.7', JSON.stringify(hosts));
-  await p.click('#tlLabels .ln[data-name="198.51.100.7"]');
+  await p.click('#tlLabels .ln[data-name="198.51.100.7"] .nm');
   check('...and an address lane filters by ip', await p.inputValue('#find')==='ip == "198.51.100.7"', await p.inputValue('#find'));
   await p.fill('#find', '');
+
+  // ---------------- a check-in hidden inside a busy program ----------------
+  mode = 2;
+  await p.click('#tlGroup button[data-g="process"]');
+  await p.waitForFunction(()=>TL.gen===8 && document.querySelectorAll('#tlLabels .ln').length===3, null, {timeout:5000});
+  const progs = await p.evaluate(()=>[...document.querySelectorAll('#tlLabels .ln')].map(b=>({
+    name: b.dataset.name, title: b.title, rg: b.querySelector('.rg') ? b.querySelector('.rg').textContent : '',
+    rgTitle: b.querySelector('.rg') ? b.querySelector('.rg').title : '',
+    nmCut: (()=>{ const n=b.querySelector('.nm'); return n.scrollWidth > n.clientWidth; })(),
+    fits: (()=>{ const r=b.getBoundingClientRect(), t=b.querySelector('.tot').getBoundingClientRect();
+                 return t.right <= r.right + 0.5; })()})));
+  const claude = progs.find(x=>x.name==='Claude.exe') || {};
+  check('a busy program is marked for the host it checks in with',
+        claude.rg==='every ~45s · downloads.example.com', JSON.stringify(progs));
+  check('...the box says so in full',
+        /Checks in with downloads\.example\.com every ~45s/.test(claude.rgTitle), claude.rgTitle);
+  check("...the program's name isn't squeezed by it, and the size still fits",
+        !claude.nmCut && progs.every(x=>x.fits), JSON.stringify(progs));
+  check('the lane says where its traffic goes',
+        /^Hosts: api\.example\.com \d+%, downloads\.example\.com/m.test(claude.title), claude.title);
+  const svc = progs.find(x=>x.name==='svchost.exe') || {};
+  check('an irregular program is not marked', svc.rg==='', JSON.stringify(svc));
+
+  await p.click('#tlLabels .ln[data-name="Claude.exe"] .rg');
+  check('clicking the box filters to that program and host',
+        await p.inputValue('#find')==='process == "Claude.exe" && host == "downloads.example.com"',
+        await p.inputValue('#find'));
+  await p.fill('#find', '');
+
+  await p.click('#tlGroup button[data-g="host"]');
+  await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length===2);
+  const dl = await p.evaluate(()=>{ const b = document.querySelector('#tlLabels .ln[data-name="downloads.example.com"]');
+    return {title: b.title, rg: b.querySelector('.rg') ? b.querySelector('.rg').textContent : ''}; });
+  check('a host lane names the programs behind it',
+        /Programs: Claude\.exe \d+%, svchost\.exe \d+%, \(no socket\)/.test(dl.title), dl.title);
+  const own = await p.evaluate(()=>TL.lanes.find(l=>l.name==='downloads.example.com').own);
+  check('...and which of them checks in, even though the host as a whole is irregular',
+        own===0 && dl.rg==='every ~45s · Claude.exe', own+' '+JSON.stringify(dl));
+  const i = await p.evaluate(()=>TL.lanes.findIndex(l=>l.name==='downloads.example.com'));
+  const box = await p.locator('#tlCanvas').boundingBox();
+  await p.mouse.move(box.x + box.width - 2, box.y + i*26 + 13);
+  const tip2 = await p.textContent('#tlTip');
+  check('hovering the host lane lists its programs too', /Programs: Claude\.exe/.test(tip2) &&
+        /Contacted on a schedule by Claude\.exe \(every ~45s\)/.test(tip2), tip2);
+  await p.mouse.move(5, 5);
+  mode = 1;
+  await p.waitForFunction(()=>TL.gen===7 && document.querySelectorAll('#tlLabels .ln').length===3, null, {timeout:5000});
 
   // ---------------- pause ----------------
   await p.evaluate(()=>document.activeElement.blur());

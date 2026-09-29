@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.24.0**
+**Version 1.25.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -301,9 +301,17 @@ schedule.
   interval and are short compared with the gap. Updaters, sync clients and
   telemetry look like that. So does malware calling home, which is the reason
   it's marked. The demo includes one (`AgentSvc.exe`, every 20 seconds).
-- **Hover** a lane for the time, bytes each way and packet count at that point.
-  **Click a lane's name** to filter to it; **right-click** it for the same
-  hide and don't-record menu the packet table has.
+- The check runs on each **program-and-host pair** as well as on the lane, and
+  the box names the other side: `every ~45s · downloads.example.com` on a
+  program, `every ~45s · Example.exe` on a host. A busy program's check-in is
+  otherwise invisible, because its other traffic fills the gaps. Hover the box
+  for every pair that qualifies; **click the box** to filter to that program
+  and host together.
+- **Hover** a lane for the time, bytes each way and packet count at that point,
+  and for where its traffic goes: the hosts a program talks to, or the
+  programs behind a host, with each one's share. **Click a lane's name** to
+  filter to it; **right-click** it for the same hide and don't-record menu the
+  packet table has.
 - Lanes are ordered busiest first, and the order holds for ten seconds at a
   time so lanes don't swap places under the pointer.
 
@@ -783,6 +791,15 @@ names.
 ---
 
 ## Version history
+
+**1.25.0** — The Timeline now finds check-ins inside busy programs. On a real
+machine the Programs view marked nothing, even though the Claude app was
+checking for updates every 45 seconds: the program's other traffic filled the
+gaps. Each program-and-host pair is now checked on its own, and the
+**every ~Ns** box names the other side (`every ~45s · downloads.claude.ai`).
+Clicking the box filters to that pair. The Hosts view names the programs
+behind each host, with each one's share, when you hover the lane, so a tagged
+host no longer needs a trip through the filter to find out who contacts it.
 
 **1.24.0** — New: the **Timeline** view, next to the packet table. It shows one
 lane per program (or per host) against time, over the last minute up to the

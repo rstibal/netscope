@@ -235,7 +235,7 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 .tlnote.warn{color:var(--http)}
 /* Axis and lanes share one grid, and both reserve the scrollbar's width, so
    a tick sits exactly above the moment it labels. */
-.tlaxis,.tlscroll{display:grid;grid-template-columns:var(--tl-lw,250px) minmax(0,1fr);
+.tlaxis,.tlscroll{display:grid;grid-template-columns:var(--tl-lw,290px) minmax(0,1fr);
   scrollbar-gutter:stable;overflow-x:hidden}
 .tlaxis{flex:0 0 auto;overflow-y:hidden;border-bottom:1px solid var(--line);height:22px}
 .tlscroll{flex:1 1 auto;overflow-y:auto;min-height:0;align-content:start}
@@ -246,11 +246,15 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
   border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;
   color:var(--fg);font:12px var(--mono);text-align:left;cursor:pointer;min-width:0}
 .ln:hover,.ln:focus-visible{background:var(--panel2);color:var(--fg);outline:none}
-.ln .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ln .nm{flex:0 0 auto;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ln.sys .nm{color:var(--dim)}
-.ln .tot{flex:0 0 auto;color:var(--faint);font-size:10.5px}
-.ln .rg{flex:0 0 auto;font:700 9.5px var(--sans);color:var(--accent);
+.ln .tot{flex:0 0 auto;margin-left:auto;padding-left:4px;color:var(--faint);font-size:10.5px}
+/* The box gives way before the name does: which program it is matters more
+   than which host it checks in with, and the box's title has it in full. */
+.ln .rg{flex:0 3 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font:700 9.5px var(--sans);color:var(--accent);
   border:1px solid var(--accent);border-radius:3px;padding:0 4px;letter-spacing:.2px}
+.ln .rg:hover{background:var(--accent);color:#fff}
 #tlEmpty{grid-column:1 / -1}
 
 /* ---------- footer stats ---------- */
@@ -2632,6 +2636,26 @@ function tlPeriod(sec){
 
 function tlIsIP(s){ return /^[\d.]+$/.test(s) || s.includes(':'); }
 
+// "Programs: Claude.exe 81%, svchost.exe 12%, ..." for a lane, by bytes in
+// the window: who is behind a host, or where a program's traffic goes.
+function tlShares(l, n){
+  const all = [...l.pairs.values()].filter(p => p.bytes > 0).sort((a, b) => b.bytes - a.bytes);
+  if (!all.length) return '';
+  const tot = all.reduce((a, p) => a + p.bytes, 0);
+  const pct = p => { const v = p.bytes / tot * 100; return v >= 1 ? Math.round(v) + '%' : '<1%'; };
+  return (TL.group === 'host' ? 'Programs: ' : 'Hosts: ') +
+    all.slice(0, n).map(p => p.name + ' ' + pct(p)).join(', ') +
+    (all.length > n ? ', and ' + (all.length - n) + ' more' : '');
+}
+
+function tlCheckText(l){
+  if (!l.checks.length) return 'Active every ' + tlPeriod(l.own) + ', like clockwork.';
+  if (TL.group === 'host')
+    return 'Contacted on a schedule by ' +
+      l.checks.map(c => c.name + ' (every ' + tlPeriod(c.sec) + ')').join(', ') + '.';
+  return 'Checks in with ' + l.checks.map(c => c.name + ' every ' + tlPeriod(c.sec)).join(', ') + '.';
+}
+
 function tlBuild(W){
   const bad = tlUnsupported($('find').value);
   const pass = TL.keys.map(r => !bad.length && rowVisible(r));
@@ -2645,14 +2669,24 @@ function tlBuild(W){
     for (const [k, bytes, pkts] of list){
       if (!pass[k]) continue;
       const r = TL.keys[k];
-      const name = TL.group === 'host' ? (r.rhost || r.remote || '(none)') : (r.process || '-');
+      const host = r.rhost || r.remote || '(none)', proc = r.process || '-';
+      const name = TL.group === 'host' ? host : proc;
+      const other = TL.group === 'host' ? proc : host;
       let ln = byName.get(name);
       if (!ln){
-        ln = {name, bytes: 0, pkts: 0, active: new Set(), bins: null, regular: 0};
+        ln = {name, bytes: 0, pkts: 0, active: new Set(), bins: null, regular: 0,
+              pairs: new Map(), checks: [], own: 0};
         byName.set(name, ln);
       }
       ln.active.add(sec);
+      // The same lane split by what's on the other side: hosts for a program,
+      // programs for a host. A check-in is often one pair inside a busy lane.
+      let pr = ln.pairs.get(other);
+      if (!pr){ pr = {name: other, bytes: 0, all: 0, active: new Set()}; ln.pairs.set(other, pr); }
+      pr.active.add(sec);
+      pr.all += bytes;
       if (!inWin) continue;
+      pr.bytes += bytes;
       if (!ln.bins) ln.bins = new Float64Array(B * 3);
       ln.bins[j * 3 + (r.dir === 'out' ? 1 : 0)] += bytes;
       ln.bins[j * 3 + 2] += pkts;
@@ -2660,7 +2694,19 @@ function tlBuild(W){
     }
   }
   let lanes = [...byName.values()].filter(l => l.bins);
-  for (const l of lanes) l.regular = tlRegular([...l.active].sort((a, b) => a - b));
+  const bySec = (a, b) => a - b;
+  for (const l of lanes){
+    l.own = tlRegular([...l.active].sort(bySec));
+    // A program checking in with one host every 45 s, while it also does
+    // other things, never looks regular as a whole: the other traffic fills
+    // the gaps. So each program-and-host pair is checked on its own too.
+    l.checks = [...l.pairs.values()]
+      .filter(pr => pr.active.size >= 5 && pr.name !== '(none)')
+      .map(pr => ({name: pr.name, sec: tlRegular([...pr.active].sort(bySec)), all: pr.all}))
+      .filter(c => c.sec)
+      .sort((a, b) => b.all - a.all);
+    l.regular = l.own || (l.checks.length ? l.checks[0].sec : 0);
+  }
   // Busiest first, but not re-ranked every second: lanes swapping places
   // under the pointer is noise. The order holds for ten seconds, or until
   // the window, grouping or filter changes; new lanes join at the end.
@@ -2710,7 +2756,8 @@ function tlDraw(){
     : 'No traffic in the last ' + span + '.';
 
   // Lane labels: rebuilt only when the lanes change, so hover and focus hold.
-  const sigL = TL.group + '|' + lanes.map(l => l.name + '/' + l.regular).join('\n');
+  const sigL = TL.group + '|' + lanes.map(l => l.name + '/' + l.regular + '/' +
+    l.checks.map(c => c.name).join(',')).join('\n');
   const box = $('tlLabels');
   if (sigL !== TL.sig){
     TL.sig = sigL;
@@ -2719,9 +2766,11 @@ function tlDraw(){
     box.innerHTML = lanes.map((l, i) =>
       '<button class="ln' + (/^[-(]/.test(l.name) ? ' sys' : '') + '" data-i="' + i + '" data-name="' +
       esc(l.name) + '"><span class="nm">' + esc(l.name) + '</span>' +
-      (l.regular ? '<span class="rg" title="Active every ' + tlPeriod(l.regular) +
-        ', like clockwork. Updaters and sync clients check in like this; so does malware ' +
-        'calling home.">every ' + tlPeriod(l.regular) + '</span>' : '') +
+      (l.regular ? '<span class="rg" title="' + esc(tlCheckText(l) +
+        '\nUpdaters and sync clients check in like this; so does malware calling home.' +
+        (l.checks.length ? '\nClick to filter to ' + (l.checks.length > 1 ? 'the first.' : 'it.') : '')) +
+        '">every ' + tlPeriod(l.regular) +
+        (l.checks.length ? ' · ' + esc(l.checks[0].name) : '') + '</span>' : '') +
       '<span class="tot"></span></button>').join('');
     if (had){
       const b = [...box.children].find(x => x.dataset.name === had);
@@ -2732,7 +2781,9 @@ function tlDraw(){
     const l = lanes[i];
     b.querySelector('.tot').textContent = hb(l.bytes);
     b.title = l.name + ' — ' + hb(l.bytes) + ', ' + l.pkts.toLocaleString() +
-      ' packets in the last ' + span + '.\nClick to filter to it; right-click to hide it.';
+      ' packets in the last ' + span + '.\n' + tlShares(l, 5) +
+      (l.regular ? '\n' + tlCheckText(l) : '') +
+      '\nClick to filter to it; right-click to hide it.';
   });
 
   // Lanes.
@@ -2846,8 +2897,12 @@ $('tlLabels').addEventListener('click', e => {
   if (!b) return;
   const name = b.dataset.name;
   if (name === '(none)') return;
-  const field = TL.group === 'process' ? 'process' : tlIsIP(name) ? 'ip' : 'host';
-  addClause(field, '==', name);
+  const fieldOf = (n, g) => g === 'process' ? 'process' : tlIsIP(n) ? 'ip' : 'host';
+  // The "every ~Ns" box narrows to the pair that checks in, not just the lane.
+  const l = TL.lanes.find(x => x.name === name);
+  const pair = e.target.closest('.rg') && l && l.checks.length ? l.checks[0].name : null;
+  addClause(fieldOf(name, TL.group), '==', name);
+  if (pair) addClause(fieldOf(pair, TL.group === 'process' ? 'host' : 'process'), '==', pair);
 });
 $('tlLabels').addEventListener('contextmenu', e => {
   const b = e.target.closest && e.target.closest('.ln');
@@ -2870,7 +2925,8 @@ $('tlCanvas').addEventListener('mousemove', e => {
     (per >= 2 ? '–' + esc(f(t0 + per)) : '') + '<br>' +
     (n ? '▲ ' + esc(hb(vout)) + ' &nbsp;▼ ' + esc(hb(vin)) + ' &nbsp;' + n + ' pkt' + (n === 1 ? '' : 's')
        : 'nothing') +
-    (l.regular ? '<br>active every ' + tlPeriod(l.regular) : '');
+    '<br><span style="color:var(--dim)">' + esc(tlShares(l, 3)) + '</span>' +
+    (l.regular ? '<br>' + esc(tlCheckText(l)) : '');
   const v = $('tlview').getBoundingClientRect();
   tip.classList.add('on');
   const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;

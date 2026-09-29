@@ -248,6 +248,12 @@ requires short bursts at a steady interval (80% of gaps within 10%), so a
 steady stream with pauses doesn't qualify. Re-ranking every second made lanes
 jump under the pointer.
 
+**Regularity is checked per program-and-host pair, not only per lane.** On a
+real machine the Programs view tagged nothing while Claude.exe checked in with
+`downloads.claude.ai` every 45 s: the program's other traffic filled the gaps,
+and svchost plus unattributed teardown packets did the same to the host lane.
+Only the pair showed the schedule. The lane's box names the pair it found.
+
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
 Tests change alert rules, mutes and history exclusions through the real API,
