@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.27.1**
+**Version 1.27.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,11 @@ names.
 ---
 
 ## Version history
+
+**1.27.2** — Lighter polling: the dashboard's once-a-second update no longer
+scans the whole packet ring or sorts every host and program to find the
+busiest dozen. A malformed `since` on `/api/state` no longer drops the
+connection. Unused imports removed.
 
 **1.27.1** — The Busy hours heatmap no longer outlines the current hour. The
 outline looked like a selected square, and nothing in the grid is

@@ -21,7 +21,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 FLUSH_INTERVAL = 10.0          # seconds between disk writes
 PRUNE_INTERVAL = 3600.0        # seconds between retention sweeps

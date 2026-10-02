@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+import heapq
 import ipaddress
 import json
 import os
@@ -47,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.27.1"
+VERSION = "1.27.2"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -80,8 +81,7 @@ except ImportError:  # pragma: no cover
 from netscope_smb import SmbTracker
 from netscope_ftp import FTPCorrelator
 from netscope_dhcp import DhcpTracker, summarise as dhcp_summary
-from netscope_streams import (StreamTracker, ObjectStore, ObjectScanner,
-                              TEXTUAL)
+from netscope_streams import StreamTracker, ObjectStore, ObjectScanner
 from netscope_pcap import write_pcap, read_pcap
 from netscope_quic import (parse_quic, summarise as quic_summary,
                            sni_from_client_hello, build_client_initial,
@@ -604,10 +604,15 @@ class PacketStore:
         return self.dns_cache.get(ip)
 
     def since(self, seq: int, limit: int = 600):  # noqa: D401
+        # Newest first, stopping at the first one the caller already has: a
+        # poll asks for a handful of packets, not a scan of the whole ring.
+        out = []
         with self._lock:
-            out = [r for r in self._ring if r["seq"] > seq]
-        if len(out) > limit:
-            out = out[-limit:]
+            for r in reversed(self._ring):
+                if r["seq"] <= seq or len(out) >= limit:
+                    break
+                out.append(r)
+        out.reverse()
         return out
 
     def export_records(self):
@@ -633,13 +638,13 @@ class PacketStore:
 
     def stats(self):
         with self._lock:
-            procs = sorted(
-                ({"name": k, **v} for k, v in self.by_process.items()),
-                key=lambda d: d["in"] + d["out"], reverse=True)[:12]
-            hosts = sorted(
-                ({"host": k, "name": self.dns_cache.get(k, ""), **v}
-                 for k, v in self.by_host.items()),
-                key=lambda d: d["in"] + d["out"], reverse=True)[:12]
+            procs = heapq.nlargest(
+                12, ({"name": k, **v} for k, v in self.by_process.items()),
+                key=lambda d: d["in"] + d["out"])
+            hosts = heapq.nlargest(
+                12, ({"host": k, "name": self.dns_cache.get(k, ""), **v}
+                     for k, v in self.by_host.items()),
+                key=lambda d: d["in"] + d["out"])
             buckets = list(self._buckets)[-60:]
             return {
                 "total_in": self.total_in,
@@ -2616,7 +2621,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "bad token"})
 
         if path == "/api/state":
-            since = int(qs.get("since", ["0"])[0])
+            try:
+                since = int(qs.get("since", ["0"])[0])
+            except ValueError:
+                since = 0
             packets = self.store_since(since)
             return self._send(200, {
                 "packets": packets,

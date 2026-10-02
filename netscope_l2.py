@@ -228,7 +228,7 @@ def describe_frame(pkt, raw: bytes):
     """
     src = dst = ""
     try:
-        from scapy.layers.l2 import Ether, Dot3, LLC, SNAP
+        from scapy.layers.l2 import Ether, Dot3
         eth = pkt.getlayer(Ether) or pkt.getlayer(Dot3)
         if eth is not None:
             src = getattr(eth, "src", "") or ""
@@ -250,7 +250,7 @@ def describe_frame(pkt, raw: bytes):
     if field <= 1500:
         if len(raw) < 17:
             return ("LLC", "802.3 frame", src, dst)
-        dsap, ssap, ctrl = raw[14], raw[15], raw[16]
+        dsap, ssap = raw[14], raw[15]
         name, detail = LLC_SAPS.get(dsap, ("LLC", "DSAP 0x%02x" % dsap))
         if dsap == 0x42:
             return ("STP", _stp_info(raw[17:]), src, dst)
