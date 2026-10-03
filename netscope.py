@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.27.2"
+VERSION = "1.27.3"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -516,6 +516,14 @@ class ProcessResolver:
 
 
 class PacketStore:
+    # A tray instance can run for days, and these grow with every distinct
+    # program, address and name seen. Past a limit the quietest entries go
+    # (the busiest are what the dashboard ranks), and the count is reported
+    # in settings so a trimmed table is never mistaken for a complete one.
+    MAX_PROCESSES = 2000
+    MAX_HOSTS = 20000
+    MAX_NAMES = 50000
+
     def __init__(self, size: int = RING_SIZE):
         self._lock = threading.Lock()
         self._ring = deque(maxlen=size)
@@ -530,6 +538,7 @@ class PacketStore:
         self.total_packets = 0
         self.unowned = 0
         self.dns_cache = {}
+        self.evicted = {"processes": 0, "hosts": 0, "names": 0}
         self._buckets = deque(maxlen=90)  # one second each
         self._cur_bucket = None
         # Per-conversation counters for the Connections tab. Fed from add(),
@@ -563,11 +572,15 @@ class PacketStore:
             p = self.by_process[rec["process"]]
             p[direction] += size
             p["packets"] += 1
+            if len(self.by_process) > self.MAX_PROCESSES:
+                self._trim(self.by_process, self.MAX_PROCESSES, "processes")
 
             peer = rec["remote"]
             h = self.by_host[peer]
             h[direction] += size
             h["packets"] += 1
+            if len(self.by_host) > self.MAX_HOSTS:
+                self._trim(self.by_host, self.MAX_HOSTS, "hosts")
 
             self.by_proto[rec["proto"]] += 1
             try:
@@ -588,17 +601,36 @@ class PacketStore:
             self._cur_bucket[direction] += size
             return rec["seq"]
 
+    def _trim(self, table, limit, what):
+        """Drop the quietest tenth of table (caller holds the lock). Going
+        down by a tenth rather than one keeps the sort off every packet."""
+        drop = heapq.nsmallest(
+            max(1, limit // 10), table,
+            key=lambda k: table[k]["in"] + table[k]["out"])
+        for k in drop:
+            del table[k]
+        self.evicted[what] += len(drop)
+
+    def _remember(self, ip, name, overwrite):
+        # Caller holds the lock. Dicts keep insertion order, so the first key
+        # is the oldest name learned.
+        if overwrite or ip not in self.dns_cache:
+            self.dns_cache[ip] = name
+        while len(self.dns_cache) > self.MAX_NAMES:
+            del self.dns_cache[next(iter(self.dns_cache))]
+            self.evicted["names"] += 1
+
     def note_host(self, ip, name):
         """Record a hostname learned from something other than DNS (QUIC SNI)."""
         if ip and name:
             with self._lock:
-                self.dns_cache.setdefault(ip, name)
+                self._remember(ip, name, False)
 
     def note_dns(self, answers):
         with self._lock:
             for a in answers:
                 if a["type"] in ("A", "AAAA") and a["data"]:
-                    self.dns_cache[a["data"]] = a["name"]
+                    self._remember(a["data"], a["name"], True)
 
     def hostname(self, ip: str):
         return self.dns_cache.get(ip)
@@ -669,6 +701,7 @@ class PacketStore:
             self.by_process.clear()
             self.by_host.clear()
             self.by_proto.clear()
+            self.evicted = {k: 0 for k in self.evicted}
             self.total_in = self.total_out = self.total_packets = 0
             self.unowned = 0
             self._buckets.clear()
@@ -2743,6 +2776,7 @@ class Handler(BaseHTTPRequestHandler):
                 "toasts": a.notifier.enabled,
                 "toasts_supported": IS_WINDOWS,
                 "reverse_dns": bool(self.app.reverse and self.app.reverse.enabled),
+                "tracking_evicted": dict(self.app.store.evicted),
                 "reverse_dns_stats": self.app.reverse.stats() if self.app.reverse else None,
                 # How far back the alert log reaches, for the tab's switch;
                 # None when there is no log to switch to.

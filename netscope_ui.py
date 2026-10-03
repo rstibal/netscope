@@ -2252,6 +2252,13 @@ function renderAlerts(d){
            '. Most unresolved IPs simply have no reverse DNS record — '+
            'that is normal, not a fault.</div>';
     }
+    const ev = d.tracking_evicted;
+    if (ev && (ev.processes || ev.hosts || ev.names)){
+      h += '<div class="hint">Long-running limits reached: dropped the '+
+           'quietest '+ev.processes+' programs, '+ev.hosts+' addresses and '+
+           ev.names+' names from the running totals. Clear packets resets this.'+
+           '</div>';
+    }
     h += '</div><div class="rowbtns">'+
          '<button class="btn-sm" id="applyRules">Apply</button>'+
          '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+

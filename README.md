@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.27.2**
+**Version 1.27.3**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,12 @@ names.
 ---
 
 ## Version history
+
+**1.27.3** — A NetScope left running for days no longer grows without limit.
+The running per-program and per-address totals and the learned-name table
+are capped (2,000 programs, 20,000 addresses, 50,000 names); past a cap the
+quietest entries are dropped, and the Alerts tab says how many. Overall
+totals and the busiest-first rankings are unaffected.
 
 **1.27.2** — Lighter polling: the dashboard's once-a-second update no longer
 scans the whole packet ring or sorts every host and program to find the
