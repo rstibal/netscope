@@ -513,6 +513,40 @@ class HistoryStore:
             self.error = f"{type(exc).__name__}: {exc}"
         return gone
 
+    def purge_vpn(self, dry=False):
+        """
+        Erase usage recorded under a VPN client's name. Before 1.28.4 the
+        history counted a tunnel's encrypted outer copy as well as the real
+        traffic; the real traffic is under the programs that made it, and the
+        outer copy is under the client (openvpn.exe, tailscaled.exe, ...), so
+        dropping those rows removes most of the double count. Outer packets
+        attributed to nothing, or to System, can't be told apart and stay.
+        With dry=True nothing is changed. Returns {"programs": {name: bytes}}.
+        """
+        from netscope_tunnel import VPN_PROCESS
+        found = {}
+        if not self.enabled or self._db is None:
+            return {"programs": found, "usage": 0}
+        gone = 0
+        try:
+            with self._db_lock:
+                db = self._db
+                for name, total in list(db.execute(
+                        "SELECT process, SUM(bytes_in + bytes_out) FROM usage "
+                        "GROUP BY process")):
+                    if VPN_PROCESS.search(name or ""):
+                        found[name] = int(total or 0)
+                if not dry:
+                    for name in found:
+                        gone += db.execute("DELETE FROM usage WHERE process=?",
+                                           (name,)).rowcount
+                        db.execute("UPDATE processes SET bytes_in=0, bytes_out=0, "
+                                   "packets=0 WHERE name=?", (name,))
+                    db.commit()
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        return {"programs": found, "usage": gone}
+
     # -- first-seen lookups -------------------------------------------------
 
     def known_process(self, name):

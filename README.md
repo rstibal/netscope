@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.28.4**
+**Version 1.29.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,16 @@ names.
 ---
 
 ## Version history
+
+**1.29.0** — **Erase VPN overhead** on the History tab's Storage section. Before
+1.28.4 the history counted a VPN's encrypted outer copy as well as the real
+traffic, and that copy is recorded under the VPN client's name (openvpn.exe,
+tailscaled.exe, ...). The button lists those programs and their totals, asks,
+and then erases their usage; the real traffic stays under the programs that made
+it, and the VPN program's name stays so it isn't reported as new. Outer traffic
+that was attributed to System or to no program can't be told apart and stays,
+so some doubling may remain in the machine total for days recorded before
+1.28.4.
 
 **1.28.4** — A VPN no longer doubles the history. With a VPN up every byte is on
 the wire twice: the real conversation on the tunnel adapter, attributed to the

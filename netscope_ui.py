@@ -1985,7 +1985,10 @@ function renderHistory(d){
   h += '<div class="sec"><h4>Storage</h4><div class="row"><span>File</span>'+
        '<span>'+esc(s.path)+'</span></div>'+
        '<div class="rowbtns"><button class="btn-sm" id="histFlush">Flush now</button>'+
-       '<button class="btn-sm danger" id="histWipe">Erase all history</button></div></div>';
+       '<button class="btn-sm" id="histVpn">Erase VPN overhead</button>'+
+       '<button class="btn-sm danger" id="histWipe">Erase all history</button></div>'+
+       (histVpnMsg ? '<div class="io" role="status" id="vpnMsg">' + esc(histVpnMsg) + '</div>' : '') +
+       '</div>';
 
   const as = (lastStatus && lastStatus.autostart) || {};
   h += '<div class="sec"><h4>Start with Windows</h4>';
@@ -2020,6 +2023,7 @@ function renderHistory(d){
   const fl = $('histFlush');
   if (fl) fl.onclick = () => control({action:'history_flush'})
     .then(() => refreshTab('history'));
+  $('histVpn').onclick = eraseVpnOverhead;
   const wp = $('histWipe');
   if (wp) wp.onclick = () => {
     if (confirm('Erase all recorded history? This cannot be undone.'))
@@ -3474,6 +3478,32 @@ function addExclusion(kind, pattern){
       return refreshTab('history');
     });
   }).catch(() => { histExMsg = 'Could not reach NetScope.'; return refreshTab('history'); });
+}
+
+/* Before 1.28.4 the history counted a VPN's encrypted outer copy as well as the
+   real traffic. That copy sits under the VPN client's name, so erasing those
+   programs' usage removes most of the double count. Previewed first, since it
+   is a delete. */
+let histVpnMsg = '';
+function eraseVpnOverhead(){
+  return excludeCall({action: 'history_vpn', dry: true}).then(d => {
+    const p = (d.vpn && d.vpn.programs) || {}, names = Object.keys(p);
+    if (!names.length){
+      histVpnMsg = 'No usage is recorded under a VPN client, so there is nothing to erase.';
+      return refreshTab('history');
+    }
+    const lines = names.map(n => '  ' + n + ' - ' + hb(p[n])).join('\n');
+    if (!confirm('Erase the usage recorded under these VPN programs?\n\n' + lines +
+        '\n\nThis is the tunnel\'s encrypted copy of traffic already counted under the ' +
+        'programs that made it. Traffic of that kind recorded under System or no ' +
+        'program cannot be told apart and stays. This cannot be undone.'))
+      return refreshTab('history');
+    return excludeCall({action: 'history_vpn'}).then(r => {
+      const n = Object.keys((r.vpn && r.vpn.programs) || {}).length;
+      histVpnMsg = 'Erased the usage of ' + n + ' VPN program' + (n === 1 ? '' : 's') + '.';
+      return refreshTab('history');
+    });
+  }).catch(() => { histVpnMsg = 'Could not reach NetScope.'; return refreshTab('history'); });
 }
 
 function removeExclusion(kind, pattern){

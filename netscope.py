@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.28.4"
+VERSION = "1.29.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3109,6 +3109,15 @@ class Handler(BaseHTTPRequestHandler):
                 gone = (h.purge(body.get("kind"), body.get("pattern"))
                         if h else {"usage": 0, "hosts": 0, "alerts": 0})
                 return self._send(200, {"status": self.status(), "purged": gone})
+            elif action == "history_vpn":
+                h = self.app.history
+                if not h:
+                    return self._send(200, {"status": self.status(),
+                                            "vpn": {"programs": {}, "usage": 0}})
+                if not body.get("dry"):
+                    h.flush()
+                return self._send(200, {"status": self.status(),
+                                        "vpn": h.purge_vpn(dry=bool(body.get("dry")))})
             elif action == "history_retain":
                 h = self.app.history
                 if h:
