@@ -23,6 +23,7 @@ normalised so both directions land in the same bucket.
 from __future__ import annotations
 
 import socket
+import threading
 import time
 from collections import OrderedDict
 
@@ -111,9 +112,13 @@ def _quality(f, rec, now):
             if plen:
                 end = seq + plen
                 prev = f["_next"].get(direction)
-                if prev is not None and end <= prev:
+                # Sequence numbers wrap at 2**32; comparing them as plain
+                # integers made every segment after the wrap look like old
+                # ground, and the counter then ran away for the whole flow.
+                ahead = (end - prev) & 0xFFFFFFFF if prev is not None else 1
+                if prev is not None and (ahead == 0 or ahead >= 1 << 31):
                     f["resent"] += 1
-                elif prev is None or end > prev:
+                else:
                     f["_next"][direction] = end
             else:
                 # A bare ACK repeating the last one is the classic loss signal.
@@ -157,6 +162,9 @@ class FlowTable:
 
     def __init__(self, max_flows=MAX_FLOWS):
         self._flows = OrderedDict()
+        # The capture thread mutates the table while the dashboard thread
+        # copies it; copying an OrderedDict mid-change can raise.
+        self._lock = threading.Lock()
         self.max_flows = max_flows
         self._last_prune = 0.0
 
@@ -175,6 +183,10 @@ class FlowTable:
         iface = rec.get("iface") or ""
         key = flow_key(proto, rec.get("src"), sport, rec.get("dst"), dport, iface)
 
+        with self._lock:
+            self._observe(rec, key, proto, iface, sport, dport)
+
+    def _observe(self, rec, key, proto, iface, sport, dport):
         now = rec.get("ts") or time.time()
         f = self._flows.get(key)
         if f is None:
@@ -237,10 +249,12 @@ class FlowTable:
         return self._flows.get(key)
 
     def snapshot(self):
-        return dict(self._flows)
+        with self._lock:
+            return dict(self._flows)
 
     def clear(self):
-        self._flows.clear()
+        with self._lock:
+            self._flows.clear()
 
 
 class SocketTable:

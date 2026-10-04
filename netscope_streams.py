@@ -15,13 +15,13 @@ contents are ciphertext, and there is nothing to extract.
 
 from __future__ import annotations
 
-import gzip
 import os
 import re
 import threading
 import time
 import zlib
 from collections import OrderedDict
+from urllib.parse import unquote
 
 # Caps, so a big download can't eat the machine.
 MAX_STREAMS = 400
@@ -220,6 +220,14 @@ class StreamTracker:
         key = frozenset(((src, sport), (dst, dport)))
         with self._lock:
             st = self._streams.get(key)
+            if (st is not None and st.closed and "S" in flags
+                    and "A" not in flags):
+                # A fresh SYN on a closed connection's 4-tuple is a new
+                # connection reusing the ports. Folding it into the old one
+                # mixed two sequence spaces. The old stream keeps its id and
+                # stays listed, under a key nothing will look up again.
+                self._streams[(key, st.id)] = self._streams.pop(key)
+                st = None
             if st is None:
                 # SYN without ACK marks the true client; otherwise first seen wins.
                 self._next += 1
@@ -314,16 +322,23 @@ def _decode_chunked(buf: bytes, pos: int):
             return bytes(body), pos
 
 
+def _inflate(data: bytes, wbits: int):
+    # Bounded: a few KB of gzip can expand to gigabytes, and this runs on
+    # whatever the network sends. One byte over the limit is enough for the
+    # caller to know it was cut.
+    return zlib.decompressobj(wbits).decompress(data, MAX_SINGLE_OBJECT + 1)
+
+
 def _decompress(data: bytes, encoding: str):
     enc = (encoding or "").lower()
     try:
         if "gzip" in enc or "x-gzip" in enc:
-            return gzip.decompress(data)
+            return _inflate(data, 31)
         if "deflate" in enc:
             try:
-                return zlib.decompress(data)
+                return _inflate(data, 15)
             except zlib.error:
-                return zlib.decompress(data, -15)
+                return _inflate(data, -15)
         if "br" in enc:
             try:
                 import brotli  # optional
@@ -437,7 +452,11 @@ def _multipart_files(body: bytes, ctype: str):
         fm = re.search(r'filename="([^"]*)"', disp)
         if not fm or not fm.group(1):
             continue
-        out.append((fm.group(1), ptype, data.rstrip(b"\r\n-")))
+        # Exactly the CRLF that precedes the next boundary, and nothing else:
+        # stripping any of "\r", "\n", "-" ate a file's own trailing newline.
+        if data.endswith(b"\r\n"):
+            data = data[:-2]
+        out.append((fm.group(1), ptype, data))
     return out
 
 
@@ -488,6 +507,8 @@ def extract_objects(stream: TCPStream):
         fm = re.search(r'filename\*?="?([^";]+)"?', cd)
         if fm:
             name = fm.group(1)
+            if "''" in name:            # RFC 5987: filename*=UTF-8''my%20file
+                name = unquote(name.split("''", 1)[1])
         req = reqs[i] if i < len(reqs) else None
         if not name and req:
             name = os.path.basename(req["path"].split("?")[0])
@@ -621,15 +642,15 @@ class ObjectScanner(threading.Thread):
         self.tracker = tracker
         self.store = store
         self.interval = interval
-        self._stop = threading.Event()
+        self._halt = threading.Event()
         self.enabled = True
         self.errors = 0
 
     def stop(self):
-        self._stop.set()
+        self._halt.set()
 
     def run(self):
-        while not self._stop.wait(self.interval):
+        while not self._halt.wait(self.interval):
             if self.enabled:
                 self.scan_once()
 

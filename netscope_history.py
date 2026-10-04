@@ -32,6 +32,9 @@ DEFAULT_ALERT_RETAIN_DAYS = 30
 # 1.26.0: everything already on a schedule then is learned, not reported. A
 # day, because an hourly check-in needs five hours to be recognised at all.
 CHECKIN_BASELINE = 86400.0
+# Alerts kept in memory if the database keeps refusing writes, so a full disk
+# can't also fill the machine's memory.
+MAX_PENDING_ALERTS = 5000
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -143,27 +146,43 @@ def load_settings():
         return {}
 
 
+_settings_lock = threading.Lock()
+
+
 def save_setting(key, value):
     """Remember a choice so it does not have to be made again every launch."""
     try:
         import json
-        cur = load_settings()
-        if cur.get(key) == value:
-            return
-        cur[key] = value
-        folder = os.path.dirname(settings_path())
-        os.makedirs(folder, exist_ok=True)
-        tmp = settings_path() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(cur, fh, indent=1)
-        os.replace(tmp, settings_path())
+        # Read-modify-write: two requests changing different settings at once
+        # would otherwise each write back a file missing the other's change.
+        with _settings_lock:
+            cur = load_settings()
+            if cur.get(key) == value:
+                return
+            cur[key] = value
+            folder = os.path.dirname(settings_path())
+            os.makedirs(folder, exist_ok=True)
+            tmp = settings_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(cur, fh, indent=1)
+            os.replace(tmp, settings_path())
     except Exception:
         pass
 
 
+_dh_cache = (None, None)
+
+
 def _day_hour(ts):
-    dt = datetime.fromtimestamp(ts)
-    return dt.strftime("%Y-%m-%d"), dt.hour
+    # Called for every packet, and a second holds many of them.
+    global _dh_cache
+    sec = int(ts)
+    if _dh_cache[0] == sec:
+        return _dh_cache[1]
+    dt = datetime.fromtimestamp(sec)
+    out = (dt.strftime("%Y-%m-%d"), dt.hour)
+    _dh_cache = (sec, out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +629,40 @@ class HistoryStore:
             self._known_hosts.update(hosts)
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
+            # Nothing from this batch reached the disk, and a half-applied
+            # transaction would be committed by whatever writes next. Undo it
+            # and put the batch back for the next flush.
+            try:
+                with self._db_lock:
+                    self._db.rollback()
+            except Exception:
+                pass
+            self._requeue(acc, procs, hosts, alerts, leases)
+
+    def _requeue(self, acc, procs, hosts, alerts, leases):
+        with self._lock:
+            for k, v in acc.items():
+                slot = self._acc.setdefault(k, [0, 0, 0])
+                for i in range(3):
+                    slot[i] += v[i]
+            for table, data in ((self._procs, procs), (self._hosts, hosts)):
+                for k, v in data.items():
+                    row = table.get(k)
+                    if row is None:
+                        table[k] = v
+                    else:
+                        row[0] = min(row[0], v[0])
+                        row[1] = max(row[1], v[1])
+                        for i in (2, 3, 4):
+                            row[i] += v[i]
+            self._pending_alerts[:0] = alerts
+            self._pending_leases[:0] = leases
+            extra = len(self._pending_alerts) - MAX_PENDING_ALERTS
+            if extra > 0:
+                del self._pending_alerts[:extra]
+            extra = len(self._pending_leases) - MAX_PENDING_ALERTS
+            if extra > 0:
+                del self._pending_leases[:extra]
 
     def prune(self):
         if not self.enabled or self._db is None:

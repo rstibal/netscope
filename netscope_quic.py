@@ -247,6 +247,13 @@ class InitialReassembler:
     test passed.
     """
 
+    # A real ClientHello is a few KB in two or three fragments. Initial keys
+    # come from a connection ID the sender picks, so anyone can send packets
+    # this decrypts; without a limit, endless fragments at new offsets grow
+    # the table and make every join_chunks() re-sort all of them.
+    MAX_FRAGMENTS = 32
+    MAX_BYTES = 64 * 1024
+
     def __init__(self, max_conns=512, ttl=30.0):
         self._conns = OrderedDict()          # dcid -> {"chunks": {}, "ts": t, "done": bool}
         self.max_conns = max_conns
@@ -274,6 +281,11 @@ class InitialReassembler:
             if entry["done"]:
                 return None, False
             entry["chunks"].update(chunks)
+            if (len(entry["chunks"]) > self.MAX_FRAGMENTS
+                    or sum(map(len, entry["chunks"].values())) > self.MAX_BYTES):
+                entry["chunks"] = {}
+                entry["done"] = True        # not a ClientHello; stop collecting
+                return None, False
             buf = join_chunks(entry["chunks"])
             if buf and handshake_complete(buf):
                 entry["done"] = True

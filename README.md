@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.27.3**
+**Version 1.27.4**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,24 @@ names.
 ---
 
 ## Version history
+
+**1.27.4** — A round of bug fixes. **Security:** desktop notifications built
+a PowerShell command with the alert text quoted into it, and PowerShell
+treats the curly quotes as quote characters too, so a hostname, share path or
+filename crafted by something on the network could end the string and run its
+own commands, in a process that is usually elevated. The text now travels in
+environment variables and never becomes part of the script. Also fixed:
+extracted multipart uploads lost their own trailing newline (and any trailing
+`-`); a small gzip body could expand to gigabytes (decompression is now
+bounded); a new connection reusing a closed one's ports was folded into the
+old stream; the connection table could fail a poll while the capture
+changed it, and counted every segment after a TCP sequence wrap as a
+retransmission; a failed history write lost that batch and could leave a
+half-written transaction behind (it is now rolled back and retried); two
+settings saved at once could drop one; a flood of one-off scanners and a
+stream of QUIC fragments could each grow without limit; and a malformed
+number or a negative or oversized request body now gets a 400 instead of
+dropping or hanging the connection.
 
 **1.27.3** — A NetScope left running for days no longer grows without limit.
 The running per-program and per-address totals and the learned-name table

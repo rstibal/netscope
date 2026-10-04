@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.27.3"
+VERSION = "1.27.4"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2631,7 +2631,39 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routes --------------------------------------------------------------
 
+    # Largest request bodies accepted. A saved capture can be big; a control
+    # message never is.
+    MAX_IMPORT_BYTES = 512 * 1024 * 1024
+    MAX_JSON_BYTES = 1024 * 1024
+
+    def _guarded(self, route):
+        """
+        Run a route so a bad request gets an answer. A non-numeric id or
+        Content-Length used to raise out of the handler, which closed the
+        connection with nothing sent: the dashboard just saw a failed poll.
+        """
+        try:
+            route()
+        except (ValueError, TypeError, KeyError):
+            self._send(400, {"error": "bad request"})
+        except Exception:
+            self._send(500, {"error": "internal error"})
+
     def do_GET(self):
+        self._guarded(self._get)
+
+    def do_POST(self):
+        self._guarded(self._post)
+
+    def _body_length(self, limit):
+        """Content-Length, validated. A negative one made rfile.read() wait
+        for the client to disconnect."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length < 0 or length > limit:
+            raise ValueError("body size")
+        return length
+
+    def _get(self):
         if not self._host_ok():
             return self._send(403, {"error": "localhost only"})
         u = urlparse(self.path)
@@ -2888,16 +2920,15 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "not found"})
 
-    def do_POST(self):
+    def _post(self):
         if not self._host_ok():
             return self._send(403, {"error": "localhost only"})
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         if not self._authed(qs):
             return self._send(403, {"error": "bad token"})
-        length = int(self.headers.get("Content-Length") or 0)
-
         if u.path == "/api/import":
+            length = self._body_length(self.MAX_IMPORT_BYTES)
             raw = self.rfile.read(length) if length else b""
             if not raw:
                 return self._send(400, {"error": "no file received"})
@@ -2916,9 +2947,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {
                 "loaded": n, "name": self.app.source, "status": self.status()})
 
+        length = self._body_length(self.MAX_JSON_BYTES)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
+            body = {}
+        if not isinstance(body, dict):
             body = {}
 
         if u.path == "/api/control":

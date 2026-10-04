@@ -51,6 +51,10 @@ SCAN_OUT_IGNORE_PORTS = {80, 443}
 # coming back to it are recognised as replies rather than probes.
 UDP_REPLY_TTL = 120.0
 UDP_SENT_MAX = 5000
+# Remote hosts tracked for an inbound scan at once. A window is only trimmed
+# when its own host sends again, so an internet-facing machine would otherwise
+# keep one for every one-off scanner that ever knocked.
+SCAN_PEERS_MAX = 2000
 
 # Ports whose traffic is unencrypted by definition.
 CLEARTEXT_PORTS = {
@@ -262,12 +266,7 @@ class DesktopNotifier:
         self._last = 0.0
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _ps_quote(s):
-        return str(s).replace("'", "''")[:200]
-
     def notify(self, title, message):
-        import os
         if not self.enabled or os.name != "nt":
             return
         with self._lock:
@@ -277,27 +276,43 @@ class DesktopNotifier:
         threading.Thread(target=self._send, args=(title, message),
                          daemon=True, name="toast").start()
 
+    # A constant script. The title and message come off the network (a
+    # hostname, a share path, a filename) and reach here unfiltered, so they
+    # travel in environment variables and are never part of the script text:
+    # quoting them into it was breakable, since PowerShell treats the curly
+    # quotes U+2018 to U+201B as quote characters too, which let a crafted name
+    # end the string and run its own commands, in a process that is usually
+    # elevated.
+    SCRIPT = (
+        "[void][Windows.UI.Notifications.ToastNotificationManager,"
+        "Windows.UI.Notifications,ContentType=WindowsRuntime];"
+        "[void][Windows.UI.Notifications.ToastNotification,"
+        "Windows.UI.Notifications,ContentType=WindowsRuntime];"
+        "[void][Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,"
+        "ContentType=WindowsRuntime];"
+        "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+        "$n=$t.GetElementsByTagName('text');"
+        "$n.Item(0).AppendChild($t.CreateTextNode($env:NS_TOAST_TITLE))|Out-Null;"
+        "$n.Item(1).AppendChild($t.CreateTextNode($env:NS_TOAST_BODY))|Out-Null;"
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+        "'" + APPID + "').Show("
+        "[Windows.UI.Notifications.ToastNotification]::new($t))"
+    )
+
+    def _command(self, title, message):
+        """(argv, environment) for one toast. Split out so it is testable."""
+        env = dict(os.environ)
+        env["NS_TOAST_TITLE"] = str(title)[:200]
+        env["NS_TOAST_BODY"] = str(message)[:200]
+        return (["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 self.SCRIPT], env)
+
     def _send(self, title, message):
-        script = (
-            "[void][Windows.UI.Notifications.ToastNotificationManager,"
-            "Windows.UI.Notifications,ContentType=WindowsRuntime];"
-            "[void][Windows.UI.Notifications.ToastNotification,"
-            "Windows.UI.Notifications,ContentType=WindowsRuntime];"
-            "[void][Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,"
-            "ContentType=WindowsRuntime];"
-            "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-            "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
-            "$n=$t.GetElementsByTagName('text');"
-            f"$n.Item(0).AppendChild($t.CreateTextNode('{self._ps_quote(title)}'))|Out-Null;"
-            f"$n.Item(1).AppendChild($t.CreateTextNode('{self._ps_quote(message)}'))|Out-Null;"
-            f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-            f"'{self.APPID}').Show("
-            "[Windows.UI.Notifications.ToastNotification]::new($t))"
-        )
+        argv, env = self._command(title, message)
         try:
             subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                timeout=12, capture_output=True,
+                argv, timeout=12, capture_output=True, env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             self.available = True
         except Exception:
@@ -920,7 +935,13 @@ class AlertEngine:
         if inbound:
             if not peer:
                 return
-            win = self._scan_inbound.setdefault(peer, deque())
+            win = self._scan_inbound.get(peer)
+            if win is None:
+                if len(self._scan_inbound) >= SCAN_PEERS_MAX:
+                    self._sweep_scans(now)
+                    if len(self._scan_inbound) >= SCAN_PEERS_MAX:
+                        return      # a flood from this many sources at once
+                win = self._scan_inbound[peer] = deque()
             win.append((now, dport))
             self._prune_window(win, now)
             distinct = {p for _, p in win}
@@ -959,6 +980,12 @@ class AlertEngine:
             if len(self._udp_sent) > UDP_SENT_MAX:
                 keep = sorted(self._udp_sent.items(), key=lambda kv: kv[1])
                 self._udp_sent = dict(keep[len(keep) // 2:])
+
+    def _sweep_scans(self, now):
+        """Forget hosts whose last attempt has aged out of the window."""
+        for peer in [p for p, w in self._scan_inbound.items()
+                     if not w or now - w[-1][0] > SCAN_WINDOW_SECS]:
+            del self._scan_inbound[peer]
 
     @staticmethod
     def _prune_window(win, now):
