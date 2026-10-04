@@ -18,6 +18,7 @@ ignored, so this never arms a data connection for anything but a download.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 
 # 227 (PASV) and its close cousins all end in "(a,b,c,d,p1,p2)". Active mode
@@ -44,8 +45,25 @@ SWEEP_INTERVAL = 5.0
 
 
 def _addr(nums: bytes):
-    a, b, c, d, p1, p2 = (int(n) for n in nums.split(b","))
+    """(ip, port) from "a,b,c,d,p1,p2", or None if it is not six bytes. Whatever
+    a server or client writes into the control channel lands here, and a
+    malformed reply must not raise out of the packet decoder."""
+    try:
+        parts = [int(n) for n in nums.split(b",")]
+    except ValueError:
+        return None
+    if len(parts) != 6 or any(not 0 <= n <= 255 for n in parts):
+        return None
+    a, b, c, d, p1, p2 = parts
     return f"{a}.{b}.{c}.{d}", p1 * 256 + p2
+
+
+def _unroutable(ip):
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return True
+    return addr.is_private or addr.is_unspecified or addr.is_loopback
 
 
 class FTPCorrelator:
@@ -86,12 +104,16 @@ class FTPCorrelator:
                 line = line.strip()
                 m = PORT_RE.match(line)
                 if m:
-                    self._negotiate(ckey, *_addr(m.group(1)), "receiver", ts)
+                    got = _addr(m.group(1))
+                    if got:
+                        self._negotiate(ckey, got[0], got[1], "receiver", ts)
                     continue
                 m = EPRT_RE.match(line)
                 if m:
-                    self._negotiate(ckey, m.group(2).decode("latin-1"),
-                                    int(m.group(3)), "receiver", ts)
+                    port = int(m.group(3))
+                    if 0 < port < 65536:
+                        self._negotiate(ckey, m.group(2).decode("latin-1"),
+                                        port, "receiver", ts)
                     continue
                 m = RETR_RE.match(line)
                 if m:
@@ -105,11 +127,23 @@ class FTPCorrelator:
         else:
             m = PASV_RE.search(payload)
             if m:
-                self._negotiate(ckey, *_addr(m.group(1)), "sender", ts)
+                got = _addr(m.group(1))
+                if got:
+                    ip, port = got
+                    # A server behind NAT announces its private address, which
+                    # no client can reach and none tries: they connect to the
+                    # address the control connection went to. So the data
+                    # connection never matched what was armed, and the
+                    # download was never extracted.
+                    if ip != src and _unroutable(ip) and not _unroutable(src):
+                        ip = src
+                    self._negotiate(ckey, ip, port, "sender", ts)
                 return
             m = EPSV_RE.search(payload)
             if m:
-                self._negotiate(ckey, src, int(m.group(2)), "sender", ts)
+                port = int(m.group(2))
+                if 0 < port < 65536:
+                    self._negotiate(ckey, src, port, "sender", ts)
 
     def _negotiate(self, ckey, ip, port, role, ts):
         """role says which end of the file transfer (ip, port) is: PASV/EPSV

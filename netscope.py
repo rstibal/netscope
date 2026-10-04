@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.28.0"
+VERSION = "1.28.1"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -860,6 +860,9 @@ class ReverseResolver:
 
 
 class CaptureEngine:
+    # Packets a decoder raised on. They are kept, flagged in Info, and counted.
+    decode_errors = 0
+
     _ifaces_read = 0.0          # last OS re-read, shared across instances
     def __init__(self, store: PacketStore, resolver: ProcessResolver,
                  streams: StreamTracker = None, alerts: AlertEngine = None,
@@ -1400,118 +1403,136 @@ class CaptureEngine:
         hint = ""
         host_hint = ""
         ftp_meta = None
-        if payload:
-            self.ftp.sweep(ts)
-            if 21 in (sport, dport):
-                self.ftp.observe_control(src, sport, dst, dport, payload,
-                                         dport == 21, ts)
-                proto = "FTP"
-                hint = "FTP"
-                info = payload.split(b"\r\n", 1)[0].decode("latin-1", "replace")[:200]
-            if not hint:
-                ftp_meta = self.ftp.match_data(src, sport, dst, dport)
-                if ftp_meta:
-                    proto = "FTP-DATA"
-                    hint = "FTP-DATA"
-                    info = f"FTP data: {ftp_meta['name']}"
-            if not hint and 445 in (sport, dport):
-                smb = self.smb.parse(payload)
-                if smb:
-                    proto = "SMB2" if smb["messages"][0].get("dialect") != "SMB1" else "SMB"
-                    decoded["smb"] = smb
-                    info = smb["summary"]
-                    hint = "SMB"
-            if not hint and transport == "udp" and ({67, 68} & {sport, dport}):
-                d = self.dhcp.observe(payload, ts)
+        try:
+            if payload:
+                self.ftp.sweep(ts)
+                if 21 in (sport, dport):
+                    self.ftp.observe_control(src, sport, dst, dport, payload,
+                                             dport == 21, ts)
+                    proto = "FTP"
+                    hint = "FTP"
+                    info = payload.split(b"\r\n", 1)[0].decode("latin-1", "replace")[:200]
+                if not hint:
+                    ftp_meta = self.ftp.match_data(src, sport, dst, dport)
+                    if ftp_meta:
+                        proto = "FTP-DATA"
+                        hint = "FTP-DATA"
+                        info = f"FTP data: {ftp_meta['name']}"
+                if not hint and 445 in (sport, dport):
+                    smb = self.smb.parse(payload)
+                    if smb:
+                        proto = "SMB2" if smb["messages"][0].get("dialect") != "SMB1" else "SMB"
+                        decoded["smb"] = smb
+                        info = smb["summary"]
+                        hint = "SMB"
+                if not hint and transport == "udp" and ({67, 68} & {sport, dport}):
+                    d = self.dhcp.observe(payload, ts)
+                    if d:
+                        proto = "DHCP"
+                        hint = "DHCP"
+                        decoded["dhcp"] = d
+                        info = dhcp_summary(d)
+                        # A DISCOVER/REQUEST names the client machine before it has
+                        # sent a single other packet — worth remembering against
+                        # the address DHCP is about to hand it, the same way a TLS
+                        # SNI or a DNS answer teaches the store a hostname.
+                        lease_ip = d.get("your_ip") or d.get("requested_ip")
+                        if d.get("hostname") and lease_ip:
+                            self.store.note_host(lease_ip, d["hostname"])
+                        if d["msg_type"] == "ACK" and self.history is not None:
+                            lease = self.dhcp.latest(d["mac"])
+                            if lease:
+                                self.history.record_dhcp_lease(lease)
+                if not hint and transport == "udp" and 137 in (sport, dport):
+                    nb = parse_nbns(payload)
+                    if nb:
+                        proto = "NBNS"
+                        hint = "NBNS"
+                        decoded["nbns"] = nb
+                        info = nbns_summary(nb)
+                        # Only a registration/refresh (a host claiming a name for
+                        # itself) or a positive query response (an explicit
+                        # name -> address answer) says whose name this is. A
+                        # plain broadcast query does not, and parse_nbns() leaves
+                        # that judgment to us rather than guessing.
+                        if nb["ips"] and (nb["opcode"] in ("registration", "refresh")
+                                         or (nb["opcode"] == "query" and nb["response"])):
+                            for ip in nb["ips"]:
+                                self.store.note_host(ip, nb["name"])
+                if not hint:
+                    tls = decode_tls(payload)
+                    if tls:
+                        proto = "TLS"
+                        hint = "TLS"
+                        decoded["tls"] = tls
+                        bits = [tls["record"], tls.get("version", "")]
+                        if tls.get("handshake"):
+                            bits.append(tls["handshake"])
+                        if tls.get("sni"):
+                            bits.append(f"→ {tls['sni']}")
+                            host_hint = tls["sni"]
+                        info = "  ".join(b for b in bits if b)
+                    else:
+                        http = decode_http(payload)
+                        if http:
+                            proto = "HTTP"
+                            hint = "HTTP"
+                            decoded["http"] = http
+                            host_hint = http["headers"].get("Host", "")
+                            info = http["start_line"] + (
+                                f"   [{host_hint}]" if host_hint else "")
+
+                # QUIC rides on UDP and carries a recoverable hostname in its
+                # Initial packet — without this, HTTP/3 traffic is just "UDP 443".
+                if not hint and transport == "udp":
+                    qinfo = parse_quic(payload, sport, dport, reassembler=self.quic)
+                    if qinfo:
+                        proto = "QUIC"
+                        hint = "QUIC"
+                        decoded["quic"] = qinfo
+                        info = quic_summary(qinfo)
+                        if qinfo.get("sni"):
+                            host_hint = qinfo["sni"]
+        except Exception:
+            # A decoder tripping on a malformed packet must not make the
+            # packet disappear: _on_packet drops anything _build raises
+            # out of, and a packet crafted to break a parser would then be
+            # the one thing the monitor never showed. Keep what was learned
+            # so far and say so.
+            self.decode_errors += 1
+            info = (info + '  ' if info else '') + '[application decode error]'
+
+        try:
+            if DNS in pkt:
+                d = decode_dns(pkt[DNS])
                 if d:
-                    proto = "DHCP"
-                    hint = "DHCP"
-                    decoded["dhcp"] = d
-                    info = dhcp_summary(d)
-                    # A DISCOVER/REQUEST names the client machine before it has
-                    # sent a single other packet — worth remembering against
-                    # the address DHCP is about to hand it, the same way a TLS
-                    # SNI or a DNS answer teaches the store a hostname.
-                    lease_ip = d.get("your_ip") or d.get("requested_ip")
-                    if d.get("hostname") and lease_ip:
-                        self.store.note_host(lease_ip, d["hostname"])
-                    if d["msg_type"] == "ACK" and self.history is not None:
-                        lease = self.dhcp.latest(d["mac"])
-                        if lease:
-                            self.history.record_dhcp_lease(lease)
-            if not hint and transport == "udp" and 137 in (sport, dport):
-                nb = parse_nbns(payload)
-                if nb:
-                    proto = "NBNS"
-                    hint = "NBNS"
-                    decoded["nbns"] = nb
-                    info = nbns_summary(nb)
-                    # Only a registration/refresh (a host claiming a name for
-                    # itself) or a positive query response (an explicit
-                    # name -> address answer) says whose name this is. A
-                    # plain broadcast query does not, and parse_nbns() leaves
-                    # that judgment to us rather than guessing.
-                    if nb["ips"] and (nb["opcode"] in ("registration", "refresh")
-                                     or (nb["opcode"] == "query" and nb["response"])):
-                        for ip in nb["ips"]:
-                            self.store.note_host(ip, nb["name"])
-            if not hint:
-                tls = decode_tls(payload)
-                if tls:
-                    proto = "TLS"
-                    hint = "TLS"
-                    decoded["tls"] = tls
-                    bits = [tls["record"], tls.get("version", "")]
-                    if tls.get("handshake"):
-                        bits.append(tls["handshake"])
-                    if tls.get("sni"):
-                        bits.append(f"→ {tls['sni']}")
-                        host_hint = tls["sni"]
-                    info = "  ".join(b for b in bits if b)
-                else:
-                    http = decode_http(payload)
-                    if http:
-                        proto = "HTTP"
-                        hint = "HTTP"
-                        decoded["http"] = http
-                        host_hint = http["headers"].get("Host", "")
-                        info = http["start_line"] + (
-                            f"   [{host_hint}]" if host_hint else "")
-
-            # QUIC rides on UDP and carries a recoverable hostname in its
-            # Initial packet — without this, HTTP/3 traffic is just "UDP 443".
-            if not hint and transport == "udp":
-                qinfo = parse_quic(payload, sport, dport, reassembler=self.quic)
-                if qinfo:
-                    proto = "QUIC"
-                    hint = "QUIC"
-                    decoded["quic"] = qinfo
-                    info = quic_summary(qinfo)
-                    if qinfo.get("sni"):
-                        host_hint = qinfo["sni"]
-
-        if DNS in pkt:
-            d = decode_dns(pkt[DNS])
-            if d:
-                proto = "DNS"
-                decoded["dns"] = d
-                info = _dns_info(d)
-                if d["response"]:
-                    self.store.note_dns(d["answers"])
-        elif payload and transport == "udp" and ({5353, 5355} & {sport, dport}):
-            # mDNS and LLMNR are DNS-message-format-compatible, just on ports
-            # scapy doesn't bind the DNS layer to -- build one from the raw
-            # bytes instead of relying on scapy's own dissection.
-            try:
-                d = decode_dns(DNS(payload))
-            except Exception:
-                d = None
-            if d and (d["queries"] or d["answers"]):
-                proto = "MDNS" if 5353 in (sport, dport) else "LLMNR"
-                decoded["dns"] = d
-                info = _dns_info(d)
-                if d["response"]:
-                    self.store.note_dns(d["answers"])
+                    proto = "DNS"
+                    decoded["dns"] = d
+                    info = _dns_info(d)
+                    if d["response"]:
+                        self.store.note_dns(d["answers"])
+            elif payload and transport == "udp" and ({5353, 5355} & {sport, dport}):
+                # mDNS and LLMNR are DNS-message-format-compatible, just on ports
+                # scapy doesn't bind the DNS layer to -- build one from the raw
+                # bytes instead of relying on scapy's own dissection.
+                try:
+                    d = decode_dns(DNS(payload))
+                except Exception:
+                    d = None
+                if d and (d["queries"] or d["answers"]):
+                    proto = "MDNS" if 5353 in (sport, dport) else "LLMNR"
+                    decoded["dns"] = d
+                    info = _dns_info(d)
+                    if d["response"]:
+                        self.store.note_dns(d["answers"])
+        except Exception:
+            # A decoder tripping on a malformed packet must not make the
+            # packet disappear: _on_packet drops anything _build raises
+            # out of, and a packet crafted to break a parser would then be
+            # the one thing the monitor never showed. Keep what was learned
+            # so far and say so.
+            self.decode_errors += 1
+            info = (info + '  ' if info else '') + '[DNS decode error]'
 
         pname, pid, direction = self.resolver.lookup(
             sport, dport, transport or "tcp", src, dst)

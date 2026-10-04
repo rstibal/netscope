@@ -39,16 +39,20 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
         why.slice(0,70));
 
   // mute the first alert's subject
-  const before = await p.evaluate(()=>document.querySelectorAll('#p-alerts .alert').length);
+  // The demo keeps raising new alerts while this runs, so row counts before
+  // and after can match when one went and another arrived. Check the alert
+  // that was muted instead: nothing for its subject should be left.
   await p.click('#p-alerts [data-mute]');
   await p.waitForTimeout(1200);
-  const after = await p.evaluate(()=>({
-    n: document.querySelectorAll('#p-alerts .alert').length,
+  // (rule, subject): another rule may still have its own alert for the subject.
+  const after = await p.evaluate(([rule, subj])=>({
+    left: [...document.querySelectorAll('#p-alerts .alert [data-mute]')]
+            .filter(b=>b.dataset.mute===rule && b.dataset.subject===subj).length,
     mutes: [...document.querySelectorAll('#p-alerts .mute')].map(m=>m.querySelector('.s').textContent),
-  }));
+  }), [first.rule, first.mute]);
   check('the muted subject is listed where you can see it',
         after.mutes.includes(first.mute), JSON.stringify(after.mutes));
-  check('its alert is gone from the list', after.n < before, `${before} -> ${after.n}`);
+  check('its alert is gone from the list', after.left === 0, `${after.left} left for ${first.rule}/${first.mute}`);
 
   // the API agrees, and the rule is still enabled
   const api = await p.evaluate(async ()=> (await (await api2('/api/alerts')).json()),
@@ -67,12 +71,17 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
         JSON.stringify(api2r.mutes));
 
   // dismiss removes exactly one
+  // By id, for the same reason as above: a new alert may arrive meanwhile.
+  const dismissId = await p.evaluate(()=>{
+    const b = document.querySelector('#p-alerts [data-dismiss]'); return b ? b.dataset.dismiss : null; });
   const n0 = await p.evaluate(()=>document.querySelectorAll('#p-alerts .alert').length);
-  if (n0 > 1){
-    await p.click('#p-alerts [data-dismiss]');
+  if (n0 > 1 && dismissId){
+    await p.click('#p-alerts [data-dismiss="'+dismissId+'"]');
     await p.waitForTimeout(1000);
-    const n1 = await p.evaluate(()=>document.querySelectorAll('#p-alerts .alert').length);
-    check('dismiss removes one alert', n1 === n0 - 1, `${n0} -> ${n1}`);
+    const still = await p.evaluate((id)=>document.querySelectorAll('#p-alerts [data-dismiss="'+id+'"]').length, dismissId);
+    const others = await p.evaluate(()=>document.querySelectorAll('#p-alerts .alert').length);
+    check('dismiss removes that alert', still === 0, `alert ${dismissId} still listed`);
+    check('...and not all of them', others > 0, String(others));
   } else { check('dismiss removes one alert (skipped, only one alert)', true); }
 
 

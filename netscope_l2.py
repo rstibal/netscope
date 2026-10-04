@@ -172,7 +172,8 @@ LLC_SAPS = {
     0xAA: ("SNAP", None),
 }
 
-STP_TYPES = {0x00: "configuration BPDU", 0x80: "topology change notification"}
+STP_TYPES = {0x00: "configuration BPDU", 0x02: "rapid spanning tree BPDU",
+             0x80: "topology change notification"}
 
 # Multicast MACs worth naming on sight.
 KNOWN_MACS = {
@@ -206,14 +207,18 @@ def is_multicast_mac(mac):
 
 def _stp_info(body: bytes):
     try:
-        if len(body) < 35:
+        if len(body) < 4:
             return "Spanning Tree"
-        bpdu_type = body[4]
+        # Protocol id (2), version (1), type (1), flags (1), then the root
+        # bridge id (priority 2 + MAC 6) and the root path cost (4). The type
+        # used to be read from the flags byte and the root from one byte late.
+        bpdu_type = body[3]
         kind = STP_TYPES.get(bpdu_type, "type 0x%02x" % bpdu_type)
-        if bpdu_type == 0x00 and len(body) >= 35:
-            root = ":".join("%02x" % b for b in body[6:14])
-            cost = struct.unpack("!I", body[13:17])[0] if len(body) >= 17 else 0
-            return f"Spanning Tree · {kind} · root {root} cost {cost}"
+        if bpdu_type in (0x00, 0x02) and len(body) >= 17:
+            prio = struct.unpack("!H", body[5:7])[0]
+            mac = ":".join("%02x" % b for b in body[7:13])
+            cost = struct.unpack("!I", body[13:17])[0]
+            return f"Spanning Tree · {kind} · root {prio}/{mac} cost {cost}"
         return f"Spanning Tree · {kind}"
     except Exception:
         return "Spanning Tree"

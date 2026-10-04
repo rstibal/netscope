@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.28.0**
+**Version 1.28.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,21 @@ names.
 ---
 
 ## Version history
+
+**1.28.1** — Parser fixes. A packet that made a decoder raise was dropped
+outright, so a malformed FTP reply (or anything crafted to trip a parser)
+meant the packet never appeared, was never counted and raised no alerts. It
+is now kept, marked `[… decode error]` in Info, and counted. Also fixed: an
+FTP `227` reply with the wrong number of fields raised; a server behind NAT
+that announces a private address in its PASV reply was never matched to the
+download, so the file wasn't extracted (the address the client actually
+connected to is used instead); Spanning Tree packets read the BPDU type from
+the flags byte and the root bridge one byte late, so a BPDU with the
+topology-change flag set was labelled with a bogus type and the root bridge
+was shown wrongly (it now reads `priority/MAC`); and an SMB CREATE that
+the server answered with an interim "pending" response lost its file name,
+leaving every READ and WRITE on that file unnamed. The alert test was racy
+against the demo's live alerts and is fixed.
 
 **1.28.0** — The By program and By host charts on the History tab no longer
 shrink everything else to a sliver when one entry is far larger than the rest

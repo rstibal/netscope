@@ -34,6 +34,8 @@ COMMANDS = {
     0x11: "SET_INFO", 0x12: "OPLOCK_BREAK",
 }
 
+STATUS_PENDING = 0x00000103     # an interim answer; the real one follows
+
 STATUS = {
     0x00000000: "SUCCESS",
     0x00000103: "PENDING",
@@ -192,7 +194,8 @@ class SmbTracker:
                     _trim(self.pending)
 
             elif cmd == 0x03 and is_resp:            # TREE_CONNECT response
-                path = self.pending.pop(("tree", session, msgid), None)
+                path = (None if status != 0 else
+                        self.pending.pop(("tree", session, msgid), None))
                 if path:
                     self.tree[(session, tree)] = path
                     _trim(self.tree)
@@ -218,14 +221,22 @@ class SmbTracker:
                 _trim(self.pending)
 
             elif cmd == 0x05 and is_resp:            # CREATE response
-                name = self.pending.pop((session, msgid), None)
-                fid = b[body_off + 64:body_off + 80]
-                if name and len(fid) == 16:
-                    self.files[(session, fid)] = name
-                    _trim(self.files)
-                    m["filename"] = name
-                if len(b) >= body_off + 56:
-                    m["size"] = _u64(b, body_off + 48)
+                # Only a successful answer carries a file id. An interim
+                # STATUS_PENDING one (a slow open) used to consume the name,
+                # so the real response that followed had none to give and
+                # every READ and WRITE on that file went unnamed. A failure's
+                # body is an error structure, not a file id.
+                if status == 0:
+                    name = self.pending.pop((session, msgid), None)
+                    fid = b[body_off + 64:body_off + 80]
+                    if name and len(fid) == 16:
+                        self.files[(session, fid)] = name
+                        _trim(self.files)
+                        m["filename"] = name
+                    if len(b) >= body_off + 56:
+                        m["size"] = _u64(b, body_off + 48)
+                elif status != STATUS_PENDING:
+                    self.pending.pop((session, msgid), None)
 
             elif cmd == 0x08 and not is_resp:        # READ request
                 m["length"] = _u32(b, body_off + 4)
