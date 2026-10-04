@@ -329,6 +329,27 @@ def task_status(max_age=_STATUS_TTL):
     return value
 
 
+def _command_from_xml():
+    """
+    What the task runs, read from its XML definition.
+
+    The /V listing's field names are translated on a non-English Windows
+    ("Task To Run" is not what a German or French one calls it), which left the
+    command empty there and so hid the console-build warning. The XML element
+    names are the same everywhere.
+    """
+    import html
+    import re
+    code, out = _run(["schtasks", "/Query", "/TN", TASK_NAME, "/XML"])
+    if code != 0:
+        return ""
+    cmd = re.search(r"<Command>(.*?)</Command>", out, re.S)
+    args = re.search(r"<Arguments>(.*?)</Arguments>", out, re.S)
+    if not cmd:
+        return ""
+    return html.unescape((cmd.group(1) + " " + (args.group(1) if args else "")).strip())
+
+
 def _task_status_uncached():
     if os.name != "nt":
         return {"supported": False, "exists": False, "command": ""}
@@ -343,7 +364,7 @@ def _task_status_uncached():
     return {
         "supported": True,
         "exists": True,
-        "command": info.get("task to run", ""),
+        "command": info.get("task to run", "") or _command_from_xml(),
         "state": info.get("scheduled task state", info.get("status", "")),
         "last_run": info.get("last run time", ""),
         "last_result": info.get("last result", ""),
@@ -351,9 +372,60 @@ def _task_status_uncached():
     }
 
 
+def _admin_only_roots():
+    roots = []
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SystemRoot"):
+        v = os.environ.get(var)
+        if v:
+            roots.append(os.path.normcase(os.path.abspath(v)))
+    return roots
+
+
+def user_writable_task_paths(extra_args=("--tray",)):
+    """
+    The files the logon task will run that someone without administrator
+    rights could replace.
+
+    The task starts them elevated at every logon with no prompt, so a file in
+    a folder the user can write to is a way for anything running as that user
+    to get itself run as an administrator. Only a location that needs
+    elevation to change (Program Files, the Windows folder) is exempt.
+    """
+    exe, args, _workdir = _exe_and_args(extra_args)
+    paths = [exe]
+    if not getattr(sys, "frozen", False):
+        paths.append(os.path.abspath(sys.argv[0]))          # the script itself
+    roots = _admin_only_roots()
+    out = []
+    for p in paths:
+        n = os.path.normcase(os.path.abspath(p))
+        if not any(n == r or n.startswith(r + os.sep) for r in roots):
+            out.append(p)
+    return out
+
+
+def _make_xml_file():
+    """
+    (fd, path) for the task definition, written before schtasks reads it.
+
+    Not the user's temp folder: any program running as the user can change a
+    file there between our writing it and the elevated schtasks reading it,
+    and would then be registering its own task with administrator rights. The
+    Windows temp folder takes an elevated process to modify, and this one is
+    elevated by the time it gets here. If it cannot be created there (os.access
+    cannot be trusted to say, on Windows: it ignores permissions), fall back to
+    the default rather than fail.
+    """
+    import tempfile
+    d = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Temp")
+    try:
+        return tempfile.mkstemp(suffix=".xml", dir=d)
+    except OSError:
+        return tempfile.mkstemp(suffix=".xml")
+
+
 def install_task(extra_args=("--tray",)):
     """Register the logon task. Needs an elevated process."""
-    import tempfile
     from xml.sax.saxutils import escape
 
     if os.name != "nt":
@@ -374,7 +446,7 @@ def install_task(extra_args=("--tray",)):
     path = None
     try:
         # schtasks /XML insists on UTF-16.
-        fd, path = tempfile.mkstemp(suffix=".xml")
+        fd, path = _make_xml_file()
         with os.fdopen(fd, "wb") as fh:
             fh.write(xml.encode("utf-16"))
         code, out = _run(["schtasks", "/Create", "/TN", TASK_NAME,

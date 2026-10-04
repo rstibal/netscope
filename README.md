@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.28.2**
+**Version 1.28.3**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,19 @@ names.
 ---
 
 ## Version history
+
+**1.28.3** — Hardening for start-on-login. `--install-task` wrote the task
+definition to your temp folder, where any program running as you could swap it
+between NetScope writing it and the elevated `schtasks` reading it, and so get
+its own task registered with administrator rights; it now goes in the Windows
+temp folder, which takes administrator rights to change. The install also says
+so, now, when the files the task will run sit somewhere a program running as
+you could replace them: the task starts them elevated at every logon with no
+UAC prompt, so a folder only an administrator can write (Program Files) is the
+safe place. It is a caution, not a refusal. Also fixed: on a non-English
+Windows the task's command was never found, because `schtasks` translates its
+field names, which hid the console-build warning; it is now read from the
+task's XML.
 
 **1.28.2** — **Security:** the Files tab's Preview built an `<img>` from the
 file's Content-Type without escaping it, so a web server that answered with a

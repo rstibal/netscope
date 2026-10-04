@@ -70,6 +70,8 @@ check("install warns when the twin is missing",
 out = run_main(["--install-task"], (tray_exe, True),
                install_ret=(True, r'C:\ns\NetScopeTray.exe --tray'))
 check("install stays quiet when the twin was used", "NOTE" not in out, out[-200:])
+check("...but says so when the files are somewhere a user process could replace them",
+      "CAUTION" in out and "C:\\ns\\NetScope.exe" in out and "Program Files" in out, out[-400:])
 
 out = run_main(["--install-task"], (None, False))
 check("install stays quiet when running from source", "NOTE" not in out, out[-200:])

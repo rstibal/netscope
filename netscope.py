@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.28.2"
+VERSION = "1.28.3"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3320,6 +3320,23 @@ def main(argv=None):
                       "folder, and run --install-task")
                 print("        again; the task switches to it on its own once "
                       "the file is there.")
+            # Elevated and prompt-free means whoever can change these files
+            # can run as administrator at the next logon. Not a reason to
+            # refuse (the folder is often the user's own choice), but worth
+            # knowing, and the fix is a folder only an administrator can write.
+            risky = tray.user_writable_task_paths()
+            if risky:
+                print()
+                print("  CAUTION: the task runs these with administrator rights at "
+                      "every logon, and they sit")
+                print("           where a program running as you could replace them "
+                      "without a UAC prompt:")
+                for r in risky:
+                    print(f"             {r}")
+                print("           Keeping NetScope in a folder that needs administrator "
+                      "rights to change")
+                print("           (C:\\Program Files\\NetScope, say) closes that; then run "
+                      "--install-task again.")
             print("\n  Test it now without rebooting:  schtasks /Run /TN NetScope")
             print("  Remove it later:                NetScope.exe --remove-task")
         else:
