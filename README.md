@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.28.1**
+**Version 1.28.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,21 @@ names.
 ---
 
 ## Version history
+
+**1.28.2** — **Security:** the Files tab's Preview built an `<img>` from the
+file's Content-Type without escaping it, so a web server that answered with a
+type like `image/png"` followed by an `onerror` handler ran script in the
+dashboard when you clicked Preview on that file. The page holds the API token,
+so that script could read every captured packet. Only a plain image type is
+now used (anything else is shown as bytes), and the dashboard is served with
+a Content-Security-Policy that stops a page script reaching anywhere but
+NetScope itself. A new test feeds hostile strings through every tab and
+detail view. Also fixed: a short-lived outbound connection to a remote port
+443 or 53 was attributed to whatever local service listens on that port; a
+program's name was kept for the whole run, so a recycled process id inherited
+the previous owner's name; and ordinary data segments that happened to begin
+with TLS-looking bytes were labelled TLS (the record length and version are
+now checked).
 
 **1.28.1** — Parser fixes. A packet that made a decoder raise was dropped
 outright, so a malformed FTP reply (or anything crafted to trip a parser)

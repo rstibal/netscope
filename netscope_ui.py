@@ -1687,12 +1687,17 @@ function saveObject(id){
 function previewObject(id){
   api('/api/object_preview?id='+id).then(r=>r.json()).then(o => {
     if (o.error) return;
-    $('mId').textContent = esc(o.name);
+    $('mId').textContent = o.name;
     $('mMeta').textContent = o.ctype + '  ·  ' + hb(o.size);
     let h = '';
     if (o.clipped) h += '<div class="warnbar">Preview shows the first 64 KB. Use Save for the whole file.</div>';
-    if (/^image\//.test(o.ctype)){
-      h += '<img class="previewimg" src="data:'+o.ctype+';base64,'+o.b64+'">';
+    // The type is whatever the sending server wrote. It used to go into the
+    // src attribute as it came, so "image/png" followed by a quote and an
+    // onerror handler ran script in the dashboard when Preview was clicked.
+    // Only a plain image type, spelled exactly, is used; anything else is
+    // shown as bytes.
+    if (/^image\/(png|jpe?g|gif|webp|bmp|x-icon|svg\+xml)$/i.test(o.ctype)){
+      h += '<img class="previewimg" src="data:'+o.ctype.toLowerCase()+';base64,'+esc(o.b64)+'">';
     } else if (o.textual){
       const txt = new TextDecoder('utf-8', {fatal:false}).decode(b64bytes(o.b64));
       h += '<pre class="convo">'+esc(txt)+'</pre>';

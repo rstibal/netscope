@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.28.1"
+VERSION = "1.28.2"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -246,6 +246,7 @@ TLS_RECORD_TYPES = {
 }
 
 TLS_VERSIONS = {
+    0x0300: "SSL 3.0",
     0x0301: "TLS 1.0",
     0x0302: "TLS 1.1",
     0x0303: "TLS 1.2",
@@ -272,9 +273,14 @@ def decode_tls(payload: bytes):
     if rtype not in TLS_RECORD_TYPES:
         return None
     ver = struct.unpack("!H", payload[1:3])[0]
-    if ver >> 8 != 0x03:
+    if not 0x0300 <= ver <= 0x0304:
         return None
     rec_len = struct.unpack("!H", payload[3:5])[0]
+    # Every TCP segment that nothing else claimed comes through here, and a
+    # data segment can start with any bytes at all. A real record is at most
+    # 2**14 plus the cipher's overhead, so a longer claim is not one.
+    if rec_len > 16384 + 2048:
+        return None
     info = {
         "record": TLS_RECORD_TYPES[rtype],
         "version": TLS_VERSIONS.get(ver, f"0x{ver:04x}"),
@@ -475,15 +481,26 @@ class ProcessResolver:
         except Exception:
             return False
 
+    # How long a pid's name is trusted. Windows reuses process ids, so a name
+    # kept for the life of the run would be put on whatever program inherits
+    # the number; and a lookup that failed (the process had just exited) is
+    # retried soon rather than remembered as "pid 1234" for good.
+    NAME_TTL = 60.0
+    NAME_RETRY = 3.0
+
     def name_for_pid(self, pid: int) -> str:
-        if pid in self._names:
-            return self._names[pid]
-        name = f"pid {pid}"
+        now = time.time()
+        hit = self._names.get(pid)
+        if hit is not None and hit[1] > now:
+            return hit[0]
+        name, ttl = f"pid {pid}", self.NAME_RETRY
         try:
-            name = psutil.Process(pid).name()
+            name, ttl = psutil.Process(pid).name(), self.NAME_TTL
         except Exception:
             pass
-        self._names[pid] = name
+        if len(self._names) > 4096:
+            self._names.clear()
+        self._names[pid] = (name, now + ttl)
         return name
 
     def lookup(self, sport, dport, proto, src, dst):
@@ -498,8 +515,12 @@ class ProcessResolver:
 
         local_port = sport if outbound else dport
         pid = pmap.get((local_port, proto))
-        if pid is None:
-            # Fall back to the other side; some sockets only register one way.
+        if pid is None and (not local_ips or (dst if outbound else src) in local_ips):
+            # Fall back to the other side, but only when that side is this
+            # machine too (loopback, or its own address), where both ends are
+            # sockets here. For a remote peer the other port is the *server's*:
+            # trying it handed an outbound connection to a short-lived
+            # program over to whatever local service listens on 443 or 53.
             pid = pmap.get((dport if outbound else sport, proto))
         name = self.name_for_pid(pid) if pid else "-"
         return name, pid, ("out" if outbound else "in")
@@ -2616,6 +2637,11 @@ class DashboardServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+       "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+       "form-action 'none'; frame-ancestors 'none'")
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"NetScope/{VERSION}"
     app: App = None
@@ -2635,6 +2661,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if ctype.startswith("text/html"):
+            # The page shows strings chosen by other machines. It is written to
+            # escape them, but if one ever got through, script on this page
+            # holds the API token and could read every captured packet; this
+            # stops it sending any of that anywhere but back to NetScope.
+            self.send_header("Content-Security-Policy", CSP)
         self.end_headers()
         try:
             self.wfile.write(body)
