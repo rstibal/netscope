@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.27.4**
+**Version 1.28.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,14 @@ names.
 ---
 
 ## Version history
+
+**1.28.0** — The By program and By host charts on the History tab no longer
+shrink everything else to a sliver when one entry is far larger than the rest
+(a VR stream at 231 GB beside a 25 GB program, say). When the longest bar is
+more than three times the next, it is drawn at full width with a slanted cut
+in it, and the others are scaled against the next-largest. Its figure is
+still the real total, the table view is unchanged, and a line under the
+heading says the bar was shortened. Charts without an outlier look as before.
 
 **1.27.4** — A round of bug fixes. **Security:** desktop notifications built
 a PowerShell command with the alert text quoted into it, and PowerShell

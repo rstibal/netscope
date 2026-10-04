@@ -550,10 +550,14 @@ code.k{color:var(--accent);font-family:var(--mono)}
   padding:3px 0;font:11.5px var(--mono)}
 .hbar .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .hbar .track{grid-column:1/-1;height:9px;background:var(--panel2);border-radius:2px;
-  overflow:hidden;display:flex;gap:2px}
+  overflow:hidden;display:flex;gap:2px;position:relative}
 .hbar .track i{display:block;height:100%}
-.hbar .track i:first-child{border-radius:2px 0 0 2px}
-.hbar .track i:last-child{border-radius:0 2px 2px 0}
+.hbar .track i:first-of-type{border-radius:2px 0 0 2px}
+.hbar .track i:last-of-type{border-radius:0 2px 2px 0}
+/* The cut in a bar that was shortened: the track's own colour, slanted, so
+   it reads as a gap in the bar rather than a mark on it. */
+.hbar .track b{position:absolute;top:-1px;bottom:-1px;left:86%;width:7px;
+  background:var(--panel2);transform:skewX(-25deg)}
 .dayrange{display:flex;gap:6px;align-items:center;margin-bottom:10px}
 .dayrange button{padding:3px 10px;font:600 11px var(--sans)}
 .dayrange button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -1804,19 +1808,44 @@ function dailyChart(rows){
        + g + bars + xl + hits + '</svg>';
 }
 
+// One program that streams VR can be ten times everything else, and on a
+// linear scale the rest are slivers. When the biggest is more than BREAK_RATIO
+// times the next, it is drawn at full width with a cut in it and the others
+// are scaled against the next-biggest instead. Its label still gives the true
+// total, and the cut says plainly that the bar is not to scale.
+const BREAK_RATIO = 3;
+function hbarScale(rows){
+  const tots = rows.map(r => r.bytes_in + r.bytes_out).sort((a, b) => b - a);
+  if (tots.length > 1 && tots[1] > 0 && tots[0] > BREAK_RATIO * tots[1])
+    return {max: tots[1] * 1.3, cut: tots[0]};
+  return {max: Math.max(1, tots[0] || 1), cut: 0};
+}
+
 function hbars(rows, keyName){
-  const max = Math.max(1, ...rows.map(r => r.bytes_in + r.bytes_out));
+  const sc = hbarScale(rows);
   return rows.map(r => {
     const tot = r.bytes_in + r.bytes_out;
-    const pin = (r.bytes_in / max) * 100, pout = (r.bytes_out / max) * 100;
+    const broken = sc.cut && tot === sc.cut && tot > sc.max;
+    // A broken bar fills the track, split in the proportion it really has.
+    const denom = broken ? tot : sc.max;
+    const pin = Math.min(100, (r.bytes_in / denom) * 100);
+    const pout = Math.min(100 - pin, (r.bytes_out / denom) * 100);
     return '<div class="hbar">' +
       '<span class="nm" title="'+esc(r[keyName])+'">'+esc(r[keyName])+'</span>' +
       '<span style="color:var(--dim)">'+esc(hb(tot))+'</span>' +
-      '<span class="track">' +
+      '<span class="track"'+(broken ? ' title="Shortened to fit: this bar is not to scale. '+
+        esc(hb(tot))+' in total."' : '')+'>' +
         (pin  > 0 ? '<i style="width:'+pin.toFixed(2)+'%;background:var(--series-in)"></i>'  : '') +
         (pout > 0 ? '<i style="width:'+pout.toFixed(2)+'%;background:var(--series-out)"></i>' : '') +
+        (broken ? '<b class="brk"></b>' : '') +
       '</span></div>';
   }).join('');
+}
+
+function hbarNote(rows){
+  return hbarScale(rows).cut
+    ? '<div class="hint" style="margin:-2px 0 6px">The longest bar is cut short so the others stay '+
+      'readable. Its figure is the real total.</div>' : '';
 }
 
 function legend(){
@@ -1882,7 +1911,7 @@ function renderHistory(d){
 
   if (d.processes.length){
     h += '<div class="sec"><h4>By program · last '+d.days+' days</h4>' +
-         hbars(d.processes, 'name') +
+         hbarNote(d.processes) + hbars(d.processes, 'name') +
          tableView(d.processes, [
            {h:'Program', f:r=>r.name},
            {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
@@ -1891,7 +1920,7 @@ function renderHistory(d){
   }
 
   if (d.hosts.length){
-    h += '<div class="sec"><h4>By host · all time</h4>' + hbars(d.hosts, 'host') +
+    h += '<div class="sec"><h4>By host · all time</h4>' + hbarNote(d.hosts) + hbars(d.hosts, 'host') +
          tableView(d.hosts, [
            {h:'Host', f:r=>r.host},
            {h:'First seen', f:r=>new Date(r.first_seen*1000).toLocaleDateString()},
