@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.28.3"
+VERSION = "1.28.4"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -96,6 +96,7 @@ from netscope_nbns import parse as parse_nbns, summarise as nbns_summary
 from netscope_history import (HistoryStore, default_db_path, clean_patterns,
                               load_settings, save_setting)
 import netscope_tray as tray
+from netscope_tunnel import TunnelFilter
 
 SCAPY_ERROR = None
 try:
@@ -899,6 +900,13 @@ class CaptureEngine:
         self.quic = InitialReassembler()
         self.dhcp = dhcp or DhcpTracker()
         self.reverse = reverse
+        cfg = load_settings()
+        # The encrypted outer copy of VPN traffic stays out of the history, so
+        # the same bytes are not counted once per adapter (see netscope_tunnel).
+        self.tunnel = TunnelFilter(
+            describe=self._iface_description,
+            extra=cfg.get("tunnel_adapters") or [],
+            enabled=cfg.get("history_tunnel_dedupe", True) is not False)
         self.sniffer = None
         self.sniffers = []          # [(iface_name, AsyncSniffer, socket_or_None)]
         self.stress_us = 0          # --stress-drops: microseconds per packet
@@ -1288,6 +1296,11 @@ class CaptureEngine:
             self._on_packet(pkt, iface_name)
         return handler
 
+    @staticmethod
+    def _iface_description(name):
+        return next((i.get("description") for i in CaptureEngine.interfaces(refresh=False)
+                     if i.get("name") == name), "")
+
     def _on_packet(self, pkt, iface_name=None):
         try:
             rec, raw, payload = self._build(pkt)
@@ -1296,7 +1309,8 @@ class CaptureEngine:
                 self.store.add(rec, raw)
                 if self.alerts is not None:
                     self.alerts.inspect(rec, payload)
-                if self.history is not None and not self._offline:
+                if (self.history is not None and not self._offline
+                        and not self.tunnel.skip(rec)):
                     self.history.record(rec)
         except Exception:
             pass

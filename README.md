@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.28.3**
+**Version 1.28.4**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -834,6 +834,21 @@ names.
 ---
 
 ## Version history
+
+**1.28.4** — A VPN no longer doubles the history. With a VPN up every byte is on
+the wire twice: the real conversation on the tunnel adapter, attributed to the
+program that made it, and the same data encrypted on the physical adapter,
+attributed to the VPN client or to nothing. The history counted both, roughly
+doubling the machine total and adding a second heavy "program". The history now
+leaves out the outer copy: a packet on a non-tunnel adapter, while a tunnel
+adapter is carrying traffic, that is on a VPN port (OpenVPN, WireGuard, IPsec,
+L2TP, PPTP) or belongs to a VPN client. Traffic that bypasses the VPN is still
+counted. Tunnel adapters are recognised by name (WireGuard, Wintun, TAP, PIA,
+Tailscale, and so on); add your own with `"tunnel_adapters": ["part of a name"]`
+in `settings.json`, or turn the filtering off with `"history_tunnel_dedupe":
+false`. The packet list, Timeline and Connections still show both sides, since
+they are views of the wire. A VPN on port 443 that isn't run by a recognisable
+client is not detected and is still counted twice.
 
 **1.28.3** — Hardening for start-on-login. `--install-task` wrote the task
 definition to your temp folder, where any program running as you could swap it
