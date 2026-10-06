@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.29.0"
+VERSION = "1.30.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -88,6 +88,7 @@ from netscope_quic import (parse_quic, summarise as quic_summary,
                            build_split_client_initials, InitialReassembler,
                            CRYPTO_OK as QUIC_CRYPTO_OK)
 from netscope_alerts import AlertEngine, DesktopNotifier, RULE_WHY
+from netscope_block import Blocker, BlockError
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_timeline import Timeline
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
@@ -2600,7 +2601,8 @@ STREAM_VIEW_CAP = 512 * 1024
 class App:
     def __init__(self, store, engine, resolver, token, demo=False,
                  streams=None, objects=None, scanner=None, alerts=None,
-                 decoder=None, history=None, dhcp=None, reverse=None):
+                 decoder=None, history=None, dhcp=None, reverse=None,
+                 blocker=None):
         self.store = store
         self.engine = engine
         # Reads .pcap files. Same object as `engine` for a live capture; a
@@ -2616,6 +2618,7 @@ class App:
         self.history = history
         self.dhcp = dhcp
         self.reverse = reverse
+        self.blocker = blocker
         self.source = None          # set when a .pcap has been loaded
         # Enumerated on demand rather than on a timer: the socket table is
         # expensive, and nobody needs it unless the Connections tab is open.
@@ -2863,6 +2866,15 @@ class Handler(BaseHTTPRequestHandler):
                 "error": "" if detached else self.app.sockets.error,
             })
 
+        if path == "/api/blocks":
+            b = self.app.blocker
+            return self._send(200, {
+                "enabled": bool(b and b.enabled),
+                "available": bool(b and b.available()),
+                "demo": bool(self.app.demo),
+                "blocks": b.listing() if b else [],
+            })
+
         if path == "/api/alerts":
             a = self.app.alerts
             return self._send(200, {
@@ -3078,6 +3090,8 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             elif action == "clear_alerts":
                 self.app.alerts.clear()
+            elif action in ("blocking", "block", "unblock"):
+                return self._block_action(action, body)
             elif action == "history_flush":
                 if self.app.history:
                     self.app.history.flush()
@@ -3138,6 +3152,35 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "not found"})
 
+    def _block_action(self, action, body):
+        b, alerts = self.app.blocker, self.app.alerts
+        if b is None:
+            return self._send(400, {"error": "Blocking is not available."})
+        try:
+            if action == "blocking":
+                b.set_enabled(bool(body.get("enabled")))
+            elif action == "block":
+                if body.get("kind") == "program":
+                    e = b.block_program(pid=body.get("pid"))
+                    what, who = "program", e["name"]
+                else:
+                    e = b.block_host(body.get("address"), body.get("port"),
+                                     body.get("proto"))
+                    what, who = "host", e["target"] + (
+                        ":%s" % e["port"] if e.get("port") else "")
+                if alerts:
+                    alerts.note_action("block", who, "Blocked %s %s" % (what, who),
+                                       "Added a Windows Firewall rule from the dashboard.")
+            else:
+                e = b.unblock(body.get("id"))
+                if e and alerts:
+                    who = e.get("name") or e["target"]
+                    alerts.note_action("unblock", who, "Unblocked " + who,
+                                       "Removed its Windows Firewall rule.")
+        except BlockError as exc:
+            return self._send(400, {"error": str(exc)})
+        return self._send(200, {"status": self.status(), "blocks": b.listing()})
+
     # -- helpers -------------------------------------------------------------
 
     def store_since(self, since):
@@ -3165,6 +3208,9 @@ class Handler(BaseHTTPRequestHandler):
             "packets": self.app.store.total_packets,
             "history": bool(self.app.history and self.app.history.enabled),
             "autostart": tray.task_status(),
+            "blocks": self.app.blocker.count() if self.app.blocker else 0,
+            "blocking": bool(self.app.blocker and self.app.blocker.enabled),
+            "blocks": self.app.blocker.count() if self.app.blocker else 0,
             # None when nothing can report it, so the dashboard can stay quiet
             # rather than assert a clean capture it has not verified.
             "new_ifaces": list(getattr(eng, "new_ifaces", []) or []),
@@ -3176,6 +3222,40 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _exe_of(pid):
+    try:
+        return psutil.Process(pid).exe() if psutil else ""
+    except Exception:
+        return ""
+
+
+def make_blocker(resolver, demo=False):
+    """
+    Demo mode gets a firewall of its own, in memory: it fabricates traffic, so
+    a block there must never write a rule into the real Windows Firewall or
+    the real settings file.
+    """
+    if demo:
+        mem = {}
+        rules = set()
+
+        def fake(cmd):
+            name = next((a[5:] for a in cmd if a.startswith("name=")), "")
+            if "add" in cmd:
+                rules.add(name)
+            elif "delete" in cmd:
+                rules.discard(name)
+            elif "show" in cmd:
+                return (0 if name in rules else 1), ""
+            return 0, ""
+        return Blocker(lambda: mem, lambda k, v: mem.__setitem__(k, v), run=fake,
+                       available=lambda: True, local_ips=lambda: resolver.local_ips,
+                       program_path=lambda pid: r"C:\Demo\app%d.exe" % pid)
+    return Blocker(load_settings, save_setting,
+                   available=lambda: IS_WINDOWS and is_admin(),
+                   local_ips=lambda: resolver.local_ips, program_path=_exe_of)
 
 
 def print_interfaces():
@@ -3458,11 +3538,12 @@ def main(argv=None):
             print(f"  Capture failed to start: {engine.error}")
             print("  The dashboard will still open; pick another interface there.")
 
+    blocker = make_blocker(resolver, demo=args.demo)
     token = secrets.token_urlsafe(18)
     Handler.app = App(store, engine, resolver, token, demo=args.demo,
                       streams=streams, objects=objects, scanner=scanner,
                       alerts=alerts, decoder=decoder, history=history,
-                      dhcp=dhcp, reverse=reverse)
+                      dhcp=dhcp, reverse=reverse, blocker=blocker)
     if args.read:
         Handler.app.source = os.path.basename(args.read)
 

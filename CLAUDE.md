@@ -9,6 +9,7 @@ user documentation and the version history are in `README.md`.
 ```
 netscope.py           capture engine, decoders, HTTP API, DemoEngine, CLI
 netscope_ui.py        the entire dashboard as one PAGE_HTML string
+netscope_block.py     host/program blocks as Windows Firewall rules
 netscope_conn.py      connection table: flow accounting joined to the socket table
 netscope_timeline.py  per-second totals per (program, host, port, ...) for the Timeline view
 netscope_alerts.py    alert rules, muting, Windows toasts
@@ -286,6 +287,23 @@ written to the history database (they are another machine's traffic, or
 this one's from another time) and are not matched against the live socket
 table (a port some process owns now says nothing about when the file was
 captured). Direction is still computed, since it only compares addresses.
+
+**Blocking is a Windows Firewall rule, never something NetScope does to a
+packet.** Npcap hands NetScope a copy; there is no dropping the original, and a
+WFP driver is out of scope for a Python tool. Rules are named
+`NetScope-block-<8 hex>-out|in`, the block list lives in `settings.json`, and
+`Blocker.listing()` checks it against the firewall each time it is shown:
+"missing" for a rule someone deleted, "unknown" for a rule with no record (read
+back through PowerShell). Hidden blocks are the failure to avoid, same as hiding
+packets. It is off until `blocking_enabled` is set, because every other feature
+only watches. Unblocking works either way. `netsh` output is localized, so only
+its exit codes are read. A program is blocked by pid, resolved to a path
+server-side, never from a path the page sends; Windows core processes
+(`svchost.exe`...) and NetScope itself are refused. Demo mode's blocker runs
+against an in-memory firewall and settings so a demo can never touch the real
+ones. The rules themselves were not exercised against a real firewall in the
+automated tests (a fake runner stands in): test Block/Unblock on Windows as
+administrator.
 
 ## Environment
 

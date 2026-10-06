@@ -133,6 +133,10 @@ RULE_WHY = {
                "on this machine in the last week, otherwise a note. Traffic "
                "with no program behind it (broadcast, link layer, no "
                "socket) is never reported.",
+    "block": "A record, not a finding: you blocked this from the dashboard. "
+             "The rule lives in Windows Firewall as NetScope-block-*.",
+    "unblock": "A record, not a finding: you removed a block from the "
+               "dashboard.",
     "rogue_ra": "Fires when an IPv6 Router Advertisement arrives from a "
                "router this machine has not seen on this adapter before. A "
                "fake RA can redirect IPv6 traffic through an attacker's "
@@ -567,6 +571,18 @@ class AlertEngine:
         if severity in (WARN, HIGH):
             self.notifier.notify(f"NetScope: {title}", detail)
         return alert
+
+    def note_action(self, kind, subject, title, detail):
+        """
+        Record something this person did, in the alert log.
+
+        Blocking changes what the machine can reach, so each block and unblock
+        is written down like a finding is. Every call is its own entry: the key
+        carries the time, so a block, an unblock and a second block of the same
+        host are three lines rather than one folded count.
+        """
+        return self._fire((kind, "%s@%.3f" % (subject, _now()), subject),
+                          INFO, kind, title, detail)
 
     def list(self):
         with self._lock:

@@ -344,6 +344,12 @@ h4{margin:0 0 8px;font:600 11px var(--sans);letter-spacing:.5px;text-transform:u
    couple of pixels, and the identity is what the row is for. The mark scales
    to whatever it is given. */
 .citem .spw{flex:0 0 44px;width:44px;line-height:0;align-self:center}
+.citem .blk{flex:0 0 auto;margin-left:auto;padding:0 7px;font:600 10px/16px var(--sans);
+  border:1px solid var(--line);border-radius:4px;background:none;color:var(--dim);cursor:pointer}
+.citem .blk:hover,.citem .blk:focus-visible{border-color:var(--out);color:var(--out)}
+.bopt{display:flex;gap:7px;align-items:flex-start;margin:2px 0 8px;font-size:12px;color:var(--fg)}
+.bopt input{margin-top:2px}
+.berr{color:var(--out);font-size:12px;margin:0 0 8px}
 .citem .l2{color:var(--dim);font:11px/1.35 var(--mono);margin-top:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .citem .l2 b{color:var(--fg);font-weight:600}
@@ -1376,7 +1382,7 @@ function closeRowMenu(){
 }
 
 function openRowMenu(rec, x, y){
-  const m = $('rowmenu'), hide = [], keep = [];
+  const hide = [], keep = [];
   const remote = rec.dir === 'out' ? rec.dst : rec.src;
   const proc = rec.process && rec.process !== '-' ? rec.process : '';
   if (proc)      hide.push(['Hide program ' + proc, () => hideClause('process', proc)]);
@@ -1389,11 +1395,16 @@ function openRowMenu(rec, x, y){
     keep.push(['Don\'t record ' + proc + ' in History', () => addExclusion('program', proc)]);
   const host = rec.rhost || remote;
   if (host) keep.push(['Don\'t record ' + host + ' in History', () => addExclusion('host', host)]);
-  const list = hide.concat(keep.length ? [null] : [], keep);
+  showRowMenu(hide.concat(keep.length ? [null] : [], keep),
+              'Hiding edits the filter box; clear it to show them again.', x, y);
+}
+
+function showRowMenu(list, hint, x, y){
+  const m = $('rowmenu');
   m.innerHTML = list.map((it, i) => it
     ? '<button role="menuitem" data-i="' + i + '" title="' + esc(it[0]) + '">' + esc(it[0]) + '</button>'
     : '<div class="sep"></div>').join('') +
-    '<div class="hint">Hiding edits the filter box; clear it to show them again.</div>';
+    '<div class="hint">' + esc(hint) + '</div>';
   m.querySelectorAll('button').forEach(b => b.onclick = e => {
     e.stopPropagation();
     const fn = list[Number(b.dataset.i)][1];
@@ -2669,6 +2680,8 @@ function renderConns(d){
   const counts = {active: (d.connections||[]).length,
                   listening: (d.listening||[]).length,
                   recent: (d.closed||[]).length};
+  counts.blocked = lastBlocks ? lastBlocks.blocks.length
+                   : ((lastStatus && lastStatus.blocks) || 0);
   counts.quality = ((d.connections||[]).concat(d.closed||[])
     .filter(r => r.rtt != null || r.tls_ms != null || r.resent || r.dup_ack)).length;
   const btn = (k, label) =>
@@ -2677,7 +2690,15 @@ function renderConns(d){
 
   let head = '<div class="cfilter">' + btn('active','Open') +
              btn('listening','Listening') + btn('recent','Just closed') +
-             btn('quality','Quality') + '</div>';
+             btn('quality','Quality') + btn('blocked','Blocked') + '</div>';
+
+  if (connMode === 'blocked'){
+    pane.innerHTML = head + blocksBody();
+    wireConnFilter();
+    wireBlocks();
+    if (Date.now() - lastBlocksAt > 5000) loadBlocks();
+    return;
+  }
 
   if (d.offline)
     head += '<div class="chint">Reading a saved capture — these are the ' +
@@ -2717,7 +2738,7 @@ function renderConns(d){
   // Only worth saying when there is more than one adapter to distinguish.
   const showIface = new Set(rows.map(r => r.iface).filter(Boolean)).size > 1;
 
-  const body = rows.map(r => {
+  const body = rows.map((r, ri) => {
     const peer = listening ? (r.laddr + ':' + r.lport)
                            : ((r.rhost || r.raddr) + ':' + r.rport);
     const title = esc(r.process + (r.pid ? ' (pid ' + r.pid + ')' : '') + '  ' +
@@ -2731,6 +2752,8 @@ function renderConns(d){
     if (connMode === 'active')
       l1 += '<span class="spw" title="' + esc(sparkTitle(r.spark)) + '">' +
             sparkSVG(r.spark) + '</span>';
+    if (connMode === 'active' && !r.closed && r.raddr && !d.offline)
+      l1 += '<button class="blk" data-ri="' + ri + '" title="Block this host or program">Block</button>';
 
     const bits = [];
     if (connMode === 'quality'){
@@ -2766,6 +2789,11 @@ function renderConns(d){
     '</div>' + body;
 
   wireConnFilter();
+  pane.querySelectorAll('.blk').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const r = rows[Number(b.dataset.ri)], q = b.getBoundingClientRect();
+    if (r) openBlockMenu(r, q.left, q.bottom + 2);
+  });
   pane.querySelectorAll('.citem[data-ip]').forEach(el => {
     el.onclick = () => {
       const ip = el.dataset.ip, port = el.dataset.port;
@@ -2773,6 +2801,104 @@ function renderConns(d){
                            : 'port == ' + port;
       $('find').dispatchEvent(new Event('input'));
     };
+  });
+}
+
+/* Blocking goes through Windows Firewall, because NetScope only sees a copy of
+   each packet and cannot drop one. Every block is listed here, including a
+   rule that exists in the firewall without a record in NetScope: what is
+   blocked should always be on screen. */
+let lastBlocks = null, lastBlocksAt = 0, blockMsg = '';
+
+function loadBlocks(){
+  lastBlocksAt = Date.now();
+  return api('/api/blocks').then(r => r.json()).then(d => {
+    lastBlocks = d;
+    if (activeTab() === 'conns' && connMode === 'blocked' && lastConns) renderConns(lastConns);
+  }).catch(() => {});
+}
+
+function blockCall(body){
+  return api('/api/control', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)}).then(r => r.json().then(d => ({ok: r.ok, d}))).then(({ok, d}) => {
+      blockMsg = ok ? '' : (d.error || 'That did not work.');
+      if (ok) renderStatus(d.status);
+      lastBlocksAt = 0;
+      return loadBlocks().then(() => { if (!ok) alert(blockMsg); return ok; });
+    });
+}
+
+function askBlock(text, body){
+  if (!confirm(text)) return;
+  const go = () => blockCall(body);
+  if (lastStatus && lastStatus.blocking) return go();
+  if (!confirm('Blocking is switched off. Turn it on? It lets this dashboard add ' +
+               'Windows Firewall rules (NetScope-block-*), and every one is listed ' +
+               'under Connections > Blocked.')) return;
+  blockCall({action: 'blocking', enabled: true}).then(ok => ok && go());
+}
+
+function openBlockMenu(r, x, y){
+  const items = [];
+  const ep = r.raddr + (r.rport ? ':' + r.rport : '');
+  const undo = '\n\nIt stays in force until you remove it under Connections > Blocked.';
+  items.push(['Block host ' + r.raddr, () => askBlock(
+    'Block all traffic to and from ' + r.raddr + '?' + undo,
+    {action: 'block', kind: 'host', address: r.raddr})]);
+  if (r.rport)
+    items.push(['Block ' + ep + ' only (' + r.proto + ', outbound)', () => askBlock(
+      'Block outbound ' + r.proto + ' connections to ' + ep + '? Other ports on that host ' +
+      'are unaffected.' + undo,
+      {action: 'block', kind: 'host', address: r.raddr, port: r.rport, proto: r.proto})]);
+  if (r.pid && r.process && !/^[(-]/.test(r.process))
+    items.push(['Block program ' + r.process, () => askBlock(
+      'Block ' + r.process + ' from using the network at all? This covers that program file ' +
+      'on every outbound connection.' + undo,
+      {action: 'block', kind: 'program', pid: r.pid})]);
+  showRowMenu(items, 'A Windows Firewall rule; undo it under Blocked.', x, y);
+}
+
+function blocksBody(){
+  const d = lastBlocks;
+  if (!d) return '<div class="empty">Loading\u2026</div>';
+  let h = '<label class="bopt"><input type="checkbox" id="blkOn"' + (d.enabled ? ' checked' : '') +
+          (d.available ? '' : ' disabled') + '><span>Allow blocking from this dashboard. ' +
+          'Each block is a Windows Firewall rule named NetScope-block-\u2026, kept across restarts.</span></label>';
+  if (d.demo)
+    h += '<div class="chint">Demo mode: blocks here are pretend and never reach the real firewall.</div>';
+  else if (!d.available)
+    h += '<div class="chint">Blocking needs Windows and administrator rights.</div>';
+  if (blockMsg) h += '<div class="berr">' + esc(blockMsg) + '</div>';
+  if (!d.blocks.length)
+    return h + '<div class="empty">Nothing is blocked. Use Block on an open connection.</div>';
+  const when = t => t ? new Date(t * 1000).toLocaleString() : '';
+  return h + d.blocks.map(b => {
+    const label = b.kind === 'program' ? b.name
+                : b.kind === 'unknown' ? 'Unrecorded rule ' + b.id
+                : b.target + (b.port ? ':' + b.port + ' ' + b.proto : '');
+    const bits = [b.kind === 'unknown' ? 'firewall' : b.kind];
+    if (b.state === 'missing')
+      bits.push('<b class="warn">rule missing from Windows Firewall</b> \u2014 not blocking');
+    else if (b.state === 'unknown')
+      bits.push('<b class="warn">in Windows Firewall, no record here</b>');
+    else if (b.state === 'unverified') bits.push('not checked');
+    else bits.push('<b>blocking</b>');
+    if (b.kind === 'host') bits.push(b.port ? 'outbound' : 'both directions');
+    if (b.kind === 'program') bits.push(esc(b.target));
+    if (b.added) bits.push(esc(when(b.added)));
+    return '<div class="citem" title="' + esc(label) + '"><div class="l1">' +
+           '<span class="who">' + esc(label) + '</span>' +
+           '<button class="blk" data-unblock="' + esc(b.id) + '">Unblock</button></div>' +
+           '<div class="l2">' + bits.join(' <span class="sx">\u00b7</span> ') + '</div></div>';
+  }).join('');
+}
+
+function wireBlocks(){
+  const on = $('blkOn');
+  if (on) on.onchange = () => blockCall({action: 'blocking', enabled: on.checked});
+  $('p-conns').querySelectorAll('[data-unblock]').forEach(b => b.onclick = () => {
+    if (confirm('Remove this block? Traffic to it will flow again.'))
+      blockCall({action: 'unblock', id: b.dataset.unblock});
   });
 }
 

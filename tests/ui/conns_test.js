@@ -9,7 +9,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   await p.click('.tab[data-p="conns"]'); await p.waitForTimeout(1800);
 
   const modes = await p.evaluate(()=>[...document.querySelectorAll('#p-conns [data-cmode]')].map(x=>x.dataset.cmode));
-  check('four views', modes.length===4, JSON.stringify(modes));
+  check('five views', modes.length===5, JSON.stringify(modes));
   check('demo says why real sockets are absent', /Demo traffic/.test(await p.textContent('#p-conns')));
 
   // --- the whole point: nothing that identifies a row gets truncated

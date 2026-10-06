@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.29.0**
+**Version 1.30.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -282,6 +282,28 @@ every ordinary connection into a straight line beside one busy download — and
 hovering says so, along with the peak rate and how many of the last 40 seconds
 saw traffic. It appears only on open connections: a closed one's shape is
 finished and a listener has none.
+
+**Blocking a connection.** Each open connection has a **Block** button with up
+to three choices: the remote host (both directions), that one port on it
+(outbound, TCP or UDP as the connection was), or the program. NetScope only
+sees a copy of each packet and cannot drop the original, so a block is a
+Windows Firewall rule, named `NetScope-block-<id>-out` / `-in`, which Windows
+enforces and keeps across restarts. It needs administrator rights and is **off
+until you switch it on** (the checkbox in the **Blocked** view, or the prompt
+the first time you block something), because it is the one feature that
+changes what your machine can reach.
+
+The **Blocked** view lists every block with an Unblock button, and checks each
+against the firewall every time it is shown: a rule deleted in `wf.msc` reads
+"rule missing — not blocking" rather than "blocking", and a `NetScope-block-*`
+rule in the firewall with no record here is listed too, so nothing stays in
+force out of sight. Blocking and unblocking are written to the alert log as
+notes. An already-open TCP connection may take a moment to stop. Loopback,
+wildcard, multicast and this machine's own addresses are refused, and so are
+`svchost.exe` and the other core Windows processes, since blocking one of those
+cuts off far more than one program. A program is blocked by the file path
+NetScope looks up from the connection's process ID, never a path sent by the
+page. In demo mode blocks are pretend and never reach the real firewall.
 
 **The Talkers tab** ranks processes and remote hosts by total bytes moved, with
 the in/out split for each — this is the "what is eating my bandwidth" view.
@@ -769,6 +791,10 @@ the one feature that sends anything out: a background lookup for an IP
 nothing has named yet, using your machine's normal DNS resolver. Leave it
 off and NetScope never originates a single packet of its own.
 
+**The other exception is blocking, also off by default.** Blocking a host or a
+program writes Windows Firewall rules (see Connections above). NetScope never
+does it on its own: only a click on Block, after you have switched it on.
+
 This is a diagnostic tool for a machine you own. Capturing traffic on networks
 or devices that aren't yours is a different matter entirely, and generally not
 a legal one.
@@ -783,6 +809,7 @@ netscope_smb.py     SMB2 decoding — share paths, filenames, read/write sizes
 netscope_streams.py TCP reassembly and HTTP file extraction
 netscope_quic.py    QUIC decoding, Initial-packet key derivation, SNI recovery
 netscope_alerts.py  alert rules and Windows toast notifications
+netscope_block.py   blocking a host or program through Windows Firewall rules
 netscope_conn.py    connection table — flow accounting joined to the socket table
 netscope_timeline.py per-second totals for the Timeline view
 netscope_pcap.py    .pcap writing and reading
@@ -834,6 +861,12 @@ names.
 ---
 
 ## Version history
+
+**1.30.0** — **Block a connection.** Open connections get a Block button: the
+host, one port on it, or the program. Each block is a Windows Firewall rule
+(`NetScope-block-*`), so Windows enforces it, and the new Blocked view under
+Connections lists them, checks them against the firewall, and unblocks. Off until
+switched on; needs administrator. Blocks and unblocks go in the alert log.
 
 **1.29.0** — **Erase VPN overhead** on the History tab's Storage section. Before
 1.28.4 the history counted a VPN's encrypted outer copy as well as the real
