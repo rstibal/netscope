@@ -170,7 +170,7 @@ let mode = 1;
   await p.click('#tlLabels .ln[data-name="beacon.exe"]', {button:'right'});
   const items = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
   check('right-clicking a lane offers to hide it or keep it out of History',
-        items.join('|')==="Hide program beacon.exe|Don't record beacon.exe in History", JSON.stringify(items));
+        items.join('|')==="Hide program beacon.exe|Don't record beacon.exe in History|Block program beacon.exe", JSON.stringify(items));
   await p.locator('#rowmenu button', {hasText:'Hide program'}).click();
   check('...and hiding writes the filter', await p.inputValue('#find')==='process != "beacon.exe"');
   await p.fill('#find', '');

@@ -66,7 +66,7 @@ def clean_address(text, local_ips=()):
 
 class Blocker:
     def __init__(self, load, save, run=None, available=None, local_ips=None,
-                 own_exes=None, program_path=None):
+                 own_exes=None, program_path=None, name_path=None):
         """
         load/save   settings accessors (netscope_history.load_settings / save_setting)
         run         command runner: list -> (exit code, output). Injected by tests
@@ -74,6 +74,8 @@ class Blocker:
         available   callable -> bool: can rules be written (Windows + admin)?
         local_ips   callable -> addresses of this machine
         program_path  callable pid -> full path of that process's exe, or ""
+        name_path   callable name -> the one exe path every running process of
+                    that name shares, or "" when there are none or several
         """
         self._load, self._save = load, save
         self._run = run or _default_run
@@ -81,6 +83,7 @@ class Blocker:
         self._local_ips = local_ips or (lambda: ())
         self._own = {os.path.normcase(p) for p in (own_exes or [sys.executable])}
         self._program_path = program_path or (lambda pid: "")
+        self._name_path = name_path or (lambda name: "")
         self._lock = threading.RLock()
         self._verified = (0.0, {})          # (when, {rule name: exists})
         self._orphans = (0.0, [])           # (when, [ids found in the firewall])
@@ -162,10 +165,20 @@ class Blocker:
             entry["proto"] = "UDP" if str(proto).upper() == "UDP" else "TCP"
         return self._add(entry)
 
-    def block_program(self, pid=None, path=None):
-        """By pid: the path is looked up here, never taken from the page."""
+    def block_program(self, pid=None, name=None):
+        """
+        By pid, or failing that by name: the path is looked up here, never taken
+        from the page. A name only counts when every running process of that
+        name is the same file; the timeline knows a program only by its name.
+        """
         self._check_allowed()
         path = self._program_path(int(pid)) if pid else ""
+        if not path and name:
+            path = self._name_path(str(name))
+            if not path:
+                raise BlockError("Can't tell which %s you mean: it isn't running, or "
+                                 "several different programs share that name. Block it "
+                                 "from an open connection instead." % name)
         if not path or not os.path.isabs(path):
             raise BlockError("Could not find that program's file. It may have exited.")
         name = os.path.basename(path)

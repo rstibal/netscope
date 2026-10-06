@@ -1395,7 +1395,12 @@ function openRowMenu(rec, x, y){
     keep.push(['Don\'t record ' + proc + ' in History', () => addExclusion('program', proc)]);
   const host = rec.rhost || remote;
   if (host) keep.push(['Don\'t record ' + host + ' in History', () => addExclusion('host', host)]);
-  showRowMenu(hide.concat(keep.length ? [null] : [], keep),
+  // A packet's port is only the server's when this machine sent it.
+  const blk = blockItems({
+    addr: rec.dir === 'out' || rec.dir === 'in' ? remote : '',
+    port: rec.dir === 'out' && /^(tcp|udp)$/i.test(rec.transport || '') ? rec.dport : 0,
+    proto: rec.transport, pid: rec.pid, process: proc});
+  showRowMenu(hide.concat(keep.length ? [null] : [], keep, blk.length ? [null] : [], blk),
               'Hiding edits the filter box; clear it to show them again.', x, y);
 }
 
@@ -2838,24 +2843,36 @@ function askBlock(text, body){
   blockCall({action: 'blocking', enabled: true}).then(ok => ok && go());
 }
 
-function openBlockMenu(r, x, y){
+/* The menu items that block something, for one connection or packet or lane.
+   t: {addr, port, proto, pid, process}. Any part may be missing: a timeline
+   lane for a program has only a name, one for a host name has no address. */
+function blockItems(t){
   const items = [];
-  const ep = r.raddr + (r.rport ? ':' + r.rport : '');
   const undo = '\n\nIt stays in force until you remove it under Connections > Blocked.';
-  items.push(['Block host ' + r.raddr, () => askBlock(
-    'Block all traffic to and from ' + r.raddr + '?' + undo,
-    {action: 'block', kind: 'host', address: r.raddr})]);
-  if (r.rport)
-    items.push(['Block ' + ep + ' only (' + r.proto + ', outbound)', () => askBlock(
-      'Block outbound ' + r.proto + ' connections to ' + ep + '? Other ports on that host ' +
-      'are unaffected.' + undo,
-      {action: 'block', kind: 'host', address: r.raddr, port: r.rport, proto: r.proto})]);
-  if (r.pid && r.process && !/^[(-]/.test(r.process))
-    items.push(['Block program ' + r.process, () => askBlock(
-      'Block ' + r.process + ' from using the network at all? This covers that program file ' +
+  const isMac = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(t.addr || '');
+  if (t.addr && !isMac && tlIsIP(t.addr)){
+    const ep = t.addr + (t.port ? ':' + t.port : '');
+    items.push(['Block host ' + t.addr, () => askBlock(
+      'Block all traffic to and from ' + t.addr + '?' + undo,
+      {action: 'block', kind: 'host', address: t.addr})]);
+    if (t.port)
+      items.push(['Block ' + ep + ' only (' + String(t.proto).toUpperCase() + ', outbound)', () => askBlock(
+        'Block outbound ' + String(t.proto).toUpperCase() + ' connections to ' + ep +
+        '? Other ports on that host are unaffected.' + undo,
+        {action: 'block', kind: 'host', address: t.addr, port: t.port, proto: t.proto})]);
+  }
+  if ((t.pid || t.process) && t.process && !/^[(-]/.test(t.process))
+    items.push(['Block program ' + t.process, () => askBlock(
+      'Block ' + t.process + ' from using the network at all? This covers that program file ' +
       'on every outbound connection.' + undo,
-      {action: 'block', kind: 'program', pid: r.pid})]);
-  showRowMenu(items, 'A Windows Firewall rule; undo it under Blocked.', x, y);
+      {action: 'block', kind: 'program', pid: t.pid || undefined, name: t.process})]);
+  return items;
+}
+
+function openBlockMenu(r, x, y){
+  showRowMenu(blockItems({addr: r.raddr, port: r.rport, proto: r.proto, pid: r.pid,
+                          process: r.process}),
+              'A Windows Firewall rule; undo it under Blocked.', x, y);
 }
 
 function blocksBody(){

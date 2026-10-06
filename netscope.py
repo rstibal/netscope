@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.30.0"
+VERSION = "1.31.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3161,7 +3161,7 @@ class Handler(BaseHTTPRequestHandler):
                 b.set_enabled(bool(body.get("enabled")))
             elif action == "block":
                 if body.get("kind") == "program":
-                    e = b.block_program(pid=body.get("pid"))
+                    e = b.block_program(pid=body.get("pid"), name=body.get("name"))
                     what, who = "program", e["name"]
                 else:
                     e = b.block_host(body.get("address"), body.get("port"),
@@ -3231,6 +3231,20 @@ def _exe_of(pid):
         return ""
 
 
+def _exe_of_name(name):
+    """The one exe path all running processes called `name` share, else ''."""
+    if not psutil:
+        return ""
+    paths = set()
+    try:
+        for pr in psutil.process_iter(["name", "exe"]):
+            if (pr.info.get("name") or "").lower() == name.lower() and pr.info.get("exe"):
+                paths.add(pr.info["exe"])
+    except Exception:
+        return ""
+    return paths.pop() if len(paths) == 1 else ""
+
+
 def make_blocker(resolver, demo=False):
     """
     Demo mode gets a firewall of its own, in memory: it fabricates traffic, so
@@ -3252,10 +3266,12 @@ def make_blocker(resolver, demo=False):
             return 0, ""
         return Blocker(lambda: mem, lambda k, v: mem.__setitem__(k, v), run=fake,
                        available=lambda: True, local_ips=lambda: resolver.local_ips,
-                       program_path=lambda pid: r"C:\Demo\app%d.exe" % pid)
+                       program_path=lambda pid: r"C:\Demo\app%d.exe" % pid,
+                       name_path=lambda name: "C:\\Demo\\" + name)
     return Blocker(load_settings, save_setting,
                    available=lambda: IS_WINDOWS and is_admin(),
-                   local_ips=lambda: resolver.local_ips, program_path=_exe_of)
+                   local_ips=lambda: resolver.local_ips, program_path=_exe_of,
+                   name_path=_exe_of_name)
 
 
 def print_interfaces():

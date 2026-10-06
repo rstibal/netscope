@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.30.0**
+**Version 1.31.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -292,6 +292,15 @@ enforces and keeps across restarts. It needs administrator rights and is **off
 until you switch it on** (the checkbox in the **Blocked** view, or the prompt
 the first time you block something), because it is the one feature that
 changes what your machine can reach.
+
+Block is also in the **right-click menu** of the packet table and of the
+Timeline's lanes, under the Hide and History items. A packet offers its remote
+address, that port (only for packets this machine sent, since an inbound
+packet's port is whatever the other end picked) and its program. A Timeline
+lane knows less: an address lane offers the address, a host-name lane offers
+nothing (blocks are by address), and a program lane offers the program, which
+NetScope resolves by name to the one file every running process of that name
+shares, and declines if there are none or several.
 
 The **Blocked** view lists every block with an Unblock button, and checks each
 against the firewall every time it is shown: a rule deleted in `wf.msc` reads
@@ -861,6 +870,11 @@ names.
 ---
 
 ## Version history
+
+**1.31.0** — **Block from the right-click menu.** The packet table's menu and the
+Timeline lanes' menu now offer Block host, Block port and Block program where
+they know enough to. A program lane is resolved by name to a single file, or
+refused if the name is ambiguous.
 
 **1.30.0** — **Block a connection.** Open connections get a Block button: the
 host, one port on it, or the program. Each block is a Windows Firewall rule

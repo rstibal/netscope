@@ -86,6 +86,18 @@ check("svchost is refused", "Windows" in (refuses(b.block_program, pid=2) or "")
 check("NetScope itself is refused", "NetScope" in (refuses(b.block_program, pid=3) or ""))
 check("a pid with no path is refused", refuses(b.block_program, pid=99) is not None)
 
+# -- a program known only by name (the timeline) ----------------------------
+def named(path):
+    st = {"blocking_enabled": True}; fw = Fw()
+    return B.Blocker(lambda: st, st.__setitem__, run=fw, available=lambda: True,
+                     own_exes=[OWN], name_path=lambda n: path if n == "chrome.exe" else ""), fw
+b, fw = named(CHROME)
+e = b.block_program(name="chrome.exe")
+check("a name resolves to the path the server found", e["target"] == CHROME)
+check("a name nothing resolves to is refused, saying why",
+      "several" in (refuses(named(CHROME)[0].block_program, name="other.exe") or ""))
+check("a resolved svchost is still refused", refuses(named(SVCHOST)[0].block_program, name="chrome.exe") is not None)
+
 # -- gating ------------------------------------------------------------------
 b, fw, st = make(enabled=False)
 check("off by default means refused", "switched off" in (refuses(b.block_host, "203.0.113.9") or ""))

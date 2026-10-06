@@ -20,7 +20,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   await p.click('#p-conns .citem .blk');
   const items = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
   check('the menu offers host, host:port and program', items.length===3 &&
-        /^Block host /.test(items[0]) && /only \(tcp, outbound\)/.test(items[1]) && /^Block program /.test(items[2]), JSON.stringify(items));
+        /^Block host /.test(items[0]) && /only \(TCP, outbound\)/.test(items[1]) && /^Block program /.test(items[2]), JSON.stringify(items));
   check('opening it does not also select the row', !(await p.inputValue('#find')));
 
   // declined: nothing happens
@@ -76,6 +76,46 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
     return {bad, side: pane.scrollWidth-pane.clientWidth}; });
   check('the Block button does not clip a program or host name', ov.bad===0, JSON.stringify(ov));
   check('or make the panel scroll sideways', ov.side<=1, ov.side);
+
+  // right-click, in the table and in the timeline
+  accept = false; dialogs.length = 0;
+  await p.click('#vTable');
+  const seq = await p.evaluate(()=>{ for (const [k,r] of records) if (r.dir==='out' && r.transport==='tcp' && r.process!=='-' && r.dport) return k; });
+  await p.locator('#rows tr[data-seq="'+seq+'"]').click({button:'right'});
+  const tmenu = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
+  check('the packet menu offers host, host:port and program', tmenu.some(t=>/^Block host /.test(t)) &&
+        tmenu.some(t=>/only \(TCP, outbound\)/.test(t)) && tmenu.some(t=>/^Block program /.test(t)), JSON.stringify(tmenu));
+  check('the existing items are still there', tmenu.some(t=>/^Hide program /.test(t)));
+  await p.locator('#rowmenu button', {hasText: 'Block host '}).click();
+  await p.waitForTimeout(300);
+  check('choosing it asks first', dialogs.length===1 && /Block all traffic/.test(dialogs[0]), JSON.stringify(dialogs));
+  check('and declining blocks nothing', (await state()).blocks.length===0);
+
+  await p.click('#vTime');
+  await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length>0, null, {timeout:20000});
+  await p.click('#tlGroup [data-g="process"]');
+  await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length>0);
+  const lane = await p.evaluate(()=>[...document.querySelectorAll('#tlLabels .ln')].map(b=>b.dataset.name).find(n=>n!=='(none)' && !/^\(/.test(n)));
+  await p.locator('#tlLabels .ln[data-name="'+lane+'"]').click({button:'right'});
+  const pmenu = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
+  check('a program lane offers to block the program only', pmenu.some(t=>t==='Block program '+lane) &&
+        !pmenu.some(t=>/^Block host /.test(t)), JSON.stringify(pmenu));
+  await p.keyboard.press('Escape');
+  await p.click('#tlGroup [data-g="host"]');
+  await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length>0);
+  const ipLane = await p.evaluate(()=>[...document.querySelectorAll('#tlLabels .ln')].map(b=>b.dataset.name).find(n=>/^[\d.]+$/.test(n)));
+  const nameLane = await p.evaluate(()=>[...document.querySelectorAll('#tlLabels .ln')].map(b=>b.dataset.name).find(n=>n!=='(none)' && !/^[\d.]+$/.test(n) && !n.includes(':')));
+  if (nameLane){
+    await p.locator('#tlLabels .ln[data-name="'+nameLane+'"]').click({button:'right'});
+    check('a host-name lane has no address to block', !(await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].some(x=>/^Block /.test(x.textContent)))));
+    await p.keyboard.press('Escape');
+  }
+  if (ipLane){
+    await p.locator('#tlLabels .ln[data-name="'+ipLane+'"]').click({button:'right'});
+    check('an address lane offers to block the address', await p.evaluate(a=>[...document.querySelectorAll('#rowmenu button')].some(x=>x.textContent==='Block host '+a), ipLane));
+    await p.keyboard.press('Escape');
+  }
+  await p.click('#vTable');
 
   check('no page errors', errs.length===0, errs.join('; '));
   await b.close();
