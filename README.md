@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.31.0**
+**Version 1.32.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -530,6 +530,20 @@ a table view underneath it, so no value is only reachable by hovering. While
 it's showing it refreshes itself every 10 seconds, holding off while you
 have text in it selected.
 
+**Why a program or host has that many bytes.** Click a bar under **By program**
+or **By host** (or focus it and press Enter) to open it. A program shows the
+hosts it talked to with received and sent bytes, its last 72 hours as a strip
+of hourly cells (hover one for the hour and amount), and its five busiest
+hours with the host that moved most in each. A host shows the programs that
+contacted it. Any traffic with no host detail is listed as **not broken
+down** and the parts always add up to the program's total. This comes from a
+`usage_pairs` table, one row per hour, program and host, kept for the same
+retention as the rest of the usage. It is recorded from 1.32.0 on: traffic
+from before the upgrade has no host detail, only its hours. A scan that
+contacts more than 20,000 distinct hosts in a single flush is folded into one
+`(other)` row, and the program's total stays exact. Open details stay open
+across the tab's refreshes.
+
 **Busy hours** is a grid of weekday against hour of day, in local time. Each
 square is the average traffic for that hour on that weekday, over the same
 7, 30 or 90 days as the rest of the tab, counted only from the first day
@@ -552,7 +566,8 @@ tab, so you can't forget an entry is there. Capture, the live tabs and alerts
 still see the traffic. Only what is written to disk changes:
 
 - **An excluded program** keeps only its name and when it was first and last
-  seen. Its usage and the hosts it talked to are not written. The name stays
+  seen. Its usage and the hosts it talked to (including its per-host
+  breakdown) are not written. The name stays
   because the "new program on the network" alert checks history to decide
   whether a program is new. Without it, the program would count as new in
   every session.
@@ -568,9 +583,9 @@ still see the traffic. Only what is written to disk changes:
 
 Excluding something stops future recording. Afterwards NetScope asks, as a
 separate step, whether to erase what is already recorded. For a program that
-erases its usage. The hosts it contacted in the past stay, because history
-doesn't record which program contacted which host; exclude those hosts too if
-that matters. Removing an entry resumes recording from then on. The list is
+erases its usage and its per-host breakdown. The hosts it contacted in the
+past stay in the host list, because their all-time totals are not split by
+program; exclude those hosts too if that matters. Removing an entry resumes recording from then on. The list is
 kept in `settings.json` beside the database, and **Erase all history** keeps
 it.
 
@@ -870,6 +885,12 @@ names.
 ---
 
 ## Version history
+
+**1.32.0** — **Why a program or host has that many bytes.** Clicking a bar on the
+History tab opens the hosts behind it, an hourly strip for the last 72 hours
+and the busiest hours. Backed by a new per-hour `usage_pairs` table, recorded
+from this version on. Erasing a program or host, excluding one, and erasing
+VPN overhead now clear its per-host rows as well.
 
 **1.31.0** — **Block from the right-click menu.** The packet table's menu and the
 Timeline lanes' menu now offer Block host, Block port and Block program where

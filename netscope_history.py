@@ -32,6 +32,11 @@ DEFAULT_ALERT_RETAIN_DAYS = 30
 # 1.26.0: everything already on a schedule then is learned, not reported. A
 # day, because an hourly check-in needs five hours to be recognised at all.
 CHECKIN_BASELINE = 86400.0
+# Distinct (hour, program, host) rows held between flushes. Past it, further
+# hosts for that hour are folded into one "(other)" row, so a scan of a /16
+# can't grow the batch without bound; the program's own totals stay exact.
+MAX_PENDING_PAIRS = 20000
+OTHER_HOSTS = "(other)"
 # Alerts kept in memory if the database keeps refusing writes, so a full disk
 # can't also fill the machine's memory.
 MAX_PENDING_ALERTS = 5000
@@ -50,6 +55,22 @@ CREATE TABLE IF NOT EXISTS usage (
     PRIMARY KEY (day, hour, process)
 );
 CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
+
+-- Which host each program talked to, per hour. usage and hosts are separate
+-- tallies with no way to join them; this is what says why a program moved
+-- N MB, and when. Recorded from 1.32.0 on, so older traffic has none.
+CREATE TABLE IF NOT EXISTS usage_pairs (
+    day       TEXT    NOT NULL,
+    hour      INTEGER NOT NULL,
+    process   TEXT    NOT NULL,
+    host      TEXT    NOT NULL,
+    bytes_in  INTEGER NOT NULL DEFAULT 0,
+    bytes_out INTEGER NOT NULL DEFAULT 0,
+    packets   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, hour, process, host)
+);
+CREATE INDEX IF NOT EXISTS usage_pairs_host ON usage_pairs(host);
+CREATE INDEX IF NOT EXISTS usage_pairs_day ON usage_pairs(day);
 
 CREATE TABLE IF NOT EXISTS processes (
     name       TEXT PRIMARY KEY,
@@ -235,6 +256,7 @@ class HistoryStore:
         self.last_flush = 0.0
 
         self._acc = {}          # (day, hour, process) -> [in, out, packets]
+        self._pairs = {}        # (day, hour, process, host) -> [in, out, packets]
         self._procs = {}        # name -> [first, last, in, out, packets]
         self._hosts = {}        # host -> [first, last, in, out, packets]
         self._pending_alerts = []
@@ -361,6 +383,15 @@ class HistoryStore:
                     slot = self._acc[(day, hour, proc)] = [0, 0, 0]
                 slot[0 if inbound else 1] += size
                 slot[2] += 1
+                if host and not host_out and proc != "-":
+                    pk = (day, hour, proc, host)
+                    ps = self._pairs.get(pk)
+                    if ps is None:
+                        if len(self._pairs) >= MAX_PENDING_PAIRS:
+                            pk = (day, hour, proc, OTHER_HOSTS)
+                        ps = self._pairs.setdefault(pk, [0, 0, 0])
+                    ps[0 if inbound else 1] += size
+                    ps[2] += 1
 
             for table, key, counts in ((self._procs, proc, not proc_out),
                                        (self._hosts, host if not host_out else "", True)):
@@ -419,6 +450,9 @@ class HistoryStore:
         with self._lock:
             self._acc = {k: v for k, v in self._acc.items()
                          if not self.excluded_program(k[2])}
+            self._pairs = {k: v for k, v in self._pairs.items()
+                           if not self.excluded_program(k[2])
+                           and not self.excluded_host(k[3])}
             for name, row in self._procs.items():
                 if self.excluded_program(name):
                     row[2] = row[3] = row[4] = 0
@@ -462,9 +496,10 @@ class HistoryStore:
         seen stay, for the same reason record() keeps them. A host loses its
         row and the note-level alerts that name it. Returns what went.
 
-        The hosts an excluded program talked to in the past can't be told
-        apart from anyone else's — the hosts table has no program column —
-        so they stay; exclude the hosts too if that matters.
+        The hosts table keeps all-time totals with no program column, so a
+        program's past hosts stay listed there; its per-host breakdown
+        (usage_pairs) does go, and so do a host's rows in other programs'
+        breakdowns.
         """
         pattern = (clean_patterns([pattern]) or [None])[0]
         if not self.enabled or self._db is None or not pattern \
@@ -481,6 +516,7 @@ class HistoryStore:
                     for n in names:
                         gone["usage"] += db.execute(
                             "DELETE FROM usage WHERE process=?", (n,)).rowcount
+                        db.execute("DELETE FROM usage_pairs WHERE process=?", (n,))
                         db.execute("UPDATE processes SET bytes_in=0, bytes_out=0, "
                                    "packets=0 WHERE name=?", (n,))
                     ids = [r[0] for r in db.execute(
@@ -492,6 +528,10 @@ class HistoryStore:
                     for n in names:
                         gone["hosts"] += db.execute(
                             "DELETE FROM hosts WHERE host=?", (n,)).rowcount
+                    for n in [r[0] for r in db.execute(
+                            "SELECT DISTINCT host FROM usage_pairs")
+                            if match(pattern, r[0])]:
+                        db.execute("DELETE FROM usage_pairs WHERE host=?", (n,))
                     ids = [r[0] for r in db.execute(
                         "SELECT id, detail FROM alerts WHERE severity='info' "
                         "AND rule='new_host'")
@@ -540,6 +580,7 @@ class HistoryStore:
                     for name in found:
                         gone += db.execute("DELETE FROM usage WHERE process=?",
                                            (name,)).rowcount
+                        db.execute("DELETE FROM usage_pairs WHERE process=?", (name,))
                         db.execute("UPDATE processes SET bytes_in=0, bytes_out=0, "
                                    "packets=0 WHERE name=?", (name,))
                     db.commit()
@@ -604,12 +645,12 @@ class HistoryStore:
         if not self.enabled or self._db is None:
             return
         with self._lock:
-            acc, procs, hosts, alerts, leases = (
+            acc, procs, hosts, alerts, leases, pairs = (
                 self._acc, self._procs, self._hosts, self._pending_alerts,
-                self._pending_leases)
+                self._pending_leases, self._pairs)
             (self._acc, self._procs, self._hosts, self._pending_alerts,
-             self._pending_leases) = {}, {}, {}, [], []
-        if not (acc or procs or hosts or alerts or leases):
+             self._pending_leases, self._pairs) = {}, {}, {}, [], [], {}
+        if not (acc or procs or hosts or alerts or leases or pairs):
             return
         try:
             with self._db_lock:
@@ -621,6 +662,17 @@ class HistoryStore:
                     "bytes_out=bytes_out+excluded.bytes_out, "
                     "packets=packets+excluded.packets",
                     [(d, h, p, v[0], v[1], v[2]) for (d, h, p), v in acc.items()])
+
+                if pairs:
+                    self._db.executemany(
+                        "INSERT INTO usage_pairs(day,hour,process,host,bytes_in,"
+                        "bytes_out,packets) VALUES (?,?,?,?,?,?,?) "
+                        "ON CONFLICT(day,hour,process,host) DO UPDATE SET "
+                        "bytes_in=bytes_in+excluded.bytes_in, "
+                        "bytes_out=bytes_out+excluded.bytes_out, "
+                        "packets=packets+excluded.packets",
+                        [(d, h, p, ho, v[0], v[1], v[2])
+                         for (d, h, p, ho), v in pairs.items()])
 
                 for table, col, data in (("processes", "name", procs),
                                          ("hosts", "host", hosts)):
@@ -671,10 +723,14 @@ class HistoryStore:
                     self._db.rollback()
             except Exception:
                 pass
-            self._requeue(acc, procs, hosts, alerts, leases)
+            self._requeue(acc, procs, hosts, alerts, leases, pairs)
 
-    def _requeue(self, acc, procs, hosts, alerts, leases):
+    def _requeue(self, acc, procs, hosts, alerts, leases, pairs=()):
         with self._lock:
+            for k, v in dict(pairs).items():
+                slot = self._pairs.setdefault(k, [0, 0, 0])
+                for i in range(3):
+                    slot[i] += v[i]
             for k, v in acc.items():
                 slot = self._acc.setdefault(k, [0, 0, 0])
                 for i in range(3):
@@ -706,6 +762,7 @@ class HistoryStore:
         try:
             with self._db_lock:
                 self._db.execute("DELETE FROM usage WHERE day < ?", (cutoff_day,))
+                self._db.execute("DELETE FROM usage_pairs WHERE day < ?", (cutoff_day,))
                 self._db.execute("DELETE FROM alerts WHERE ts < ?", (cutoff_ts,))
                 self._db.execute("DELETE FROM sessions WHERE started < ?",
                                  (time.time() - self.retain_days * 86400,))
@@ -784,6 +841,66 @@ class HistoryStore:
             "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
             "FROM usage WHERE day >= ? AND process <> '-' GROUP BY process "
             "ORDER BY (SUM(bytes_in)+SUM(bytes_out)) DESC LIMIT ?", (since, limit))
+
+    def pairs_since(self):
+        """First day with a per-host breakdown, or None if none is recorded."""
+        r = self._q("SELECT MIN(day) AS d FROM usage_pairs")
+        return r[0]["d"] if r and r[0]["d"] else None
+
+    def detail(self, kind, name, days=30, limit=8):
+        """
+        Why a program or host has the bytes it has. A program: the hosts it
+        talked to, its last 72 hours hour by hour, and its busiest hours with
+        the main host in each. A host: the programs that contacted it.
+        `unlisted` is a program's traffic in the period with no host recorded
+        (before 1.32.0, or past `limit`), so the parts add up to the whole.
+        """
+        since = self._range_days(days)[0]
+        out = {"kind": kind, "name": name, "days": days,
+               "pairs_since": self.pairs_since(), "rows": [], "unlisted": 0,
+               "total": 0, "hours": [], "busiest": []}
+        if kind == "program":
+            tot = self._q("SELECT SUM(bytes_in+bytes_out) AS t FROM usage "
+                          "WHERE day >= ? AND process = ?", (since, name))
+            out["total"] = (tot[0]["t"] or 0) if tot else 0
+            out["rows"] = self._q(
+                "SELECT host AS name, SUM(bytes_in) AS bytes_in, "
+                "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
+                "FROM usage_pairs WHERE day >= ? AND process = ? GROUP BY host "
+                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", (since, name, limit))
+            now = datetime.now().replace(minute=0, second=0, microsecond=0)
+            slots = [now - timedelta(hours=i) for i in range(71, -1, -1)]
+            have = {(r["day"], r["hour"]): r for r in self._q(
+                "SELECT day, hour, bytes_in, bytes_out FROM usage WHERE process = ? "
+                "AND day >= ?", (name, slots[0].strftime("%Y-%m-%d")))}
+            for t in slots:
+                r = have.get((t.strftime("%Y-%m-%d"), t.hour))
+                out["hours"].append({"day": t.strftime("%Y-%m-%d"), "hour": t.hour,
+                                     "bytes_in": r["bytes_in"] if r else 0,
+                                     "bytes_out": r["bytes_out"] if r else 0})
+            busy = self._q(
+                "SELECT day, hour, bytes_in, bytes_out FROM usage WHERE day >= ? "
+                "AND process = ? ORDER BY (bytes_in+bytes_out) DESC LIMIT 5",
+                (since, name))
+            for b in busy:
+                top = self._q(
+                    "SELECT host FROM usage_pairs WHERE day = ? AND hour = ? AND "
+                    "process = ? ORDER BY (bytes_in+bytes_out) DESC LIMIT 1",
+                    (b["day"], b["hour"], name))
+                b["host"] = top[0]["host"] if top else ""
+            out["busiest"] = busy
+            listed = sum(r["bytes_in"] + r["bytes_out"] for r in out["rows"])
+            out["unlisted"] = max(0, out["total"] - listed)
+        else:
+            tot = self._q("SELECT SUM(bytes_in+bytes_out) AS t FROM usage_pairs "
+                          "WHERE day >= ? AND host = ?", (since, name))
+            out["total"] = (tot[0]["t"] or 0) if tot else 0
+            out["rows"] = self._q(
+                "SELECT process AS name, SUM(bytes_in) AS bytes_in, "
+                "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
+                "FROM usage_pairs WHERE day >= ? AND host = ? GROUP BY process "
+                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", (since, name, limit))
+        return out
 
     def top_hosts(self, limit=15):
         return self._q(
@@ -878,10 +995,10 @@ class HistoryStore:
             return
         with self._lock:
             (self._acc, self._procs, self._hosts, self._pending_alerts,
-             self._pending_leases) = {}, {}, {}, [], []
+             self._pending_leases, self._pairs) = {}, {}, {}, [], [], {}
         try:
             with self._db_lock:
-                for t in ("usage", "processes", "hosts", "alerts",
+                for t in ("usage", "usage_pairs", "processes", "hosts", "alerts",
                           "dhcp_leases", "sessions", "checkins"):
                     self._db.execute(f"DELETE FROM {t}")
                 self._db.commit()

@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.31.0"
+VERSION = "1.32.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2837,6 +2837,15 @@ class Handler(BaseHTTPRequestHandler):
                 "exclude": ex,
                 "days": days,
             })
+
+        if path == "/api/history/detail":
+            h = self.app.history
+            kind = qs.get("kind", [""])[0]
+            name = qs.get("name", [""])[0]
+            if h is None or not h.enabled or kind not in ("program", "host") or not name:
+                return self._send(400, {"error": "bad request"})
+            days = max(1, min(365, int(qs.get("days", ["30"])[0])))
+            return self._send(200, h.detail(kind, name, days))
 
         if path == "/api/connections":
             store = self.app.store

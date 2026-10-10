@@ -564,6 +564,24 @@ code.k{color:var(--accent);font-family:var(--mono)}
    it reads as a gap in the bar rather than a mark on it. */
 .hbar .track b{position:absolute;top:-1px;bottom:-1px;left:86%;width:7px;
   background:var(--panel2);transform:skewX(-25deg)}
+.hbar[data-k]{cursor:pointer;border-radius:3px}
+.hbar[data-k]:hover .nm,.hbar[data-k]:focus-visible .nm{text-decoration:underline}
+.hbar[data-k] .nm::before{content:"\25B8";display:inline-block;width:12px;color:var(--faint)}
+.hbar[data-k][aria-expanded=true] .nm::before{content:"\25BE"}
+.hdet{margin:2px 0 8px 12px;padding:6px 0 2px 10px;border-left:2px solid var(--panel2);
+  font:11px var(--mono);color:var(--dim)}
+.hdet[hidden]{display:none}
+.hdet h5{margin:6px 0 3px;font:600 10.5px var(--sans);text-transform:uppercase;
+  letter-spacing:.04em;color:var(--faint)}
+.hdet h5:first-child{margin-top:0}
+.hdet .note{color:var(--faint);margin:3px 0}
+.hdet .hr{display:flex;justify-content:space-between;gap:10px;padding:1px 0}
+.hdet .hr span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.hdet .hr span:last-child{white-space:nowrap}
+.hstrip{display:flex;align-items:flex-end;gap:1px;height:28px;margin:2px 0}
+.hstrip i{flex:1;min-width:2px;background:var(--panel2);display:block}
+.hstrip i.on{background:var(--series-in)}
+.hstripl{display:flex;justify-content:space-between;color:var(--faint);font-size:10px}
 .dayrange{display:flex;gap:6px;align-items:center;margin-bottom:10px}
 .dayrange button{padding:3px 10px;font:600 11px var(--sans)}
 .dayrange button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -1842,7 +1860,7 @@ function hbarScale(rows){
   return {max: Math.max(1, tots[0] || 1), cut: 0};
 }
 
-function hbars(rows, keyName){
+function hbars(rows, keyName, sub){
   const sc = hbarScale(rows);
   return rows.map(r => {
     const tot = r.bytes_in + r.bytes_out;
@@ -1851,7 +1869,10 @@ function hbars(rows, keyName){
     const denom = broken ? tot : sc.max;
     const pin = Math.min(100, (r.bytes_in / denom) * 100);
     const pout = Math.min(100 - pin, (r.bytes_out / denom) * 100);
-    return '<div class="hbar">' +
+    const kind = keyName === 'name' ? 'program' : keyName === 'host' ? 'host' : '';
+    const key = kind + '|' + r[keyName];
+    return '<div class="hbar"' + (kind && !sub ? ' data-k="'+kind+'" data-n="'+esc(r[keyName])+
+        '" tabindex="0" role="button" aria-expanded="'+histOpen.has(key)+'"' : '') + '>' +
       '<span class="nm" title="'+esc(r[keyName])+'">'+esc(r[keyName])+'</span>' +
       '<span style="color:var(--dim)">'+esc(hb(tot))+'</span>' +
       '<span class="track"'+(broken ? ' title="Shortened to fit: this bar is not to scale. '+
@@ -1859,9 +1880,92 @@ function hbars(rows, keyName){
         (pin  > 0 ? '<i style="width:'+pin.toFixed(2)+'%;background:var(--series-in)"></i>'  : '') +
         (pout > 0 ? '<i style="width:'+pout.toFixed(2)+'%;background:var(--series-out)"></i>' : '') +
         (broken ? '<b class="brk"></b>' : '') +
-      '</span></div>';
+      '</span></div>' +
+      (kind && !sub ? '<div class="hdet" data-for="'+esc(key)+'"'+
+        (histOpen.has(key) ? '' : ' hidden')+'>'+
+        (histOpen.has(key) ? detailHtml(histDet[key]) : '')+'</div>' : '');
   }).join('');
 }
+
+/* Click a program or host bar to see why it has that many bytes. The detail is
+   fetched when asked for, not shipped with every poll, and an open one is
+   re-fetched after each redraw so it stays current and stays open. */
+const histOpen = new Set(), histDet = {};
+function hourLabel(day, hour){
+  return new Date(day + 'T' + String(hour).padStart(2, '0') + ':00').toLocaleString([],
+    {month: 'short', day: 'numeric', hour: 'numeric'});
+}
+function detailHtml(d){
+  if (!d) return '<div class="note">Loading…</div>';
+  const prog = d.kind === 'program';
+  let h = '';
+  if (d.rows.length){
+    h += '<h5>' + (prog ? 'Talked to' : 'Contacted by') + ' · last ' + d.days + ' days</h5>' +
+         hbars(d.rows, 'name', true);
+  }
+  if (prog && d.unlisted > 0){
+    const early = !d.pairs_since || d.pairs_since > histData.daily[0].day;
+    h += '<div class="hr"><span>not broken down</span><span>' + esc(hb(d.unlisted)) + '</span></div>' +
+         '<div class="note">' + (early
+           ? 'Which host each program talked to is recorded from ' +
+             esc(d.pairs_since || 'the next flush') + ' on; earlier traffic has no host detail.'
+           : 'Hosts beyond the top ' + d.rows.length + '.') + '</div>';
+  } else if (!prog && !d.rows.length){
+    h += '<div class="note">No program has been recorded talking to this host yet. ' +
+         'Detail is kept from ' + esc(d.pairs_since || 'the next flush') + ' on.</div>';
+  } else if (!prog && d.pairs_since){
+    h += '<div class="note">Recorded since ' + esc(d.pairs_since) + '.</div>';
+  }
+  if (prog){
+    const peak = Math.max(1, ...d.hours.map(x => x.bytes_in + x.bytes_out));
+    h += '<h5>Last 72 hours</h5><div class="hstrip">' + d.hours.map(x => {
+      const t = x.bytes_in + x.bytes_out;
+      return '<i' + (t ? ' class="on" style="height:' + Math.max(8, Math.round(t / peak * 100)) + '%"' : ' style="height:6%"') +
+             ' title="' + esc(hourLabel(x.day, x.hour) + ' · ' + hb(t)) + '"></i>';
+    }).join('') + '</div><div class="hstripl"><span>72 h ago</span><span>now</span></div>';
+    if (d.busiest.length){
+      h += '<h5>Busiest hours · last ' + d.days + ' days</h5>' + d.busiest.map(b =>
+        '<div class="hr"><span>' + esc(hourLabel(b.day, b.hour)) +
+        (b.host ? ' · ' + esc(b.host) : '') + '</span><span>' +
+        esc(hb(b.bytes_in + b.bytes_out)) + '</span></div>').join('');
+    }
+  }
+  return h || '<div class="note">Nothing recorded in this period.</div>';
+}
+function loadDetail(key){
+  const i = key.indexOf('|'), kind = key.slice(0, i), name = key.slice(i + 1);
+  return api('/api/history/detail?kind=' + kind + '&days=' + histDays +
+             '&name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
+    if (!histOpen.has(key) || d.error) return;
+    histDet[key] = d;
+    const el = [...document.querySelectorAll('#p-history .hdet')].find(x => x.dataset.for === key);
+    if (el) el.innerHTML = detailHtml(d);
+  }).catch(() => {});
+}
+function toggleDetail(bar){
+  const key = bar.dataset.k + '|' + bar.dataset.n;
+  const box = bar.nextElementSibling;
+  if (histOpen.has(key)){
+    histOpen.delete(key);
+    bar.setAttribute('aria-expanded', 'false');
+    box.hidden = true;
+    return;
+  }
+  histOpen.add(key);
+  bar.setAttribute('aria-expanded', 'true');
+  box.hidden = false;
+  box.innerHTML = detailHtml(histDet[key]);
+  loadDetail(key);
+}
+$('p-history').addEventListener('click', e => {
+  const bar = e.target.closest && e.target.closest('.hbar[data-k]');
+  if (bar) toggleDetail(bar);
+});
+$('p-history').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const bar = e.target.closest && e.target.closest('.hbar[data-k]');
+  if (bar && e.target === bar){ e.preventDefault(); toggleDetail(bar); }
+});
 
 function hbarNote(rows){
   return hbarScale(rows).cut
@@ -3569,6 +3673,7 @@ function redrawHistory(d){
   const typed = [...pane.querySelectorAll('input[id],select[id]')].map(x =>
     [x.id, x.value, x.selectionStart, x.selectionEnd]);
   renderHistory(d);
+  histOpen.forEach(loadDetail);
   pane.querySelectorAll('details').forEach(x => { if (open.has(histSecName(x))) x.open = true; });
   for (const [id, v, a, b] of typed){
     const x = $(id);
@@ -3608,9 +3713,9 @@ function addExclusion(kind, pattern){
     if ($('exPat') && $('exPat').value.trim().toLowerCase() === pat) $('exPat').value = '';
     const ask = kind === 'host'
       ? 'Also erase what is already recorded for ' + pat + ' (and its subdomains)?'
-      : 'Also erase what is already recorded for ' + pat + '?\n\nIts usage is erased. ' +
-        'The hosts it talked to stay: history does not record which program ' +
-        'contacted a host, so they cannot be told apart from anyone else\'s.';
+      : 'Also erase what is already recorded for ' + pat + '?\n\nIts usage and its ' +
+        'per-host breakdown are erased. The hosts it talked to stay in the host ' +
+        'list: their all-time totals are not split by program.';
     if (!confirm(ask)) return refreshTab('history');
     return excludeCall({action: 'history_purge', kind, pattern: pat}).then(r => {
       const g = r.purged || {}, bits = [];
