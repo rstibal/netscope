@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.32.0**
+**Version 1.32.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -885,6 +885,13 @@ names.
 ---
 
 ## Version history
+
+**1.32.1** — **Alerts rules no longer un-click themselves.** The Alerts tab redraws
+every 2.5 s from the server's state, which reset any rule box, the threshold or
+the notification boxes you had changed but not yet applied, so Apply had to be
+clicked within seconds. Edits are now kept until Apply sends them, the button
+reads "Apply changes" while some are waiting, and a field you are typing in
+keeps its focus and caret across the redraw.
 
 **1.32.0** — **Why a program or host has that many bytes.** Clicking a bar on the
 History tab opens the hosts behind it, an hourly strip for the last 72 hours

@@ -2381,6 +2381,19 @@ $('p-history').addEventListener('click', e => {
 try { rulesCollapsed = localStorage.getItem('rulesCollapsed') === '1'; } catch(e) {}
 let openWhy = new Set();
 
+/* The Alerts pane is rebuilt from the server's state every 2.5 s, which put
+   every rule box back to what was last applied, so a change had to be applied
+   before the next redraw or it un-clicked itself. Edits are kept here until
+   Apply sends them (or the server's own state changes them under us). Keys:
+   rule name, 'thr', 'toasts', 'rdns'. */
+let rulesDraft = {};
+const draftOr = (k, v) => (k in rulesDraft ? rulesDraft[k] : v);
+
+function markDraft(){
+  const a = $('applyRules');
+  if (a) a.textContent = 'Apply changes';
+}
+
 function renderAlerts(d){
   lastAlerts = d;
   let h = '';
@@ -2388,17 +2401,17 @@ function renderAlerts(d){
     h += '<div class="sec"><h4>Rules</h4><div class="rulegrid">';
     for (const k in RULE_LABELS){
       h += '<label><input type="checkbox" data-rule="'+k+'"'+
-           (d.rules[k] ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
+           (draftOr(k, d.rules[k]) ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
     }
     h += '<label>Threshold <input type="number" id="thrMb" min="1" value="'+
-         d.threshold_mb+'"> MB per program</label>';
-    h += '<label><input type="checkbox" id="toasts"'+(d.toasts ? ' checked' : '')+
+         esc(String(draftOr('thr', d.threshold_mb)))+'"> MB per program</label>';
+    h += '<label><input type="checkbox" id="toasts"'+(draftOr('toasts', d.toasts) ? ' checked' : '')+
          (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
          (d.toasts_supported ? '' : ' (Windows only)')+'</label>';
     h += '<label title="Looks up a name for IPs nothing on the wire has '+
          'already named. Off by default: unlike everything else here, this '+
          'sends DNS queries out."><input type="checkbox" id="reverseDns"'+
-         (d.reverse_dns ? ' checked' : '')+'> Reverse DNS for unlabeled IPs'+
+         (draftOr('rdns', d.reverse_dns) ? ' checked' : '')+'> Reverse DNS for unlabeled IPs'+
          '</label>';
     const rs = d.reverse_dns_stats;
     if (d.reverse_dns && rs){
@@ -2418,7 +2431,8 @@ function renderAlerts(d){
            '</div>';
     }
     h += '</div><div class="rowbtns">'+
-         '<button class="btn-sm" id="applyRules">Apply</button>'+
+         '<button class="btn-sm" id="applyRules">Apply'+
+           (Object.keys(rulesDraft).length ? ' changes' : '')+'</button>'+
          '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+
          '<div class="hint">Settings are remembered between runs.</div></div>';
   }
@@ -2490,7 +2504,18 @@ function renderAlerts(d){
   // Keep open "why" boxes in the log open across the 2.5 s redraw; the
   // session list does this with alert ids, which log rows don't share.
   pane0.querySelectorAll('.logrow details.why[open]').forEach(x => openLog.add(x.dataset.lid));
+  const act = document.activeElement;
+  const focusSel = act && pane0.contains(act)
+    ? (act.dataset.rule ? '[data-rule="'+act.dataset.rule+'"]' : act.id ? '#'+act.id : null) : null;
+  const caret = focusSel && act.selectionStart != null ? [act.selectionStart, act.selectionEnd] : null;
   pane0.innerHTML = h;
+  if (focusSel){
+    const el = pane0.querySelector(focusSel);
+    if (el){
+      el.focus({preventScroll: true});
+      if (caret) try { el.setSelectionRange(caret[0], caret[1]); } catch (e){}
+    }
+  }
 
   // Alerts that no longer exist (dismissed, muted, cleared) don't need to be
   // remembered as "open" forever.
@@ -2518,6 +2543,12 @@ function renderAlerts(d){
     });
   });
 
+  pane0.querySelectorAll('[data-rule]').forEach(cb =>
+    cb.onchange = () => { rulesDraft[cb.dataset.rule] = cb.checked; markDraft(); });
+  const thr = $('thrMb'), tst = $('toasts'), rdn = $('reverseDns');
+  if (thr) thr.oninput = () => { rulesDraft.thr = thr.value; markDraft(); };
+  if (tst) tst.onchange = () => { rulesDraft.toasts = tst.checked; markDraft(); };
+  if (rdn) rdn.onchange = () => { rulesDraft.rdns = rdn.checked; markDraft(); };
   const apply = $('applyRules');
   if (apply) apply.onclick = () => {
     const rules = {};
@@ -2526,7 +2557,10 @@ function renderAlerts(d){
     control({action:'alerts', rules,
              threshold_mb: Number($('thrMb').value) || 500,
              toasts: $('toasts').checked,
-             reverse_dns: $('reverseDns').checked}).then(() => refreshTab('alerts'));
+             reverse_dns: $('reverseDns').checked}).then(() => {
+               rulesDraft = {};
+               return refreshTab('alerts');
+             });
   };
   const clr = $('clearAlerts');
   if (clr) clr.onclick = () => control({action:'clear_alerts'})
