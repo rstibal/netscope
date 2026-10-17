@@ -88,6 +88,8 @@ function history(){
 
   // Keep a why box open across the tab's 2.5 s refresh.
   await p.click('#p-alerts .logrow:nth-child(4) details.why summary');
+  // The pane doesn't redraw under the pointer, so take it away.
+  await p.mouse.move(5, 5);
   // A new alert is logged; the refresh fetches only what's new.
   LOG.push({id: 151, ts: Date.now()/1000, severity:'high', rule:'cleartext_creds', title:'Password in the clear',
             detail:'ftp.exe sent a password', process:'ftp.exe', peer:'5.6.7.8', subject:'5.6.7.8'});

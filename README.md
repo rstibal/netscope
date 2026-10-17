@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.32.1**
+**Version 1.33.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -885,6 +885,15 @@ names.
 ---
 
 ## Version history
+
+**1.33.0** — **A tab per interface on the Table view, and Alerts that hold still.**
+Once packets have been seen on a second adapter, a strip above the table lists
+All plus each adapter; picking one narrows the table (and the Timeline) to it,
+combined with whatever is in the filter box. It stays on screen so nothing is
+hidden out of sight. Separately, the Alerts pane no longer redraws while the
+pointer is over it: a new alert arriving used to slide the cards down just as
+you clicked "Why did this fire?", landing the click on Mute. It catches up a
+moment after the pointer leaves.
 
 **1.32.1** — **Alerts rules no longer un-click themselves.** The Alerts tab redraws
 every 2.5 s from the server's state, which reset any rule box, the threshold or

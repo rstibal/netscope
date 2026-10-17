@@ -444,6 +444,9 @@ code.k{color:var(--accent);font-family:var(--mono)}
   border-radius:6px;padding:5px 9px;outline:none}
 #find:focus{border-color:var(--accent)}
 #find.bad{border-color:#f85149;color:#f85149}
+#ifbar{display:flex;flex-wrap:wrap;gap:4px;padding:5px 14px;flex:0 0 auto;
+  background:var(--panel2);border-bottom:1px solid var(--line)}
+#ifbar .btn-sm.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .fcount{color:var(--dim);font:11px var(--mono);white-space:nowrap;min-width:96px;text-align:right}
 #fhelpbox{padding:9px 14px;background:var(--panel);border-bottom:1px solid var(--line);
   color:var(--dim);font-size:11.5px;line-height:1.8;flex:0 0 auto}
@@ -686,6 +689,7 @@ back through the table while the capture continues."><input type="checkbox"
 
 <main>
   <div id="left">
+    <div id="ifbar" role="group" aria-label="Interface" style="display:none"></div>
     <div class="tablewrap" id="tw">
       <table id="ptable">
         <colgroup id="cg">
@@ -1057,6 +1061,7 @@ function addRow(p){
             (p.proto||'')+' '+(p.info||'')+' '+(p.sport||'')+' '+(p.dport||'')+' '+
             (p.iface||'')).toLowerCase();
   records.set(p.seq, p);
+  noteIface(p.iface);
   const tr = document.createElement('tr');
   tr.dataset.seq = p.seq;
   const sp = p.sport!=null ? ':'+p.sport : '';
@@ -1220,22 +1225,59 @@ function applyFind(){
       return;
     }
   }
+  refilter();
+}
+
+function refilter(){
   let shown = 0, total = 0;
   for (const tr of $('rows').children){
     total++;
     const rec = records.get(Number(tr.dataset.seq));
-    let hit = true;
-    if (filterFn && rec){ try { hit = !!filterFn(rec); } catch(e){ hit = false; } }
+    const hit = rec ? rowVisible(rec) : true;
     tr.style.display = hit ? '' : 'none';
     if (hit) shown++;
   }
-  $('fcount').textContent = filterFn ? shown + ' of ' + total : total + ' packets';
+  const narrowed = filterFn || ifaceTab;
+  $('fcount').textContent = narrowed ? shown + ' of ' + total : total + ' packets';
   $('emptyMsg').style.display = shown ? 'none' : 'block';
-  $('emptyMsg').textContent = filterFn ? 'No packets match this filter.' : 'Waiting for packets…';
+  $('emptyMsg').textContent = narrowed ? 'No packets match this filter.' : 'Waiting for packets…';
   tlDraw();
 }
 
+/* ---------------- interface tabs ----------------
+   A strip above the table with one tab per adapter that has shown a packet.
+   It narrows the same way the filter box does (and the two combine), and it
+   stays on screen, so nothing is hidden out of sight. The strip appears once a
+   second adapter is seen and then stays, so it can't pop in and shove the
+   table down again later. */
+let ifaceTab = '';
+const seenIfaces = new Set();
+
+function noteIface(name){
+  if (!name || seenIfaces.has(name)) return;
+  seenIfaces.add(name);
+  renderIfBar();
+}
+
+function renderIfBar(){
+  const bar = $('ifbar');
+  if (seenIfaces.size < 2 && !ifaceTab){ bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  const names = [...seenIfaces].sort();
+  bar.innerHTML = [''].concat(names).map(n =>
+    '<button class="btn-sm' + (n === ifaceTab ? ' on' : '') + '" data-if="' + esc(n) +
+    '" aria-pressed="' + (n === ifaceTab) + '" title="' + esc(n || 'Every interface') + '">' +
+    esc(n ? shortIface(n) : 'All') + '</button>').join('');
+  bar.querySelectorAll('[data-if]').forEach(b => b.onclick = () => {
+    ifaceTab = b.dataset.if;
+    if (bufferMode) backToLive();
+    renderIfBar();
+    refilter();
+  });
+}
+
 function rowVisible(rec){
+  if (ifaceTab && rec.iface !== ifaceTab) return false;
   if (!filterFn) return true;
   try { return !!filterFn(rec); } catch(e){ return false; }
 }
@@ -1244,7 +1286,7 @@ function updateCount(){
   if (bufferMode) return;
   if (filterError){ $('fcount').textContent = filterError; return; }
   const rows = $('rows').children;
-  if (!filterFn){ $('fcount').textContent = rows.length + ' packets'; return; }
+  if (!filterFn && !ifaceTab){ $('fcount').textContent = rows.length + ' packets'; return; }
   let shown = 0;
   for (const tr of rows) if (tr.style.display !== 'none') shown++;
   $('fcount').textContent = shown + ' of ' + rows.length;
@@ -3934,6 +3976,11 @@ refreshTab(activeTab());
 // The Files and Streams lists are heavier, so refresh them on a slower beat.
 setInterval(() => {
   const t = activeTab();
+  // A new alert arriving pushes the cards down; if the pointer is on one, the
+  // click meant for "Why did this fire?" lands on whatever slid under it
+  // (Mute). So the automatic redraw waits while the pointer is anywhere over
+  // the pane, not just on a card, since the shift happens as you aim.
+  if (t === 'alerts' && $('p-alerts').matches(':hover')) return;
   if (t === 'files' || t === 'streams' || t === 'alerts' || t === 'conns')
     refreshTab(t);
 }, 2500);
