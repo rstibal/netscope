@@ -58,6 +58,12 @@ a message if absent. Three unit tests open a real
 capture socket and create adapters with `ip`, so they are Linux+root only and
 skip elsewhere.
 
+Anything that starts NetScope with its own `LOCALAPPDATA` (the runner's demo
+servers, `test_demo_isolation.py`) must launch `sys.executable`, not
+`python`. On this machine `python` is the Python Install Manager launcher,
+which finds its runtimes under `LOCALAPPDATA`; pointed at a scratch folder it
+fails with "No runtimes are installed" before NetScope ever runs.
+
 Almost every bug in this project's history was a layout or timing fault that
 only a browser could see. Prefer adding to `tests/ui/` over reasoning about the
 DOM.
