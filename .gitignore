@@ -7,3 +7,4 @@ netscope_history.db
 netscope.log
 .pytest_cache/
 node_modules/
+.claude/
