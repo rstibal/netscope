@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.1**
+**Version 1.33.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -887,6 +887,15 @@ names.
 ---
 
 ## Version history
+
+**1.33.2** — **The interface tabs moved into the filter row, and the filter
+box shows when it is on.** The adapter tabs (All, Wi-Fi, Ethernet, ...) narrow
+the table the same way the filter does, so they now sit beside it, right after
+Table/Timeline, instead of on a strip of their own above the table. The filter
+box stops growing at a readable width, and its clear button (✕) is inside the
+box's right end instead of across the screen; Esc in the box clears it too.
+While a filter is in force the box is outlined and tinted, so a narrowed table
+is noticeable at a glance.
 
 **1.33.1** — **The demo no longer writes into your real history.** `--demo`
 recorded its invented traffic in the real history database, which inflated

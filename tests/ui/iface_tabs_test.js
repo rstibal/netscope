@@ -24,6 +24,30 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   const bb = await bar();
   check('the strip appears with two adapters', bb.shown && bb.labels[0] === 'All' && bb.labels.length >= 3, JSON.stringify(bb));
 
+  // The tabs sit in the filter row, right after Table/Timeline and before the box.
+  const lay = await p.evaluate(() => {
+    const r = id => $(id).getBoundingClientRect();
+    return {inRow: $('ifbar').parentElement.id, ifL: r('ifbar').left, viewR: r('vTime').right,
+            findL: r('find').left, ifR: r('ifbar').right, top: r('ifbar').top, findTop: r('find').top};
+  });
+  check('the tabs live in the filter row', lay.inRow === 'filterbar', lay.inRow);
+  check('...between the view switch and the filter box',
+        lay.ifL >= lay.viewR && lay.ifR <= lay.findL && Math.abs(lay.top - lay.findTop) < 12, JSON.stringify(lay));
+
+  // The clear button sits inside the box's right end, and the box is marked while a filter is on.
+  await p.fill('#find', 'proto == TCP');
+  const cl = await p.evaluate(() => {
+    const f = $('find').getBoundingClientRect(), x = $('findClear').getBoundingClientRect();
+    return {inside: x.left > f.left && x.right <= f.right && x.top >= f.top && x.bottom <= f.bottom,
+            active: $('findwrap').classList.contains('active'), boxW: f.width};
+  });
+  check('the clear button is inside the filter box', cl.inside, JSON.stringify(cl));
+  check('...the box is capped so the button stays near the text', cl.boxW <= 640, String(cl.boxW));
+  check('...and the box shows a filter is in force', cl.active);
+  await p.focus('#find'); await p.keyboard.press('Escape');
+  check('Esc clears the filter', await p.inputValue('#find') === '' &&
+        await p.evaluate(() => !$('findwrap').classList.contains('active')));
+
   const vis = () => p.evaluate(() => [...$('rows').children].filter(t => t.style.display !== 'none').length);
   const seqVis = s => p.evaluate(s => { const t = $('rows').querySelector('tr[data-seq="'+s+'"]'); return t.style.display !== 'none'; }, s);
   await p.click('#ifbar [data-if="Beta NIC"]');

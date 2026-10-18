@@ -220,7 +220,9 @@ td.info{color:var(--dim)}
 .viewsw{display:inline-flex;flex:0 0 auto}
 .viewsw .btn-sm{border-radius:0}
 .viewsw .btn-sm:first-child{border-radius:5px 0 0 5px}
-.viewsw .btn-sm:last-child{border-radius:0 5px 5px 0;margin-left:-1px}
+.viewsw .btn-sm+.btn-sm{margin-left:-1px}
+.viewsw .btn-sm:last-child{border-radius:0 5px 5px 0}
+.viewsw .btn-sm:only-child{border-radius:5px}
 /* The table stays laid out at full width while the timeline is shown, only
    zero height: display:none would report a zero width to the column fitting,
    and rows keep arriving underneath either way. */
@@ -439,14 +441,24 @@ code.k{color:var(--accent);font-family:var(--mono)}
   background:var(--panel2);border-bottom:1px solid var(--line)}
 #filterbar .flabel{color:var(--faint);font:600 10px var(--sans);letter-spacing:.6px;
   text-transform:uppercase}
+/* The box stops growing at a readable width so the clear button, which sits
+   inside its right end, stays near the text instead of across the screen. */
+.findwrap{position:relative;display:flex;flex:1 1 360px;min-width:200px;max-width:640px}
 #find{flex:1 1 auto;min-width:0;font-family:var(--mono);font-size:12px;
   background:var(--bg);border:1px solid var(--line);color:var(--fg);
-  border-radius:6px;padding:5px 9px;outline:none}
+  border-radius:6px;padding:5px 30px 5px 9px;outline:none}
 #find:focus{border-color:var(--accent)}
+/* A filter in force is visibly in force, even when the box isn't focused. */
+.findwrap.active #find{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 9%, var(--bg))}
 #find.bad{border-color:#f85149;color:#f85149}
-#ifbar{display:flex;flex-wrap:wrap;gap:4px;padding:5px 14px;flex:0 0 auto;
-  background:var(--panel2);border-bottom:1px solid var(--line)}
-#ifbar .btn-sm.on{background:var(--accent);border-color:var(--accent);color:#fff}
+#findClear{position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  width:22px;height:20px;padding:0;border:0;border-radius:4px;cursor:pointer;
+  background:var(--accent);color:#fff;font:700 11px var(--sans);line-height:20px}
+#findClear:hover{filter:brightness(1.15)}
+.findwrap:has(#find.bad) #findClear{background:#f85149}
+#ifbar .btn-sm{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ifbar .btn-sm.on{background:var(--accent);border-color:var(--accent);color:#fff;
+  position:relative;z-index:1}
 .fcount{color:var(--dim);font:11px var(--mono);white-space:nowrap;min-width:96px;text-align:right}
 #fhelpbox{padding:9px 14px;background:var(--panel);border-bottom:1px solid var(--line);
   color:var(--dim);font-size:11.5px;line-height:1.8;flex:0 0 auto}
@@ -646,14 +658,18 @@ back through the table while the capture continues."><input type="checkbox"
     <button id="vTime" class="btn-sm" aria-pressed="false"
             title="One lane per program or host against time: what runs when, and what checks in on a schedule">Timeline</button>
   </span>
+  <span id="ifbar" class="viewsw" role="group" aria-label="Interface" style="display:none"></span>
   <span class="flabel">filter</span>
-  <input type="text" id="find" spellcheck="false"
-         placeholder="proto == QUIC &amp;&amp; process ~ chrome   —   or just type text to search">
-  <button id="findClear" class="btn-sm" title="Clear filter" style="display:none">✕</button>
+  <span class="findwrap" id="findwrap">
+    <input type="text" id="find" spellcheck="false"
+           placeholder="proto == QUIC &amp;&amp; process ~ chrome   —   or just type text to search">
+    <button id="findClear" title="Clear filter (Esc)" aria-label="Clear filter" style="display:none">✕</button>
+  </span>
   <span id="fcount" class="fcount"></span>
   <button id="searchAll" class="btn-sm" style="display:none"
           title="Filter every packet still in the capture buffer, not just the rows loaded here">Search buffer</button>
   <button id="backLive" class="btn-sm" style="display:none">← Live</button>
+  <span class="spacer"></span>
   <select id="presets" title="Saved filters"><option value="">presets…</option></select>
   <button id="savePreset" class="btn-sm">Save</button>
   <button id="delPreset" class="btn-sm danger">Del</button>
@@ -689,7 +705,6 @@ back through the table while the capture continues."><input type="checkbox"
 
 <main>
   <div id="left">
-    <div id="ifbar" role="group" aria-label="Interface" style="display:none"></div>
     <div class="tablewrap" id="tw">
       <table id="ptable">
         <colgroup id="cg">
@@ -1206,6 +1221,7 @@ function applyFind(){
   const text = $('find').value.trim();
   const box = $('find');
   $('findClear').style.display = text ? '' : 'none';
+  $('findwrap').classList.toggle('active', !!text);
   if (bufferMode) backToLive();
   if (!text){
     filterFn = null; filterError = null;
@@ -1245,11 +1261,11 @@ function refilter(){
 }
 
 /* ---------------- interface tabs ----------------
-   A strip above the table with one tab per adapter that has shown a packet.
-   It narrows the same way the filter box does (and the two combine), and it
-   stays on screen, so nothing is hidden out of sight. The strip appears once a
-   second adapter is seen and then stays, so it can't pop in and shove the
-   table down again later. */
+   A segmented group in the filter row, one tab per adapter that has shown a
+   packet. It narrows the same way the filter box does (and the two combine),
+   which is why it sits beside it, and it stays on screen, so nothing is hidden
+   out of sight. It appears once a second adapter is seen and then stays, so
+   it can't pop in and out and slide the filter box around. */
 let ifaceTab = '';
 const seenIfaces = new Set();
 
@@ -3861,6 +3877,7 @@ $('clear').onclick = () => {
 };
 $('find').oninput = applyFind;
 $('findClear').onclick = () => { $('find').value = ''; applyFind(); $('find').focus(); };
+$('find').onkeydown = e => { if (e.key === 'Escape' && $('find').value) $('findClear').click(); };
 $('bpf').onkeydown = e => { if (e.key === 'Enter') $('apply').click(); };
 $('theme').onclick = () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

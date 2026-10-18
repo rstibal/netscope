@@ -291,9 +291,10 @@ for an automatic refresh must move the pointer off the pane first.
 
 **Interface tabs narrow the table the way the filter does, and combine with
 it.** `rowVisible()` checks `ifaceTab` first, so the Timeline and "Search
-buffer" follow it too. The strip lives outside the table, on screen, so what is
-hidden is still visible. It appears once a second adapter has been seen and then
-stays, so it can't pop in later and shove the table down.
+buffer" follow it too. The tabs sit in the filter row beside the box (since
+1.33.2; they were a strip above the table), on screen, so what is hidden is still
+visible. They appear once a second adapter has been seen and then stay, so they
+can't pop in and out and slide the filter box around.
 
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
