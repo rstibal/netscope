@@ -123,10 +123,10 @@ def have_playwright():
         return False
 
 
-def run(cmd, cwd, timeout):
+def run(cmd, cwd, timeout, env=None):
     try:
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                           timeout=timeout)
+                           timeout=timeout, env=env)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 1, "timed out"
@@ -158,8 +158,13 @@ def main():
                 print("  SKIP  %-22s needs Linux + root for a live capture" % name)
                 skipped.append(name)
                 continue
+            # Scratch settings here too: a unit test that drives the real
+            # Handler can save a setting, and a stub that misses the path it
+            # goes through fails silently. test_offline_source.py once wrote
+            # its stand-in adapter "eth0" into the real settings.json, and the
+            # next launch tried to capture on it.
             code, out = run([sys.executable, os.path.join("unit", name)],
-                            HERE, 300)
+                            HERE, 300, env={**os.environ, **scratch_home()})
             print("  %s  %s" % ("PASS " if code == 0 else "FAIL ", name))
             if args.verbose or code != 0:
                 print("        " + out.strip().replace("\n", "\n        ")[:4000])

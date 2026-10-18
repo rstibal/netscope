@@ -53,10 +53,13 @@ alerts = N.AlertEngine()
 alerts._dns_read = N.time.time()
 decoder = N.CaptureEngine(store, resolver, streams=streams, alerts=alerts)
 token = "test-token"
-N.Handler.app = N.App(store, FakeEngine(), resolver, token, streams=streams,
-                      objects=objects, alerts=alerts, decoder=decoder)
 # Don't let a real (unrelated) settings file be written by the start action.
-N.save_setting = lambda *a, **k: None
+# The Handler saves through App.save_setting; stubbing N.save_setting instead
+# missed it and wrote this fake "eth0" into the real settings.json.
+saved = {}
+N.Handler.app = N.App(store, FakeEngine(), resolver, token, streams=streams,
+                      objects=objects, alerts=alerts, decoder=decoder,
+                      save_setting=lambda k, v: saved.__setitem__(k, v))
 
 port = free_port()
 httpd = N.DashboardServer(("127.0.0.1", port), N.Handler)
@@ -87,6 +90,8 @@ try:
     st = control(action="start", iface="eth0")
     check("Start after an import leaves offline mode",
           st["source"] is None and st["running"], str(st["source"]))
+    check("the chosen adapter goes to the App's settings, not the real file",
+          saved.get("iface") == "eth0", str(saved))
 
     post("/api/import?name=again.pcap", pcap, "application/octet-stream")
     st = control(action="restart", iface="eth0")
