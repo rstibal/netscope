@@ -276,6 +276,19 @@ no Dismiss. It pages by id, not timestamp, because alerts can share a
 timestamp. `subject` was added to the `alerts` table in 1.25.1, with an
 `ALTER TABLE` on open; older rows have none and can't be muted.
 
+**The Alerts pane does not redraw while the pointer is over it.** It is
+rebuilt every 2.5 s, and a new alert arriving slid the cards down just as a
+click aimed at "Why did this fire?" landed, which put it on Mute. Hovering the
+whole pane (not just a card) pauses the automatic redraw, since the shift
+happens while aiming; user actions still refresh at once. UI tests that wait
+for an automatic refresh must move the pointer off the pane first.
+
+**Interface tabs narrow the table the way the filter does, and combine with
+it.** `rowVisible()` checks `ifaceTab` first, so the Timeline and "Search
+buffer" follow it too. The strip lives outside the table, on screen, so what is
+hidden is still visible. It appears once a second adapter has been seen and then
+stays, so it can't pop in later and shove the table down.
+
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
 Tests change alert rules, mutes and history exclusions through the real API,
