@@ -324,8 +324,14 @@ class DesktopNotifier:
 
 
 class AlertEngine:
-    def __init__(self, notifier: DesktopNotifier = None, history=None):
+    def __init__(self, notifier: DesktopNotifier = None, history=None,
+                 dns_source=None):
         self._lock = threading.Lock()
+        # Where the OS resolver list comes from. Demo mode hands in its own:
+        # its traffic is invented, so judging it against this machine's real
+        # resolvers fired alerts about nothing and printed the real resolver
+        # addresses into a session that was supposed to be made up.
+        self._dns_source = dns_source
         self._alerts = OrderedDict()      # key -> alert
         self._next = 0
         self.notifier = notifier or DesktopNotifier(enabled=False)
@@ -459,7 +465,7 @@ class AlertEngine:
             return
         self._dns_read = _now()
         try:
-            everything, by_iface = configured_resolvers()
+            everything, by_iface = (self._dns_source or configured_resolvers)()
         except Exception:
             everything, by_iface = None, None
         if everything:

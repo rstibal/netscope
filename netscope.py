@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.33.0"
+VERSION = "1.33.1"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -1659,6 +1659,22 @@ class DemoEngine:
 
     LOCAL = "192.168.1.20"
     MAC_LOCAL = "aa:bb:cc:00:11:22"
+    # The demo's DNS server. Lookups go here, not to the host being looked
+    # up, and dns_config() reports it as the configured resolver so the
+    # resolver rule judges the demo against the demo, not this machine.
+    RESOLVER, RESOLVER_NAME = "192.168.1.1", "router.lan"
+    # Programs the demo treats as already known to this machine. Its history
+    # is in memory and starts empty, which would read as a first run and keep
+    # the "new program" rule in silent baseline mode all session. The late
+    # arrivals in _loop() are left off, so that rule has something to fire on.
+    KNOWN_PROGRAMS = ("chrome.exe", "php.exe", "olk.exe", "ms-teams.exe",
+                      "System", "Code.exe", "explorer.exe", "ftp.exe",
+                      "AgentSvc.exe")
+
+    @classmethod
+    def dns_config(cls):
+        """(all resolvers, by interface), shaped like configured_resolvers()."""
+        return {cls.RESOLVER}, {"demo0": {cls.RESOLVER}}
     MAC_GW = "aa:bb:cc:99:88:77"
 
     @classmethod
@@ -2554,7 +2570,12 @@ class DemoEngine:
                                    "ack": random.randint(0, 2**31), "window": 64240}}
                 length = random.randint(54, 120)
 
-            src, dst = (local, ip) if outbound else (ip, local)
+            # A lookup is a conversation with the resolver; the name being
+            # looked up is only its subject. Sending it to the site itself
+            # (github.com:53) also set off the unconfigured-resolver alert.
+            peer, peer_name = ((self.RESOLVER, self.RESOLVER_NAME)
+                               if kind == "dns" else (ip, host))
+            src, dst = (local, peer) if outbound else (peer, local)
             rec = {
                 "ts": now,
                 "time": datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3],
@@ -2564,7 +2585,7 @@ class DemoEngine:
                 "proto": proto, "length": length,
                 "process": proc, "pid": abs(hash(proc)) % 9000 + 1000,
                 "dir": "out" if outbound else "in",
-                "remote": ip, "rhost": host,
+                "remote": peer, "rhost": peer_name,
                 "info": info, "ipver": 4, "ttl": 64 if outbound else 117,
                 "payload_len": max(0, length - 66),
                 "stream": None, "iface": "demo0",
@@ -2602,8 +2623,11 @@ class App:
     def __init__(self, store, engine, resolver, token, demo=False,
                  streams=None, objects=None, scanner=None, alerts=None,
                  decoder=None, history=None, dhcp=None, reverse=None,
-                 blocker=None):
+                 blocker=None, save_setting=save_setting):
         self.store = store
+        # Where dashboard changes are remembered. Demo mode passes an
+        # in-memory one, so trying the demo never rewrites settings.json.
+        self.save_setting = save_setting
         self.engine = engine
         # Reads .pcap files. Same object as `engine` for a live capture; a
         # separate decoder in demo mode, which has no packet-building path.
@@ -3056,7 +3080,7 @@ class Handler(BaseHTTPRequestHandler):
                 want = body.get("iface") or None
                 eng.start(want, body.get("filter") or "")
                 if want:
-                    save_setting("iface", want)
+                    self.app.save_setting("iface", want)
             elif action == "stop":
                 eng.stop()
             elif action == "clear":
@@ -3121,7 +3145,7 @@ class Handler(BaseHTTPRequestHandler):
                     elif pat not in ex[key]:
                         ex[key].append(pat)
                     h.set_exclusions(ex["programs"], ex["hosts"])
-                    save_setting("history_exclude", h.exclusions())
+                    self.app.save_setting("history_exclude", h.exclusions())
                     ex = h.exclusions()
                 return self._send(200, {
                     "status": self.status(), "exclude": ex,
@@ -3156,7 +3180,7 @@ class Handler(BaseHTTPRequestHandler):
                 want = body.get("iface") or getattr(eng, "spec", None)
                 eng.start(want, body.get("filter", eng.bpf))
                 if want:
-                    save_setting("iface", want)
+                    self.app.save_setting("iface", want)
             return self._send(200, {"status": self.status()})
 
         return self._send(404, {"error": "not found"})
@@ -3516,16 +3540,35 @@ def main(argv=None):
     scanner = ObjectScanner(streams, objects)
     scanner.enabled = not args.no_extract
     scanner.start()
-    history = HistoryStore(path=args.db, retain_days=args.retain_days,
+    # Demo traffic is invented. Written to the real database it inflated the
+    # History totals and taught the "never seen before" rules that chrome.exe,
+    # Code.exe and github.com were already known, so a real first sighting
+    # stayed quiet; rule and mute changes made while trying it out landed in
+    # the real settings.json. The demo keeps both in memory instead, the same
+    # way its blocker already uses a pretend firewall. An explicit --db is
+    # still honoured.
+    if args.demo:
+        demo_settings = {}
+        settings_load = lambda: dict(demo_settings)
+        settings_save = demo_settings.__setitem__
+    else:
+        settings_load, settings_save = load_settings, save_setting
+    history = HistoryStore(path=args.db or (":memory:" if args.demo else None),
+                           retain_days=args.retain_days,
                            enabled=not args.no_history)
-    ex = load_settings().get("history_exclude") or {}
+    ex = settings_load().get("history_exclude") or {}
     if isinstance(ex, dict):
         history.set_exclusions(ex.get("programs"), ex.get("hosts"))
-    alerts = AlertEngine(DesktopNotifier(enabled=args.toasts), history=history)
-    alerts.attach_settings(load_settings, save_setting)
+    alerts = AlertEngine(DesktopNotifier(enabled=args.toasts), history=history,
+                         dns_source=DemoEngine.dns_config if args.demo else None)
+    alerts.attach_settings(settings_load, settings_save)
+    if args.demo and history.enabled and history.in_memory:
+        for name in DemoEngine.KNOWN_PROGRAMS:
+            history.note_process(name)
+        alerts.baselining = False
     dhcp = DhcpTracker()
     reverse = ReverseResolver(store)
-    reverse.attach_settings(load_settings, save_setting)
+    reverse.attach_settings(settings_load, settings_save)
     reverse.start()
 
     engine = (DemoEngine(store, streams=streams, alerts=alerts, history=history,
@@ -3557,7 +3600,7 @@ def main(argv=None):
             print(f"  Could not open {args.read}: {exc}")
             return 1
     else:
-        chosen = args.iface or load_settings().get("iface") or "all"
+        chosen = args.iface or settings_load().get("iface") or "all"
         ok = engine.start(chosen, args.filter)
         if not ok and engine.error:
             print(f"  Capture failed to start: {engine.error}")
@@ -3568,7 +3611,8 @@ def main(argv=None):
     Handler.app = App(store, engine, resolver, token, demo=args.demo,
                       streams=streams, objects=objects, scanner=scanner,
                       alerts=alerts, decoder=decoder, history=history,
-                      dhcp=dhcp, reverse=reverse, blocker=blocker)
+                      dhcp=dhcp, reverse=reverse, blocker=blocker,
+                      save_setting=settings_save)
     if args.read:
         Handler.app.source = os.path.basename(args.read)
 
@@ -3619,7 +3663,9 @@ def main(argv=None):
     if history.enabled:
         s = history.summary()
         span = f", data since {s['since']}" if s.get("since") else ", empty"
-        print(f"  History:   {history.path}{span}")
+        where = ("in memory only (demo)" if history.in_memory
+                 else history.path)
+        print(f"  History:   {where}{span}")
         if alerts.baselining:
             print("             first run — recording a baseline, so "
                   "'never seen before' alerts start next time")

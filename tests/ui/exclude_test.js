@@ -32,10 +32,14 @@ function payload(exclude){
 
   // ---------------- the row menu ----------------
   // A row with a named host and a real program, so every item is offered.
+  // Outbound TCP/UDP to an IP too: only then is the port the server's, and
+  // "Block <ip:port> only" offered. An inbound row came first often enough
+  // that the item count failed in about half the full runs.
   const seq = await p.evaluate(()=>{
     for (const tr of document.querySelectorAll('#rows tr')){
       const r = records.get(Number(tr.dataset.seq));
-      if (r && r.rhost && r.process && !/^[-(]/.test(r.process)) return r.seq;
+      if (r && r.rhost && r.process && !/^[-(]/.test(r.process) &&
+          r.dir==='out' && /^(tcp|udp)$/i.test(r.transport||'') && tlIsIP(r.remote||'')) return r.seq;
     }
     return null;
   });

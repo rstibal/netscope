@@ -247,6 +247,9 @@ class HistoryStore:
     def __init__(self, path=None, retain_days=DEFAULT_RETAIN_DAYS,
                  alert_retain_days=DEFAULT_ALERT_RETAIN_DAYS, enabled=True):
         self.path = path or default_db_path()
+        # ":memory:" is what demo mode uses: a working History tab for the
+        # session, and nothing invented ever reaching the real database.
+        self.in_memory = self.path == ":memory:"
         self.retain_days = retain_days
         self.alert_retain_days = alert_retain_days
         self.enabled = enabled
@@ -977,7 +980,8 @@ class HistoryStore:
         t = totals[0] if totals else {}
         return {
             "enabled": True,
-            "path": self.path,
+            "path": ("in memory only — demo traffic is never written to disk"
+                     if self.in_memory else self.path),
             "size": size,
             "since": (first[0]["d"] if first else None),
             "bytes_in": t.get("bytes_in") or 0,

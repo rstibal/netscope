@@ -318,6 +318,16 @@ ones. The rules themselves were not exercised against a real firewall in the
 automated tests (a fake runner stands in): test Block/Unblock on Windows as
 administrator.
 
+**Demo mode never touches this machine's real state.** Its history is a
+`:memory:` database, its settings a dict that lives for the session, its
+blocker a pretend firewall, and its resolver list `DemoEngine.dns_config()`.
+Demo traffic in the real database made `chrome.exe` and `github.com` "known",
+so a real first sighting stayed silent. The in-memory history starts empty,
+which would put the new-program rule in baseline mode all session, so
+`DemoEngine.KNOWN_PROGRAMS` is pre-noted and baselining is switched off; the
+late arrivals are left out so the rule has something to fire on.
+`test_demo_isolation.py` runs a demo against an empty `LOCALAPPDATA`.
+
 ## Environment
 
 Needs Npcap and administrator rights to capture. `cryptography` is optional

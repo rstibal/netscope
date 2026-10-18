@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.0**
+**Version 1.33.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -119,7 +119,9 @@ NetScope.exe --task-status             is the logon task registered?
 
 `--demo` is worth knowing about: it fabricates plausible traffic so you can see
 what the dashboard does without capturing anything real. Useful for a look
-around before you commit to installing Npcap.
+around before you commit to installing Npcap. Nothing the demo does reaches
+your real history or settings: its History is kept in memory and forgotten
+when it stops, and rule, mute and exclusion changes last only that session.
 
 **When the capture cannot keep up, it says so.** A Python capture path is slower
 than a busy link, and when libpcap's kernel buffer fills the driver discards
@@ -885,6 +887,20 @@ names.
 ---
 
 ## Version history
+
+**1.33.1** — **The demo no longer writes into your real history.** `--demo`
+recorded its invented traffic in the real history database, which inflated
+the History totals and made the demo's programs and hosts (`chrome.exe`,
+`Code.exe`, `github.com`, ...) look already known, so a real first sighting of
+one of them never raised "New program on the network". Rule, mute and
+exclusion changes made while trying the demo were saved to the real
+`settings.json` too. The demo now keeps its history in memory and its
+settings for the session only. If you ran `--demo` before this version with
+history on, its rows are in your database; *Erase all history*, or erasing
+the demo's programs from the History tab, removes them. Also fixed: the
+demo's DNS lookups went to the site being looked up (`github.com:53`) rather
+than to the router, which raised "DNS to an unconfigured resolver" alerts
+listing this machine's real DNS servers.
 
 **1.33.0** — **A tab per interface on the Table view, and Alerts that hold still.**
 Once packets have been seen on a second adapter, a strip above the table lists
