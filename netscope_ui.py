@@ -221,6 +221,10 @@ td.info{color:var(--dim)}
 .viewsw .btn-sm{border-radius:0}
 .viewsw .btn-sm:first-child{border-radius:5px 0 0 5px}
 .viewsw .btn-sm+.btn-sm{margin-left:-1px}
+/* Neighbours overlap by a pixel so their borders merge; the one being
+   pointed at (or keyboard-focused) has to sit on top, or the next button
+   paints over its right edge and the hover outline looks a pixel short. */
+.viewsw .btn-sm:hover,.viewsw .btn-sm:focus-visible{position:relative;z-index:2}
 .viewsw .btn-sm:last-child{border-radius:0 5px 5px 0}
 .viewsw .btn-sm:only-child{border-radius:5px}
 /* The table stays laid out at full width while the timeline is shown, only

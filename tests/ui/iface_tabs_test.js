@@ -34,6 +34,16 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('...between the view switch and the filter box',
         lay.ifL >= lay.viewR && lay.ifR <= lay.findL && Math.abs(lay.top - lay.findTop) < 12, JSON.stringify(lay));
 
+  // Neighbours overlap by a pixel; the hovered one must sit on top, or the
+  // next button covers the right edge of its hover outline.
+  await p.hover('#ifbar [data-if="Alpha NIC"]');
+  const edge = await p.evaluate(() => {
+    const b = document.querySelector('#ifbar [data-if="Alpha NIC"]'), r = b.getBoundingClientRect();
+    return document.elementFromPoint(r.right - 0.5, r.top + r.height / 2) === b;
+  });
+  check('a hovered tab keeps its whole outline', edge);
+  await p.mouse.move(5, 5);
+
   // The clear button sits inside the box's right end, and the box is marked while a filter is on.
   await p.fill('#find', 'proto == TCP');
   const cl = await p.evaluate(() => {

@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.2**
+**Version 1.33.3**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -887,6 +887,13 @@ names.
 ---
 
 ## Version history
+
+**1.33.3** — **Hovered tab buttons keep their whole outline.** Buttons in a
+segmented group (the interface tabs, Table/Timeline, and the Timeline's window
+and lane switches) overlap by a pixel so their borders merge, and the next
+button painted over the right edge of the one under the pointer, so its hover
+outline looked a pixel short. The hovered (or keyboard-focused) button now
+sits on top.
 
 **1.33.2** — **The interface tabs moved into the filter row, and the filter
 box shows when it is on.** The adapter tabs (All, Wi-Fi, Ethernet, ...) narrow
