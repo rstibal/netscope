@@ -188,6 +188,19 @@ in the info line. Cost a debugging pass in the demo-mode mDNS seed
 (`DemoEngine._seed_mdns`) before the LLMNR seed, built with an explicit
 `qd`, happened to dodge it.
 
+**mDNS and LLMNR are recognised by port before `DNS in pkt` is asked.**
+scapy 2.7 binds its DNS layer to UDP 5353 (and LLMNR to a layer of its own,
+leaving no `Raw`), so checking `DNS in pkt` first labelled every mDNS query
+plain "DNS", and the resolver rule then warned about Chrome "querying
+224.0.0.251" on every adapter. The resolver rule also ignores multicast
+destinations outright, in case a future scapy moves the goalposts again.
+
+**With history on, the new-program/new-host rules are silent for anything
+already known.** The "first time this session" note fired for every known
+program after each restart and buried the warnings. It survives only with
+history off, where the session is all there is to go on. Unnamed `pid N`
+processes are skipped (and kept out of history) until the name resolves.
+
 **Reverse DNS is the one naming source that is opt-in and off by default.**
 Every other one (DNS, DHCP, mDNS/LLMNR/NBNS, TLS/QUIC SNI) only labels an IP
 because something on the wire already announced a name — NetScope stays

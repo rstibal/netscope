@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.33.3"
+VERSION = "1.33.4"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -1307,11 +1307,16 @@ class CaptureEngine:
             rec, raw, payload = self._build(pkt)
             if rec:
                 rec["iface"] = iface_name or (self.ifaces[0] if self.ifaces else "")
+                # The encrypted outer copy of tunnelled traffic: kept out of
+                # the history and the bandwidth threshold, never the list.
+                outer = self.tunnel.skip(rec)
+                if outer:
+                    rec["tunnel_outer"] = True
                 self.store.add(rec, raw)
                 if self.alerts is not None:
                     self.alerts.inspect(rec, payload)
                 if (self.history is not None and not self._offline
-                        and not self.tunnel.skip(rec)):
+                        and not outer):
                     self.history.record(rec)
         except Exception:
             pass
@@ -1539,24 +1544,27 @@ class CaptureEngine:
             info = (info + '  ' if info else '') + '[application decode error]'
 
         try:
-            if DNS in pkt:
-                d = decode_dns(pkt[DNS])
-                if d:
-                    proto = "DNS"
-                    decoded["dns"] = d
-                    info = _dns_info(d)
-                    if d["response"]:
-                        self.store.note_dns(d["answers"])
-            elif payload and transport == "udp" and ({5353, 5355} & {sport, dport}):
-                # mDNS and LLMNR are DNS-message-format-compatible, just on ports
-                # scapy doesn't bind the DNS layer to -- build one from the raw
-                # bytes instead of relying on scapy's own dissection.
+            if transport == "udp" and ({5353, 5355} & {sport, dport}):
+                # mDNS and LLMNR share DNS's wire format. Decide by port first:
+                # scapy 2.7 binds DNS to 5353 (and LLMNR to its own layer, so
+                # there is no Raw), and checking `DNS in pkt` first labelled
+                # every Bonjour query plain "DNS" -- which the resolver alert
+                # then judged as a query to an unconfigured server. Rebuild
+                # from the UDP payload bytes, whatever scapy made of them.
                 try:
-                    d = decode_dns(DNS(payload))
+                    d = decode_dns(DNS(bytes(pkt[UDP].payload)))
                 except Exception:
                     d = None
                 if d and (d["queries"] or d["answers"]):
                     proto = "MDNS" if 5353 in (sport, dport) else "LLMNR"
+                    decoded["dns"] = d
+                    info = _dns_info(d)
+                    if d["response"]:
+                        self.store.note_dns(d["answers"])
+            elif DNS in pkt:
+                d = decode_dns(pkt[DNS])
+                if d:
+                    proto = "DNS"
                     decoded["dns"] = d
                     info = _dns_info(d)
                     if d["response"]:

@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.3**
+**Version 1.33.4**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -578,8 +578,8 @@ still see the traffic. Only what is written to disk changes:
   because you named it yourself. A plain name covers its subdomains:
   `example.com` also covers `www.example.com`. `*` matches anything, for
   example `chrome*` or `10.0.0.*`.
-- **Alerts:** note-level alerts about an excluded program or host (the "used
-  the network / contacted again this session" kind) are not logged. Warnings
+- **Alerts:** note-level alerts about an excluded program or host (the "first
+  time this session" kind, which only fire with history off) are not logged. Warnings
   and higher are always logged, whoever they are about. They are the security
   record.
 
@@ -616,12 +616,17 @@ new turns up, and are promoted from a note to a warning when it does.
 
 The Alerts tab is both the log and the control panel. Each rule has a switch:
 
-- **New program on the network** — something that hasn't used the network this
-  session just did. Suppressed for the first few seconds, otherwise every
-  program on the machine would fire at once.
+- **New program on the network** — with history on, a program that has never
+  used the network on this machine before just did; programs the history
+  already knows stay silent. Without history, the first time this session.
+  A process whose name could not be read (shown as `pid 1234`) is skipped
+  until its name can be. Suppressed for the first few seconds, otherwise
+  every program on the machine would fire at once.
 - **First contact with a host** — off by default; on a busy machine it is very
   chatty.
 - **Bandwidth threshold** — a program crosses N MB in a session. Default 500.
+  A VPN client is not credited with the encrypted copy of what it tunnels;
+  that traffic counts against the programs inside the tunnel.
 - **Credentials in the clear** — HTTP Basic auth, a password field posted over
   plain HTTP, FTP `USER`/`PASS`, IMAP `LOGIN`, POP3 and SMTP auth.
 - **Unencrypted protocols** — FTP, Telnet, POP3, IMAP, TFTP, the r-commands.
@@ -887,6 +892,21 @@ names.
 ---
 
 ## Version history
+
+**1.33.4** — **Fewer alerts that told you nothing.** Chrome's mDNS lookups
+(to 224.0.0.251 and ff02::fb) raised "DNS to an unconfigured resolver" on
+every adapter at once: scapy 2.7 decodes port 5353 as DNS itself, so mDNS was
+labelled plain DNS and judged against your configured servers. mDNS and LLMNR
+are now recognised by port first (and show as MDNS/LLMNR in the table again),
+and the resolver rule ignores multicast addresses. Also: a process whose name
+could not be read ("pid 3376") no longer raises "New program on the network"
+or goes into the history as a program; the real name alerts once it can be
+read. With history on, a program or host the history already knows no longer
+adds a "first time this session" note after every restart; without history
+that note still fires, since the session is all there is to go on. And a VPN
+client (`pia-openvpn.exe` and the like) is no longer credited with the
+encrypted copy of everything it tunnels, so it stops crossing the bandwidth
+threshold just by being on.
 
 **1.33.3** — **Hovered tab buttons keep their whole outline.** Buttons in a
 segmented group (the interface tabs, Table/Timeline, and the Timeline's window

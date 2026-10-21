@@ -71,6 +71,9 @@ CRED_PATTERNS = [
     (re.compile(rb"^AUTH\s+LOGIN", re.I | re.M), "SMTP", "auth exchange"),
 ]
 
+# What ProcessResolver.name_for_pid() returns when the name lookup failed.
+UNNAMED_PID = re.compile(r"^pid \d+$")
+
 PASSWORD_FIELD = re.compile(
     rb"(^|[&?\r\n])(password|passwd|pwd|pass|user_pass|pw)=([^&\s]{1,64})", re.I)
 
@@ -80,12 +83,17 @@ PASSWORD_FIELD = re.compile(
 # what happened the first time one of these surprised someone.
 RULE_WHY = {
     "new_process": "Fires the first time a program uses the network. With "
-                   "history attached, 'first time' means first time ever, not "
-                   "first time since launch.",
+                   "history attached, 'first time' means first time ever, "
+                   "and a program the history already knows stays silent. "
+                   "A process whose name could not be read ('pid 1234') is "
+                   "skipped until it can.",
     "new_host": "Fires the first time this machine contacts a remote host. Off "
                 "by default — on a busy machine it is very chatty.",
     "threshold": "Fires when one program crosses the bandwidth threshold set "
-                 "below, counted per program since NetScope started.",
+                 "below, counted per program since NetScope started. A VPN "
+                 "client is not credited with the encrypted copy of the "
+                 "traffic it tunnels; that counts against the programs "
+                 "inside the tunnel.",
     "cleartext_creds": "Fires when something that looks like a username, "
                        "password or auth exchange crosses the wire with no "
                        "encryption around it.",
@@ -689,30 +697,44 @@ class AlertEngine:
         size = rec.get("length", 0)
 
         if proc != "-":
-            if self.rules["new_process"] and proc not in self.seen_processes:
+            # "pid 1234" is a name lookup that failed (the process had just
+            # exited, or access was refused). Pids are recycled, so it is not
+            # a program anyone can act on, and noting it in history kept a
+            # number as a "program" for good. Left unseen, so the real name
+            # alerts once the lookup succeeds.
+            unnamed = UNNAMED_PID.match(proc) is not None
+            if (self.rules["new_process"] and not unnamed
+                    and proc not in self.seen_processes):
                 self.seen_processes.add(proc)
-                ever = (self.history.known_process(proc)
-                        if self.history is not None else True)
-                if not ever and self.baselining:
-                    self.history.note_process(proc)   # record, stay quiet
-                elif not ever:
-                    # Genuinely never seen before on this machine — worth a
-                    # warning rather than a note.
+                if self.history is None:
+                    # No record beyond this session, so this session is the
+                    # only "first" there is.
+                    if _now() > self.warmup_until:
+                        self._fire(("new_process", proc), INFO, "new_process",
+                                   "Program started using the network",
+                                   f"{proc} used the network for the first "
+                                   f"time this session "
+                                   f"({rec.get('remote','')})", rec)
+                elif not self.history.known_process(proc):
                     self.history.note_process(proc)
-                    self._fire(("new_process", proc), WARN, "new_process",
-                               "New program on the network",
-                               f"{proc} has never used the network on this "
-                               f"machine before (now talking to "
-                               f"{rec.get('rhost') or rec.get('remote','')})", rec)
-                elif _now() > self.warmup_until:
-                    self._fire(("new_process", proc), INFO, "new_process",
-                               "Program started using the network",
-                               f"{proc} used the network for the first time "
-                               f"this session ({rec.get('remote','')})", rec)
-            else:
+                    if not self.baselining:     # baseline: record, stay quiet
+                        self._fire(("new_process", proc), WARN, "new_process",
+                                   "New program on the network",
+                                   f"{proc} has never used the network on "
+                                   f"this machine before (now talking to "
+                                   f"{rec.get('rhost') or rec.get('remote','')})",
+                                   rec)
+                # A program the history already knows is silent: a note for
+                # each one after every restart only buried the warnings.
+            elif not unnamed:
                 self.seen_processes.add(proc)
 
-            total = self.process_bytes.get(proc, 0) + size
+            # The VPN client is credited with the encrypted outer copy of
+            # everything tunnelled, so it always crossed the threshold. The
+            # inner packets are counted against the programs that sent them.
+            total = self.process_bytes.get(proc, 0)
+            if not rec.get("tunnel_outer"):
+                total += size
             self.process_bytes[proc] = total
             if self.rules["threshold"]:
                 limit = self.threshold_mb * 1024 * 1024
@@ -727,21 +749,21 @@ class AlertEngine:
             host = rec.get("rhost") or rec.get("remote")
             if host and host not in self.seen_hosts:
                 self.seen_hosts.add(host)
-                ever = (self.history.known_host(host)
-                        if self.history is not None else True)
-                if not ever and self.baselining:
-                    self.history.note_host(host)      # record, stay quiet
-                elif not ever:
+                if self.history is None:
+                    if _now() > self.warmup_until:
+                        self._fire(("new_host", host), INFO, "new_host",
+                                   "Host contacted",
+                                   f"{proc} connected to {host}, first time "
+                                   f"this session", rec)
+                elif not self.history.known_host(host):
                     self.history.note_host(host)
-                    self._fire(("new_host", host), WARN, "new_host",
-                               "First contact with a host",
-                               f"{proc} connected to {host} — this machine has "
-                               f"never contacted it before", rec)
-                elif _now() > self.warmup_until:
-                    self._fire(("new_host", host), INFO, "new_host",
-                               "Host contacted again",
-                               f"{proc} connected to {host}, first time this "
-                               f"session", rec)
+                    if not self.baselining:     # baseline: record, stay quiet
+                        self._fire(("new_host", host), WARN, "new_host",
+                                   "First contact with a host",
+                                   f"{proc} connected to {host} — this "
+                                   f"machine has never contacted it before",
+                                   rec)
+                # Known to the history: silent, as for programs.
             elif host:
                 self.seen_hosts.add(host)
 
@@ -877,6 +899,11 @@ class AlertEngine:
         server = normalise_ip(rec.get("remote"))
         if not server:
             return
+        try:
+            if ipaddress.ip_address(server).is_multicast:
+                return              # mDNS/LLMNR groups: nobody's resolver
+        except ValueError:
+            pass
         self._maybe_refresh_dns()
 
         iface = rec.get("iface") or ""
