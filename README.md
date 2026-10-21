@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.5**
+**Version 1.33.6**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -895,6 +895,13 @@ names.
 ---
 
 ## Version history
+
+**1.33.6** — **Erasing history starts a fresh baseline.** *Erase all history*
+while NetScope was running left the new-program rule out of its learning
+mode, so every program it hadn't yet seen that run then warned "New program
+on the network". It now records quietly for the rest of the run, as on a
+first start. The alert log's *Past 30 days* view also says how it is erased:
+its *Erase all history* link opens the History tab at that button.
 
 **1.33.5** — **Seven things the dashboard reported that weren't so.**
 - **With a VPN up, the live totals were about double.** Every tunnelled byte

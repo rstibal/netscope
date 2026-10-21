@@ -134,6 +134,19 @@ function history(){
   await p.waitForFunction(()=>document.querySelectorAll('#p-alerts .logrow').length>0, null, {timeout: 5000});
   check('the chosen view is remembered after a reload', true);
 
+  // The log says how to erase it, and the link goes to the button that does.
+  const hintText = await p.evaluate(()=>document.getElementById('wipeJump').parentNode.textContent);
+  check('the log says Erase all history removes it',
+        /Erase all history on the History tab does\./.test(hintText), hintText);
+  await p.mouse.move(5, 5);
+  await p.click('#wipeJump');
+  await p.waitForFunction(()=>document.querySelector('.tab[data-p="history"]').classList.contains('on') &&
+                              document.activeElement && document.activeElement.id==='histWipe',
+                          null, {timeout: 5000});
+  const wipeOnScreen = await p.evaluate(()=>{ const r = document.getElementById('histWipe').getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= innerHeight; });
+  check('...and opens History with that button focused and on screen', wipeOnScreen);
+
   const hs = await p.evaluate(()=>document.documentElement.scrollWidth > innerWidth);
   check('no sideways scroll', !hs);
   check('no page errors', errs.length===0, errs.join(' | '));

@@ -117,6 +117,22 @@ check("inner packet on the tunnel adapter is not marked",
 check("outer packet on the physical adapter is marked",
       seen[1].get("tunnel_outer") is True, seen[1])
 
+# ---- 6. Erasing history starts a new baseline, not a flood of "new program"
+import tempfile
+import netscope_history as H
+h = H.HistoryStore(path=os.path.join(tempfile.mkdtemp(), "h.db"))
+e = engine(h)
+e.baselining = False
+h.note_process("chrome.exe")
+e._change_rules({"process": "chrome.exe", "remote": "203.0.113.5", "length": 60})
+h.wipe()
+e.history_wiped()
+for proc in ("chrome.exe", "steam.exe", "OneDrive.exe"):
+    e._change_rules({"process": proc, "remote": "203.0.113.5", "length": 60})
+check("after Erase all history, programs are recorded quietly", e.list() == [], titles(e))
+check("...including ones this run had already seen",
+      h.known_process("chrome.exe") and h.known_process("steam.exe"))
+
 print()
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

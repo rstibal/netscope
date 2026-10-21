@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.33.5"
+VERSION = "1.33.6"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3199,6 +3199,8 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "history_wipe":
                 if self.app.history:
                     self.app.history.wipe()
+                    if self.app.alerts is not None:
+                        self.app.alerts.history_wiped()
             elif action == "history_exclude":
                 # One entry added or removed, never the whole list: the packet
                 # menu can add without having loaded History first, and two

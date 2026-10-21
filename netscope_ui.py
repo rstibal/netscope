@@ -2399,7 +2399,8 @@ function alertLogHTML(d){
   let h = '<h4 style="margin-bottom:4px">' + (c.total ? c.total.toLocaleString() + ' alerts · ' +
     c.high + ' high · ' + c.warn + ' warn' : 'Alerts') + '</h4>' +
     '<div class="hint" style="margin:0 0 8px">Logged on disk for ' + (L.days || days) +
-    ' days, including earlier sessions. Clear alerts and restarts don\'t remove them.</div>';
+    ' days, including earlier sessions. Clear alerts and restarts don\'t remove them; ' +
+    '<a href="#" id="wipeJump">Erase all history</a> on the History tab does.</div>';
   if (!L.rows.length)
     return h + '<div class="empty">No alerts logged in the past ' + (L.days || days) + ' days.</div>';
   const muted = new Set((d.mutes || []).map(m => m.rule + '\u0000' + m.subject));
@@ -2440,6 +2441,20 @@ $('p-history').addEventListener('click', e => {
   alertView = 'log';
   try { localStorage.setItem('netscope-alertview', 'log'); } catch (e2){}
   showTab('alerts');
+});
+// The log's "Erase all history" opens History at that button. History draws
+// on its own schedule once shown, so the button is waited for, not assumed.
+$('p-alerts').addEventListener('click', e => {
+  if (e.target.id !== 'wipeJump') return;
+  e.preventDefault();
+  showTab('history');
+  let tries = 0;
+  const go = () => {
+    const b = $('histWipe');
+    if (b){ b.scrollIntoView({block: 'center'}); b.focus({preventScroll: true}); }
+    else if (++tries < 40) setTimeout(go, 100);
+  };
+  go();
 });
 try { rulesCollapsed = localStorage.getItem('rulesCollapsed') === '1'; } catch(e) {}
 let openWhy = new Set();

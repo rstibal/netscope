@@ -632,6 +632,18 @@ class AlertEngine:
         # it is usually what you do after changing something.
         self.refresh_dns_config(background=True)
 
+    def history_wiped(self):
+        """
+        The history was just erased. Everything is "never seen" again, so
+        record a fresh baseline for the rest of this run instead of warning
+        about every program and host as it next appears. What this run has
+        already seen is forgotten so it is noted into the new history too.
+        """
+        self.baselining = self.history is not None
+        self.seen_processes.clear()
+        self.seen_hosts.clear()
+        self._checkins_seen.clear()
+
     # -- the rules ----------------------------------------------------------
 
     def check_checkins(self, timeline):
