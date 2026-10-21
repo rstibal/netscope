@@ -205,6 +205,26 @@ def is_multicast_mac(mac):
         return False
 
 
+def is_group_ip(addr):
+    """
+    A multicast or broadcast address: one packet to everyone listening, not
+    a conversation with a host. Subnet broadcast is taken to be any IPv4
+    address ending .255 -- the netmask is not known here, and a real host
+    at .255 (only possible on a /23 or wider) is rare.
+    """
+    s = str(addr or "").split("%")[0].lower()
+    if ":" in s:
+        return s.startswith("ff")
+    parts = s.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        first = int(parts[0])
+    except ValueError:
+        return False
+    return 224 <= first <= 239 or parts[3] == "255"
+
+
 def _stp_info(body: bytes):
     try:
         if len(body) < 4:
@@ -315,4 +335,10 @@ def owner_label(proto, dst_mac="", dst_ip=""):
     return "(no socket)"
 
 
-UNOWNED = {"(kernel)", "(link layer)", "(broadcast)", "(no socket)", "-"}
+# A local port that more than one program has open at once (mDNS on 5353 is
+# the usual one: svchost, Chrome and Steam's web helper all bind it). The
+# packet could be any of theirs, so naming one would be a guess.
+SHARED_PORT = "(shared port)"
+
+UNOWNED = {"(kernel)", "(link layer)", "(broadcast)", "(no socket)",
+           SHARED_PORT, "-"}

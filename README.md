@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.4**
+**Version 1.33.5**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -650,7 +650,10 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
   what already checks in, without reporting anything. After that, a new pair
   is a note, or a warning (with a desktop notification) when the program
   itself first used the network in the last week. Traffic with no program
-  behind it, like `(broadcast)` or `(no socket)`, is never reported. Muting
+  behind it, like `(broadcast)` or `(no socket)`, is never reported, and
+  neither is multicast or broadcast. Only seconds in which data moved count,
+  so a TCP keepalive (Chrome-based apps send one every 45 s on an idle
+  connection) is not a check-in. Muting
   one mutes that host. Because it needs five check-ins inside the hour it
   sees, it catches schedules of up to about 15 minutes. Without history it
   can't remember anything, so each pair is a note once per session.
@@ -892,6 +895,40 @@ names.
 ---
 
 ## Version history
+
+**1.33.5** — **Seven things the dashboard reported that weren't so.**
+- **With a VPN up, the live totals were about double.** Every tunnelled byte
+  crosses the wire twice, and the VPN's encrypted outer copy was counted in
+  *in*, *out*, *rate* and the Programs and Hosts lists, where the VPN client
+  came out as the top program. It is now left out of those, as it already was
+  from History, and the footer shows how much as *VPN copy*. The packets stay
+  in the table.
+- **A port several programs share is no longer credited to one at random.**
+  svchost, Chrome and Steam's web helper all bind UDP 5353 for mDNS, and
+  NetScope kept whichever owner Windows listed last. Such packets are now
+  labelled `(shared port)`.
+- **Host names no longer carry a port.** A plain-HTTP `Host:` header
+  (`10.0.0.70:7678`) named the host port and all, and a bare address was
+  taken as a name. The port is dropped, an address is not a name, and a
+  lowercase `host:` header is read too.
+- **Multicast is not a host on a schedule.** The check-in rule and the
+  Timeline's "every ~Ns" box counted mDNS, SSDP and the like (224.0.0.251,
+  ff02::c, ...) as a program contacting a host.
+- **A TCP keepalive is not a check-in.** Chrome-based apps (Chrome, Steam,
+  Claude's desktop app) send a one-byte keepalive every 45 s on an idle
+  connection, which made every site left open in a tab look like Chrome
+  "checking in every ~45 s". Only seconds in which data moved now count.
+- **Multicast no longer counts as traffic with a host.** A router's SSDP
+  announcements put it near the top of the live and History host lists for
+  doing nothing. The receiving program's usage still counts it.
+- **Random traffic is less often called a schedule.** The regularity test
+  let gaps differ by up to 2 s, which on a 5 s period is 40%: in simulation,
+  traffic arriving at random every 4-6 s on average passed within the hour a
+  fifth to a quarter of the time. It now allows 1 s (or 10%, whichever is
+  more), which cuts that to a few percent and still catches real timers.
+
+Hosts already recorded under a name with a port (`10.0.0.70:7678`) stay in
+History until its retention period removes them.
 
 **1.33.4** — **Fewer alerts that told you nothing.** Chrome's mDNS lookups
 (to 224.0.0.251 and ff02::fb) raised "DNS to an unconfigured resolver" on

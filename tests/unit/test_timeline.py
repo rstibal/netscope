@@ -20,7 +20,7 @@ def totals(snap):
     keys = snap["keys"]
     got = {}
     for sec, lst in snap["buckets"]:
-        for k, b, p in lst:
+        for k, b, p, _data in lst:
             key = (sec, keys[k][0], keys[k][4])
             got[key] = (got.get(key, (0, 0))[0] + b, got.get(key, (0, 0))[1] + p)
     return got

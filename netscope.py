@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.33.4"
+VERSION = "1.33.5"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -92,7 +92,8 @@ from netscope_block import Blocker, BlockError
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_timeline import Timeline
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
-                         owner_label, parse_ra, UNOWNED)
+                         owner_label, parse_ra, UNOWNED, SHARED_PORT,
+                         is_group_ip)
 from netscope_nbns import parse as parse_nbns, summarise as nbns_summary
 from netscope_history import (HistoryStore, default_db_path, clean_patterns,
                               load_settings, save_setting)
@@ -308,6 +309,35 @@ def decode_tls(payload: bytes):
     return info
 
 
+def header(headers, name):
+    """A header by name, ignoring case as HTTP does ("host:" is a Host)."""
+    want = name.lower()
+    for k, v in (headers or {}).items():
+        if k.lower() == want:
+            return v
+    return ""
+
+
+def host_from_header(value):
+    """
+    The name in an HTTP Host header, or "" if it holds no name.
+
+    The header carries the port ("10.0.0.70:7678"), which became part of the
+    host's label; and a bare address is no name at all, just the address the
+    packet already shows.
+    """
+    v = str(value or "").strip().lower()
+    if v.startswith("["):
+        return ""                       # [IPv6]:port
+    if v.count(":") == 1:
+        v = v.split(":")[0]
+    try:
+        ipaddress.ip_address(v)
+        return ""
+    except ValueError:
+        return v.rstrip(".")
+
+
 def decode_http(payload: bytes):
     """Parse a plaintext HTTP request or response head."""
     if not payload.startswith(HTTP_METHODS):
@@ -429,11 +459,20 @@ class ProcessResolver:
                 if not c.laddr or not c.pid:
                     continue
                 proto = "tcp" if c.type == socket.SOCK_STREAM else "udp"
-                seen[(c.laddr.port, proto)] = c.pid
+                seen.setdefault((c.laddr.port, proto), set()).add(c.pid)
         except (psutil.AccessDenied, PermissionError):
             pass
         except Exception:
             pass
+        # One owner per port, unless several programs hold it at once (mDNS
+        # on 5353, SSDP on 1900). Keeping whichever the OS listed last
+        # credited those packets to one of them at random; two instances of
+        # the same program are still that program.
+        for k, pids in seen.items():
+            if len(pids) > 1 and len({self.name_for_pid(p) for p in pids}) > 1:
+                seen[k] = SHARED_PORT
+            else:
+                seen[k] = min(pids)
 
         # Merge into the existing map and age out stale entries rather than
         # replacing wholesale — a socket that closed a second ago should still
@@ -524,6 +563,8 @@ class ProcessResolver:
             # trying it handed an outbound connection to a short-lived
             # program over to whatever local service listens on 443 or 53.
             pid = pmap.get((dport if outbound else sport, proto))
+        if pid == SHARED_PORT:
+            return SHARED_PORT, None, ("out" if outbound else "in")
         name = self.name_for_pid(pid) if pid else "-"
         return name, pid, ("out" if outbound else "in")
 
@@ -559,6 +600,9 @@ class PacketStore:
         self.total_in = 0
         self.total_out = 0
         self.total_packets = 0
+        # Bytes of the VPN's encrypted outer copy, left out of every total
+        # above (see add()) but kept so the page can say how much it left out.
+        self.tunnel_bytes = 0
         self.unowned = 0
         self.dns_cache = {}
         self.evicted = {"processes": 0, "hosts": 0, "names": 0}
@@ -587,23 +631,35 @@ class PacketStore:
             size = rec["length"]
             direction = rec["dir"]
             self.total_packets += 1
-            if direction == "out":
+            # With a VPN up, every byte is on the wire twice. The encrypted
+            # outer copy was counted too, so the totals were about double and
+            # the VPN client topped the Programs list; the History already
+            # left it out. It stays in the table, the Timeline and Connections.
+            outer = bool(rec.get("tunnel_outer"))
+            if outer:
+                self.tunnel_bytes += size
+            elif direction == "out":
                 self.total_out += size
             else:
                 self.total_in += size
 
-            p = self.by_process[rec["process"]]
-            p[direction] += size
-            p["packets"] += 1
-            if len(self.by_process) > self.MAX_PROCESSES:
-                self._trim(self.by_process, self.MAX_PROCESSES, "processes")
+            if not outer:
+                p = self.by_process[rec["process"]]
+                p[direction] += size
+                p["packets"] += 1
+                if len(self.by_process) > self.MAX_PROCESSES:
+                    self._trim(self.by_process, self.MAX_PROCESSES, "processes")
 
+            # Multicast and broadcast are one packet to everyone listening,
+            # not a conversation with a host: a router's SSDP announcements
+            # put it near the top of the host list for doing nothing.
             peer = rec["remote"]
-            h = self.by_host[peer]
-            h[direction] += size
-            h["packets"] += 1
-            if len(self.by_host) > self.MAX_HOSTS:
-                self._trim(self.by_host, self.MAX_HOSTS, "hosts")
+            if not outer and not is_group_ip(rec.get("dst")):
+                h = self.by_host[peer]
+                h[direction] += size
+                h["packets"] += 1
+                if len(self.by_host) > self.MAX_HOSTS:
+                    self._trim(self.by_host, self.MAX_HOSTS, "hosts")
 
             self.by_proto[rec["proto"]] += 1
             try:
@@ -621,7 +677,8 @@ class PacketStore:
             if self._cur_bucket is None or self._cur_bucket["t"] != sec:
                 self._cur_bucket = {"t": sec, "in": 0, "out": 0}
                 self._buckets.append(self._cur_bucket)
-            self._cur_bucket[direction] += size
+            if not outer:
+                self._cur_bucket[direction] += size
             return rec["seq"]
 
     def _trim(self, table, limit, what):
@@ -705,6 +762,7 @@ class PacketStore:
                 "total_in": self.total_in,
                 "total_out": self.total_out,
                 "total_packets": self.total_packets,
+                "tunnel_bytes": self.tunnel_bytes,
                 "attributed": self.total_packets - self.unowned,
                 "attribution_pct": (round(100.0 * (self.total_packets - self.unowned)
                                           / self.total_packets, 1)
@@ -726,6 +784,7 @@ class PacketStore:
             self.by_proto.clear()
             self.evicted = {k: 0 for k in self.evicted}
             self.total_in = self.total_out = self.total_packets = 0
+            self.tunnel_bytes = 0
             self.unowned = 0
             self._buckets.clear()
             self._cur_bucket = None
@@ -1519,9 +1578,10 @@ class CaptureEngine:
                             proto = "HTTP"
                             hint = "HTTP"
                             decoded["http"] = http
-                            host_hint = http["headers"].get("Host", "")
+                            raw_host = header(http["headers"], "Host")
+                            host_hint = host_from_header(raw_host)
                             info = http["start_line"] + (
-                                f"   [{host_hint}]" if host_hint else "")
+                                f"   [{raw_host}]" if raw_host else "")
 
                 # QUIC rides on UDP and carries a recoverable hostname in its
                 # Initial packet — without this, HTTP/3 traffic is just "UDP 443".

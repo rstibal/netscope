@@ -54,6 +54,8 @@ e = engine(h)
 e._change_rules({"process": "pid 3376", "remote": "203.0.113.5", "length": 60})
 check("an unnamed pid raises no new-program alert", e.list() == [], titles(e))
 check("...and is not written to history as a program", h.noted == [], h.noted)
+e._change_rules({"process": "(shared port)", "remote": "224.0.0.251", "length": 60})
+check("a placeholder label is not a new program", e.list() == [], titles(e))
 e._change_rules({"process": "vrmonitor.exe", "remote": "203.0.113.5", "length": 60})
 check("once the name resolves, the real program still alerts",
       titles(e) == ["New program on the network"], titles(e))

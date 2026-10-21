@@ -758,7 +758,8 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="kv"><span style="color:var(--in)">▼ in</span><b id="sIn">0 B</b></div>
       <div class="kv"><span style="color:var(--out)">▲ out</span><b id="sOut">0 B</b></div>
       <div class="kv"><span>rate</span><b id="sRate">0 B/s</b></div>
-      <div class="kv" title="Share of packets tied to a specific program. The rest are kernel, link-layer or broadcast traffic that has no owning process."><span>named</span><b id="sAttr">—</b></div>
+      <div class="kv" title="Share of packets tied to a specific program. The rest are kernel, link-layer or broadcast traffic that has no owning process, or a port several programs share at once."><span>named</span><b id="sAttr">—</b></div>
+      <div class="kv" id="kvTun" style="display:none" title="The VPN's encrypted copy of tunnelled traffic, as it crossed the physical adapter. Every byte inside the tunnel is on the wire twice; this copy is left out of in, out, rate and the Programs and Hosts lists (as it is from History), and still shown in the packet table."><span>VPN copy</span><b id="sTun">0 B</b></div>
       <div class="kv" id="kvDrop" style="display:none" title="Packets the capture driver received but had to discard because nothing drained its buffer fast enough. Every other number on this page undercounts by roughly this much."><span>dropped</span><b id="sDrop">0</b></div>
       <div class="spacer"></div>
       <div class="kv" id="sProto"></div>
@@ -3181,6 +3182,7 @@ function tlRecord(k){
   const r = {process, rhost, remote, dir, proto, iface,
              src: out ? local : remote, dst: out ? remote : local,
              sport: out ? null : rport, dport: out ? rport : null};
+  r.group = isGroupIP(remote) || isGroupIP(local);
   r._hay = (process + ' ' + rhost + ' ' + remote + ' ' + local + ' ' + proto + ' ' +
             (rport == null ? '' : rport) + ' ' + iface).toLowerCase();
   return r;
@@ -3232,7 +3234,7 @@ function tlRegular(secs){
   for (let i = 1; i < starts.length; i++) gaps.push(starts[i] - starts[i - 1]);
   const med = gaps.slice().sort((a, b) => a - b)[gaps.length >> 1];
   if (med < 5) return 0;
-  const tol = Math.max(2, med * 0.1);
+  const tol = Math.max(1, med * 0.1);
   const fit = gaps.filter(g => Math.abs(g - med) <= tol).length;
   if (fit < 4 || fit / gaps.length < 0.8) return 0;
   const busy = starts.reduce((a, t, i) => a + ends[i] - t + 1, 0) / starts.length;
@@ -3241,6 +3243,16 @@ function tlRegular(secs){
 
 function tlPeriod(sec){
   return sec < 120 ? '~' + sec + 's' : '~' + Math.round(sec / 60) + ' min';
+}
+
+// Multicast or broadcast: the same test as is_group_ip() in netscope_l2.py.
+function isGroupIP(a){
+  const s = String(a || '').split('%')[0].toLowerCase();
+  if (s.includes(':')) return s.startsWith('ff');
+  const p = s.split('.');
+  if (p.length !== 4) return false;
+  const f = parseInt(p[0], 10);
+  return (f >= 224 && f <= 239) || p[3] === '255';
 }
 
 function tlIsIP(s){ return /^[\d.]+$/.test(s) || s.includes(':'); }
@@ -3275,9 +3287,13 @@ function tlBuild(W){
   for (const [sec, list] of TL.secs){
     const inWin = sec >= start && sec < end;
     const j = Math.floor((sec - start) / TL.win * B);
-    for (const [k, bytes, pkts] of list){
+    for (const [k, bytes, pkts, data] of list){
       if (!pass[k]) continue;
       const r = TL.keys[k];
+      // Regularity only counts seconds that moved data, never multicast:
+      // the same two rules as Timeline.pair_activity() on the server.
+      // Otherwise a 45 s TCP keepalive reads as a check-in.
+      const counts = data !== 0 && !r.group;
       const host = r.rhost || r.remote || '(none)', proc = r.process || '-';
       const name = TL.group === 'host' ? host : proc;
       const other = TL.group === 'host' ? proc : host;
@@ -3287,12 +3303,12 @@ function tlBuild(W){
               pairs: new Map(), checks: [], own: 0};
         byName.set(name, ln);
       }
-      ln.active.add(sec);
+      if (counts) ln.active.add(sec);
       // The same lane split by what's on the other side: hosts for a program,
       // programs for a host. A check-in is often one pair inside a busy lane.
       let pr = ln.pairs.get(other);
       if (!pr){ pr = {name: other, bytes: 0, all: 0, active: new Set()}; ln.pairs.set(other, pr); }
-      pr.active.add(sec);
+      if (counts) pr.active.add(sec);
       pr.all += bytes;
       if (!inWin) continue;
       pr.bytes += bytes;
@@ -3617,6 +3633,8 @@ function renderStats(s){
   if (prevTotals !== null && now > prevTime)
     $('sRate').textContent = hb((tot - prevTotals) / (now - prevTime)) + '/s';
   prevTotals = tot; prevTime = now;
+  $('kvTun').style.display = s.tunnel_bytes ? '' : 'none';
+  if (s.tunnel_bytes) $('sTun').textContent = hb(s.tunnel_bytes);
   if (s.attribution_pct !== undefined){
     $('sAttr').textContent = s.attribution_pct.toFixed(0) + '%';
     $('sAttr').title = s.attributed.toLocaleString() + ' of ' +

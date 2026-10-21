@@ -23,6 +23,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+from netscope_l2 import is_group_ip
+
 FLUSH_INTERVAL = 10.0          # seconds between disk writes
 PRUNE_INTERVAL = 3600.0        # seconds between retention sweeps
 DEFAULT_RETAIN_DAYS = 90
@@ -367,6 +369,10 @@ class HistoryStore:
             return
         proc = rec.get("process") or "-"
         host = rec.get("rhost") or rec.get("remote") or ""
+        # Multicast and broadcast are one packet to everyone listening, not
+        # traffic with a host. The program's usage still counts it.
+        if is_group_ip(rec.get("dst")):
+            host = ""
         size = rec.get("length", 0)
         ts = rec.get("ts", time.time())
         inbound = rec.get("dir") != "out"

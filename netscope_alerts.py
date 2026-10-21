@@ -30,6 +30,7 @@ import time
 from collections import OrderedDict, deque
 
 from netscope_timeline import regular_interval, bursts
+from netscope_l2 import is_group_ip
 
 try:
     from cryptography import x509
@@ -702,7 +703,10 @@ class AlertEngine:
             # a program anyone can act on, and noting it in history kept a
             # number as a "program" for good. Left unseen, so the real name
             # alerts once the lookup succeeds.
-            unnamed = UNNAMED_PID.match(proc) is not None
+            # "(shared port)", "(broadcast)" and the like are not programs
+            # either: a placeholder appearing for the first time is news
+            # about NetScope, not about this machine.
+            unnamed = UNNAMED_PID.match(proc) is not None or proc.startswith("(")
             if (self.rules["new_process"] and not unnamed
                     and proc not in self.seen_processes):
                 self.seen_processes.add(proc)
@@ -745,7 +749,8 @@ class AlertEngine:
                                f"{proc} has moved over {self.threshold_mb} MB "
                                f"this session", rec)
 
-        if self.rules["new_host"] and rec.get("dir") == "out":
+        if (self.rules["new_host"] and rec.get("dir") == "out"
+                and not is_group_ip(rec.get("dst"))):
             host = rec.get("rhost") or rec.get("remote")
             if host and host not in self.seen_hosts:
                 self.seen_hosts.add(host)

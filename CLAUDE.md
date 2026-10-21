@@ -201,6 +201,19 @@ program after each restart and buried the warnings. It survives only with
 history off, where the session is all there is to go on. Unnamed `pid N`
 processes are skipped (and kept out of history) until the name resolves.
 
+**Reporting leaves out what isn't what it looks like (1.33.5).** The VPN's
+encrypted outer copy (`rec["tunnel_outer"]`, set by `TunnelFilter.skip()` in
+`_on_packet`) is out of the live totals, Programs and Hosts, as it is out of
+History; the footer's *VPN copy* shows how much. Multicast/broadcast
+(`is_group_ip()` in `netscope_l2.py`, mirrored by `isGroupIP` in the page) is
+not traffic with a host and never a check-in pair. A local port held by
+programs with different names is `(shared port)`, not whichever owner the OS
+listed last. Timeline buckets carry a third count, packets that moved data
+(not a TCP segment with <=1 byte of payload); regularity uses only those
+seconds, server and page alike. Chrome-based apps' 45 s TCP keepalive was
+being read as a check-in — the `downloads.claude.ai` every-45-s example
+below was likely one.
+
 **Reverse DNS is the one naming source that is opt-in and off by default.**
 Every other one (DNS, DHCP, mDNS/LLMNR/NBNS, TLS/QUIC SNI) only labels an IP
 because something on the wire already announced a name — NetScope stays
@@ -264,7 +277,7 @@ Info.
 **Timeline marks are log-scaled with a 1px floor, lanes ranked busiest-first
 but held for 10 s.** On a linear scale, a 200-byte check-in vanishes next to
 a download, and the check-in is what the view is for. The "every ~Ns" mark
-requires short bursts at a steady interval (80% of gaps within 10%), so a
+requires short bursts at a steady interval (80% of gaps within 10%, or 1 s), so a
 steady stream with pauses doesn't qualify. Re-ranking every second made lanes
 jump under the pointer.
 

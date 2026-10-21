@@ -19,6 +19,8 @@ the page to drop what it has and fetch everything again.
 import bisect
 import threading
 
+from netscope_l2 import is_group_ip
+
 RETAIN = 3600               # seconds kept, counted back from the newest packet
 BURST_GAP = 2               # active seconds this close together are one burst
 MAX_KEYS_PER_SEC = 400      # a scan would otherwise make one key per probe
@@ -43,8 +45,13 @@ def regular_interval(secs):
     "every ~Ns" box from (tlRegular in netscope_ui.py), so an alert and the
     box never disagree; tests/unit/test_checkin.py runs both on the same
     input. At least 5 bursts, a median gap of 5 s or more, 80% of gaps
-    within 10% (or 2 s) of it, and bursts no longer than a third of the gap,
+    within 10% (or 1 s) of it, and bursts no longer than a third of the gap,
     so a steady stream with a few pauses doesn't count.
+
+    The floor was 2 s, which on a 5 s gap is 40%: random traffic averaging a
+    packet every 4-6 s passed within the hour 20-27% of the time in
+    simulation (1-8% at 1 s), while real timers, quantised to whole seconds,
+    are still caught 99% of the time.
     """
     if len(secs) < 5:
         return 0
@@ -55,7 +62,7 @@ def regular_interval(secs):
     med = sorted(gaps)[len(gaps) >> 1]
     if med < 5:
         return 0
-    tol = max(2, med * 0.1)
+    tol = max(1, med * 0.1)
     fit = sum(1 for g in gaps if abs(g - med) <= tol)
     if fit < 4 or fit / len(gaps) < 0.8:
         return 0
@@ -68,7 +75,9 @@ class Timeline:
         self._lock = threading.Lock()
         self.retain = retain
         self._order = []        # seconds held, ascending
-        self._secs = {}         # second -> {key index: [bytes, packets]}
+        # second -> {key index: [bytes, packets, data packets]}, the last
+        # being packets that carried data (see carries_data()).
+        self._secs = {}
         self._keys = []         # key index -> key tuple
         self._index = {}        # key tuple -> key index
         self.gen = 1
@@ -83,6 +92,21 @@ class Timeline:
         return (rec.get("process") or "-", rec.get("rhost") or "", remote, local,
                 "out" if out else "in", rec.get("proto") or "", rport,
                 rec.get("iface") or "")
+
+    @staticmethod
+    def carries_data(rec):
+        """
+        False for a TCP segment with at most one byte of payload: a bare ACK,
+        or a keepalive probe. Chrome-based apps send one every 45 s on an
+        idle connection, and the check-in test read that as a schedule --
+        Chrome "checking in" with every site left open in a tab.
+        """
+        if rec.get("transport") != "tcp":
+            return True
+        try:
+            return int(rec.get("payload_len") or 0) > 1
+        except (TypeError, ValueError):
+            return True
 
     @staticmethod
     def _lumped(key):
@@ -140,12 +164,14 @@ class Timeline:
             i = self._intern(key)
             if i not in b and len(b) >= MAX_KEYS_PER_SEC:
                 i = self._intern(self._lumped(key))
+            data = 1 if self.carries_data(rec) else 0
             c = b.get(i)
             if c is None:
-                b[i] = [size, 1]
+                b[i] = [size, 1, data]
             else:
                 c[0] += size
                 c[1] += 1
+                c[2] += data
             if sec > self.newest:
                 self.newest = sec
                 cut = sec - self.retain
@@ -163,7 +189,7 @@ class Timeline:
                 since, kfrom = None, 0
             kfrom = max(0, min(int(kfrom or 0), len(self._keys)))
             start = 0 if since is None else bisect.bisect_left(self._order, since)
-            buckets = [[s, [[k, v[0], v[1]] for k, v in self._secs[s].items()]]
+            buckets = [[s, [[k, v[0], v[1], v[2]] for k, v in self._secs[s].items()]]
                        for s in self._order[start:]]
             return {"gen": self.gen, "full": since is None, "kfrom": kfrom,
                     "keys": [list(k) for k in self._keys[kfrom:]],
@@ -176,13 +202,27 @@ class Timeline:
         being the name when known and the address when not. What the
         check-in alert tests for regularity: a check-in is often one pair
         inside a busy program, whose other traffic fills the gaps.
+
+        Only seconds in which data moved count (no keepalives or bare ACKs),
+        and multicast or broadcast never does: a group address is not a host
+        being contacted, and an announcement received on one is not this
+        machine contacting its sender. The page's Timeline (tlBuild) applies
+        the same two rules.
         """
         with self._lock:
             keys = self._keys
+            group = {}
             secs = {}
             for sec in self._order:
-                for k in self._secs[sec]:
+                for k, c in self._secs[sec].items():
+                    if not c[2]:
+                        continue
                     key = keys[k]
+                    g = group.get(k)
+                    if g is None:
+                        g = group[k] = is_group_ip(key[2]) or is_group_ip(key[3])
+                    if g:
+                        continue
                     pair = (key[0], key[1] or key[2])
                     s = secs.get(pair)
                     if s is None:
