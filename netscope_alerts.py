@@ -575,6 +575,11 @@ class AlertEngine:
                 "detail": detail,
                 "process": (rec or {}).get("process", ""),
                 "peer": (rec or {}).get("remote", ""),
+                # What the card's "Don't record / Block" menu needs: the name
+                # the host is recorded under, and the pid to find the
+                # program's file by (checked against the name when used).
+                "host": (rec or {}).get("rhost") or (rec or {}).get("remote", ""),
+                "pid": (rec or {}).get("pid"),
                 "seq": (rec or {}).get("seq"),
                 "stream": (rec or {}).get("stream"),
             }

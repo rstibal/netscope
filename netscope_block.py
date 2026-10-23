@@ -173,6 +173,11 @@ class Blocker:
         """
         self._check_allowed()
         path = self._program_path(int(pid)) if pid else ""
+        # Windows reuses pids. One from an alert can be minutes old and by now
+        # belong to something else entirely, so it only counts while it is
+        # still the program it was reported as.
+        if path and name and os.path.basename(path).lower() != str(name).lower():
+            path = ""
         if not path and name:
             path = self._name_path(str(name))
             if not path:

@@ -288,6 +288,9 @@ footer b{font-variant-numeric:tabular-nums;display:inline-block}
 #sRate{min-width:11ch}               /* 999.9 KB/s */
 #sAttr{min-width:5ch}                /* 100%      */
 #sDrop{min-width:7ch;color:var(--out)}
+#dropNote{cursor:help}
+#dropNote.dropnow{color:#f0883e}
+#dropNote.droppast{color:var(--dim);font-weight:600}
 
 /* ---------- side panel ---------- */
 .tabs{display:flex;flex-wrap:wrap;gap:1px;padding:8px 8px 0;
@@ -2414,16 +2417,42 @@ function alertLogHTML(d){
         (a.process ? ' · ' + esc(a.process) : '') + '</div>' +
       ((d.why || {})[a.rule] ? '<details class="why" data-lid="' + a.id + '"><summary>Why did this fire?</summary>' +
         esc(d.why[a.rule]) + '</details>' : '') +
-      (a.subject ? '<div class="rowbtns">' + (isMuted
+      (a.subject || alertMenuItems(a).length ? '<div class="rowbtns">' + (!a.subject ? '' : isMuted
         ? '<button class="btn-sm" data-unmute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
           '" title="' + esc(a.subject) + ' is muted for this rule">Unmute ' + esc(a.subject) + '</button>'
         : '<button class="btn-sm" data-mute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
           '" title="Stop this rule reporting ' + esc(a.subject) + ', and leave it watching ' +
-          'everything else">Mute ' + esc(a.subject) + '</button>') + '</div>' : '') +
+          'everything else">Mute ' + esc(a.subject) + '</button>') +
+        (alertMenuItems(a).length ? '<button class="btn-sm" data-lmenu="' + a.id +
+          '" aria-haspopup="menu">Don\'t record / Block…</button>' : '') + '</div>' : '') +
       '</div>';
   }).join('');
   if (L.more) h += '<div class="rowbtns"><button class="btn-sm" id="alertMore">Show older</button></div>';
   return h;
+}
+
+/* The packet row menu's "Don't record" and "Block" items, for an alert: rows
+   scroll by in seconds, and the alert is often where you first see something
+   you want gone. A log row has no host name or pid, only process and peer. */
+function alertMenuItems(a){
+  if (!a) return [];
+  const proc = a.process && !/^[(-]/.test(a.process) && !/^pid \d+$/.test(a.process) ? a.process : '';
+  const addr = a.peer && tlIsIP(a.peer) && !isGroupIP(a.peer) ? a.peer : '';
+  const host = a.host || a.peer || '';
+  const keep = [];
+  if (proc) keep.push(['Don\'t record ' + proc + ' in History', () => addExclusion('program', proc)]);
+  if (host && !isGroupIP(host) && !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(host))
+    keep.push(['Don\'t record ' + host + ' in History', () => addExclusion('host', host)]);
+  const blk = blockItems({addr, port: 0, proto: '', pid: a.pid, process: proc});
+  return keep.concat(keep.length && blk.length ? [null] : [], blk);
+}
+
+function openAlertMenu(a, btn){
+  const items = alertMenuItems(a);
+  if (!items.length) return;
+  const r = btn.getBoundingClientRect();
+  showRowMenu(items, 'Undo under History, or Connections > Blocked.',
+              r.left, r.bottom + 2);
 }
 
 function setAlertView(v){
@@ -2573,6 +2602,8 @@ function renderAlerts(d){
           (a.subject ? '<button class="btn-sm" data-mute1h="'+esc(a.rule)+
             '" data-subject="'+esc(a.subject)+'">Mute 1h</button>' : '')+
           '<button class="btn-sm" data-dismiss="'+a.id+'">Dismiss</button>'+
+          (alertMenuItems(a).length ? '<button class="btn-sm" data-amenu="'+a.id+
+            '" aria-haspopup="menu">Don\'t record / Block…</button>' : '')+
         '</div>'+
       '</div>').join('');
   }
@@ -2655,6 +2686,10 @@ function renderAlerts(d){
     after(control({action:'unmute', rule:b.dataset.unmute, subject:b.dataset.subject})));
   pane.querySelectorAll('[data-dismiss]').forEach(b => b.onclick = () =>
     after(control({action:'dismiss_alert', id:Number(b.dataset.dismiss)})));
+  pane.querySelectorAll('[data-amenu]').forEach(b => b.onclick = () =>
+    openAlertMenu((d.alerts || []).find(a => a.id === Number(b.dataset.amenu)), b));
+  pane.querySelectorAll('[data-lmenu]').forEach(b => b.onclick = () =>
+    openAlertMenu(((alertLog && alertLog.rows) || []).find(a => a.id === Number(b.dataset.lmenu)), b));
 }
 
 /* ---------------- streams ---------------- */
@@ -3601,6 +3636,30 @@ function drawSpark(tl){
 
 /* ---------------- status + polling ---------------- */
 
+// What "dropping N%" means, and where: the capture driver received these
+// packets but discarded them before NetScope could read them.
+function dropBreakdown(cap){
+  const n = v => Number(v || 0).toLocaleString();
+  const line = (lost, recv, pct) => n(lost) + ' lost of ' + n(recv + lost) + ' (' + pct + '%)';
+  let t = 'The capture driver received these packets but had to discard them: its buffer ' +
+          'filled faster than NetScope read it. Every count on this page is short by about ' +
+          'this much.\n\n';
+  const r = cap.recent;
+  if (r) t += 'Last ' + (r.secs >= 50 ? 'minute' : r.secs + ' s') + ': ' +
+              line(r.dropped, r.received, r.loss_pct) + '\n';
+  t += 'Since capture started: ' + line(cap.dropped, cap.received, cap.loss_pct);
+  const ad = (cap.adapters || []).filter(a => a.received || a.dropped);
+  if (ad.length > 1 || (ad.length && ad[0].dropped)){
+    t += '\n\nBy adapter, since start:';
+    for (const a of ad.sort((x, y) => y.dropped - x.dropped)){
+      t += '\n  ' + a.name + ': ' + line(a.dropped, a.received, a.loss_pct);
+      if (a.dropped && a.iface_dropped)
+        t += ' — ' + n(a.buffer_dropped) + ' buffer full, ' + n(a.iface_dropped) + ' by the adapter';
+    }
+  }
+  return t;
+}
+
 function renderStatus(st){
   lastStatus = st;
   $('ver').textContent = 'v' + st.version;
@@ -3612,17 +3671,27 @@ function renderStatus(st){
                        (st.packets||0).toLocaleString() + ' packets';
   else if (st.running) txt = st.demo ? 'generating demo traffic'
         : (st.multi
-            ? 'capturing on <b>' + st.ifaces.length + ' interfaces</b> · ' +
-              esc(st.ifaces.join(', ')).slice(0, 60)
+            // The count only: the names took the header's width, and the
+            // interface tabs beside the filter already name each one.
+            ? 'capturing on <b title="' + esc(st.ifaces.join(', ')) + '">' +
+              st.ifaces.length + ' interfaces</b>'
             : 'capturing on <b>' + esc(st.iface || '?') + '</b>');
   else txt = 'stopped';
   if (st.filter) txt += ' · filter <b>' + esc(st.filter) + '</b>';
   if (!st.demo && !st.admin) txt += ' · <b style="color:#f0883e">not elevated</b>';
   // Losing packets invalidates every count on the page, so it is said here
   // rather than left to a number in the footer nobody is looking at.
+  // The driver's counters run from the start, so the header tells "still
+  // losing packets" (the last minute) apart from "lost some earlier"; the
+  // tooltip has the breakdown by adapter.
   const cap = st.capture;
-  if (cap && cap.dropped > 0)
-    txt += ' · <b style="color:#f0883e">dropping ' + cap.loss_pct + '% of packets</b>';
+  if (cap && cap.dropped > 0){
+    const now = !cap.recent || cap.recent.dropped > 0;
+    txt += ' · <b id="dropNote" class="' + (now ? 'dropnow' : 'droppast') + '" title="' +
+      esc(dropBreakdown(cap)) + '">' + (now
+        ? 'dropping ' + (cap.recent || cap).loss_pct + '% of packets'
+        : 'dropped ' + cap.loss_pct + '% earlier') + '</b>';
+  }
   $('statusText').innerHTML = txt;
   syncIface(st);
   announceNewIfaces(st);
@@ -3669,6 +3738,7 @@ function renderStats(s){
       'statistics on this machine, so dropped packets cannot be detected.';
   if (cap && cap.dropped > 0){
     $('kvDrop').style.display = '';
+    $('kvDrop').title = dropBreakdown(cap);
     $('sDrop').textContent = cap.dropped.toLocaleString() +
       ' (' + cap.loss_pct + '%)';
   } else {

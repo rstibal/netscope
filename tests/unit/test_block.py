@@ -98,6 +98,18 @@ check("a name nothing resolves to is refused, saying why",
       "several" in (refuses(named(CHROME)[0].block_program, name="other.exe") or ""))
 check("a resolved svchost is still refused", refuses(named(SVCHOST)[0].block_program, name="chrome.exe") is not None)
 
+# -- a pid from an alert may have been reused by another program since -------
+STEAM = A("/opt/app/steam.exe")
+st = {"blocking_enabled": True}; fw = Fw()
+b = B.Blocker(lambda: st, st.__setitem__, run=fw, available=lambda: True, own_exes=[OWN],
+              program_path=lambda pid: {7: STEAM}.get(pid, ""),
+              name_path=lambda n: CHROME if n == "chrome.exe" else "")
+e = b.block_program(pid=7, name="chrome.exe")
+check("a pid now owned by a different program is ignored for the named one",
+      e["target"] == CHROME, e["target"])
+e = b.block_program(pid=7, name="steam.exe")
+check("...and still used while it is the program named", e["target"] == STEAM, e["target"])
+
 # -- gating ------------------------------------------------------------------
 b, fw, st = make(enabled=False)
 check("off by default means refused", "switched off" in (refuses(b.block_host, "203.0.113.9") or ""))

@@ -344,7 +344,9 @@ back through PowerShell). Hidden blocks are the failure to avoid, same as hiding
 packets. It is off until `blocking_enabled` is set, because every other feature
 only watches. Unblocking works either way. `netsh` output is localized, so only
 its exit codes are read. A program is blocked by pid, resolved to a path
-server-side, never from a path the page sends; Windows core processes
+server-side, never from a path the page sends, and the pid only counts while
+its file is still the program named (an alert's pid can be minutes old, and
+Windows reuses them); Windows core processes
 (`svchost.exe`...) and NetScope itself are refused. Demo mode's blocker runs
 against an in-memory firewall and settings so a demo can never touch the real
 ones. The rules themselves were not exercised against a real firewall in the

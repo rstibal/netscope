@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.33.6"
+VERSION = "1.34.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -178,6 +178,10 @@ def dname(raw) -> str:
 
 
 _UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f"\\/:*?<>|]')
+
+
+def _pct(part, whole):
+    return round(part * 100.0 / whole, 2) if whole else 0.0
 
 
 def pcap_stats_for(sock):
@@ -972,6 +976,9 @@ class CaptureEngine:
         self.stress_us = 0          # --stress-drops: microseconds per packet
         self._offline = False       # True while ingest_file() is feeding a .pcap
         self._handle_lock = threading.Lock()    # pcap handle reads vs. closes
+        # (time, received, lost) per capture_stats() call, so the dashboard
+        # can say whether packets are being lost now or were lost earlier.
+        self._drop_samples = deque()
         self.new_ifaces = []        # adapters attached after the capture began
         self._watch_stop = threading.Event()
         self._watcher = None
@@ -1241,9 +1248,16 @@ class CaptureEngine:
         Returns None when no socket can report it — an offline capture, demo
         mode, or a raw AF_PACKET fallback — so the dashboard can stay silent
         rather than claim zero drops it has not actually verified.
+
+        The driver's counters run from when each adapter's capture opened, so
+        the totals are "since start". `adapters` breaks them down, and
+        `recent` is the last DROP_RECENT seconds, which is what says whether
+        it is still happening: one burst at startup otherwise reads as loss
+        for the rest of the run.
         """
         recv = drop = ifdrop = 0
         answered = False
+        adapters = []
         # stop() frees these handles, and reading one after it has been closed
         # is a segfault rather than an exception. Copying the list under
         # _lock is not enough on its own — the copy can outlive the close,
@@ -1266,6 +1280,11 @@ class CaptureEngine:
             recv += got[0]
             drop += got[1]
             ifdrop += got[2]
+            a_lost = got[1] + got[2]
+            adapters.append({
+                "name": str(entry[0]), "received": got[0], "dropped": a_lost,
+                "buffer_dropped": got[1], "iface_dropped": got[2],
+                "loss_pct": _pct(a_lost, got[0] + a_lost)})
         if not answered:
             return None
         lost = drop + ifdrop
@@ -1276,8 +1295,28 @@ class CaptureEngine:
             "buffer_dropped": drop,
             "iface_dropped": ifdrop,
             # Share of what reached the driver that it could not hand over.
-            "loss_pct": round(lost * 100.0 / total, 2) if total else 0.0,
+            "loss_pct": _pct(lost, total),
+            "adapters": adapters,
+            "recent": self._recent_drops(recv, lost),
         }
+
+    DROP_RECENT = 60.0
+
+    def _recent_drops(self, recv, lost, now=None):
+        """Received and lost over about the last DROP_RECENT seconds."""
+        now = time.time() if now is None else now
+        q = self._drop_samples
+        # Counters go backwards when an adapter's capture is reopened (a
+        # restart, or one that came and went); start the window over.
+        if q and (recv < q[-1][1] or lost < q[-1][2]):
+            q.clear()
+        q.append((now, recv, lost))
+        while len(q) > 2 and q[1][0] <= now - self.DROP_RECENT:
+            q.popleft()
+        t0, r0, l0 = q[0]
+        d_lost = lost - l0
+        return {"secs": round(now - t0), "received": recv - r0,
+                "dropped": d_lost, "loss_pct": _pct(d_lost, recv - r0 + d_lost)}
 
     def _check_alive(self):
         if not self.running:

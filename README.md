@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.33.6**
+**Version 1.34.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -379,6 +379,13 @@ NetScope.exe --stress-drops 500
 That stalls the packet handler half a millisecond per packet, so libpcap's buffer
 overflows under ordinary traffic and the status line shows **dropping N% of
 packets**. It is a testing flag and nothing else — leave it off in normal use.
+
+The driver's counters run from when the capture started. The status line gives
+the last minute's share while packets are still being lost, and **dropped N%
+earlier** (in grey) once they've stopped, so a burst at startup doesn't read
+as loss for the rest of the run. Hover it for the breakdown: the last minute,
+the total since start, and each adapter's own figures, worst first. The
+footer's **dropped** figure has the same tooltip.
 Measured on a controlled loopback load: the same traffic produced 0 drops without
 the stall and 1,232 (33.9%) with it.
 
@@ -672,7 +679,12 @@ subject. Muted subjects are listed above the alert list with an Unmute button so
 a mute is always visible and always reversible, they persist across restarts, and
 they survive **Clear alerts**. Each alert also carries a **Why did this fire?**
 disclosure stating what its rule compares, and **Dismiss** drops a single alert
-without touching the rest.
+without touching the rest. **Don't record / Block…** offers what the packet
+row's right-click menu does: keep the program or host out of History, or
+block the host or program with a firewall rule. Packet rows scroll away in
+seconds, and an alert is often where you first notice something. A program
+is blocked by its file, found on the server: a process ID kept in an alert
+is only used while it still belongs to the program the alert names.
 
 **This session / Past 30 days.** The list above is this session's alerts,
 held in memory: repeats fold into a count, and Clear alerts or a restart
@@ -683,7 +695,8 @@ with **Show older** for the rest, and new alerts appear at the top as they
 are logged. You can mute from the log. There's no Dismiss there, since the
 log is the record of what happened. Alerts logged before 1.25.1 don't store
 what they were about, so they can't be muted from the log. The switch only
-appears when history is on.
+appears when history is on. Log rows have the same **Don't record /
+Block…** button.
 
 Rule switches, the bandwidth threshold and the notification toggle are remembered
 between runs, which matters most when NetScope starts from a logon task and
@@ -895,6 +908,22 @@ names.
 ---
 
 ## Version history
+
+**1.34.0** — **Block or stop recording from an alert, and a clearer status
+line.**
+- **Alert cards have *Don't record / Block…*,** with the packet row menu's
+  items: keep the program or host out of History, block the host, or block
+  the program. Rows on the Past 30 days log have it too. A process ID kept in
+  an alert is only used while it still belongs to the program the alert
+  names; Windows reuses them, and an old one could otherwise block the wrong
+  program.
+- **The status line counts adapters instead of naming them.** "capturing on
+  4 interfaces"; hover for the names, and the interface tabs beside the
+  filter name each one.
+- **"Dropping N%" says when and where.** It is the last minute's share while
+  packets are being lost, and "dropped N% earlier" once they've stopped. The
+  driver's counters run from the start, so a burst at startup used to read as
+  loss for the whole run. Hover it for the breakdown by adapter.
 
 **1.33.6** — **Erasing history starts a fresh baseline.** *Erase all history*
 while NetScope was running left the new-program rule out of its learning
