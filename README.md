@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.34.0**
+**Version 1.34.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -908,6 +908,15 @@ names.
 ---
 
 ## Version history
+
+**1.34.1** — **Block from an alert after the program has exited.** An
+alert's *Block program* finds the program's file by name, and looked only
+among processes running right now. The program behind an alert has often
+exited by then (and a check-in alert never had a process ID), so it was
+refused with "Can't tell which ... you mean". NetScope now remembers where
+each program was seen running from this session and uses that when nothing
+by that name is running. It still refuses when two different files have
+shared the name, rather than guess.
 
 **1.34.0** — **Block or stop recording from an alert, and a clearer status
 line.**

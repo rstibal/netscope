@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.34.0"
+VERSION = "1.34.1"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -429,6 +429,7 @@ class ProcessResolver:
         self._map = {}
         self._seen_at = {}
         self._names = {}
+        self._paths = {}            # program name (lower) -> exe paths seen
         self._last_forced = 0.0
         self._local_ips = set()
         self._lock = threading.Lock()
@@ -540,13 +541,36 @@ class ProcessResolver:
             return hit[0]
         name, ttl = f"pid {pid}", self.NAME_RETRY
         try:
-            name, ttl = psutil.Process(pid).name(), self.NAME_TTL
+            proc = psutil.Process(pid)
+            name, ttl = proc.name(), self.NAME_TTL
+            try:
+                self.note_path(name, proc.exe())
+            except Exception:
+                pass
         except Exception:
             pass
         if len(self._names) > 4096:
             self._names.clear()
         self._names[pid] = (name, now + ttl)
         return name
+
+    def note_path(self, name, path):
+        """
+        Remember the file a program name was seen running from. Blocking from
+        an alert goes by name, and the program has often exited by then (or
+        the alert, like a check-in, never had a pid): with nothing running
+        under that name, this is the only way left to find its file.
+        """
+        if not name or not path:
+            return
+        with self._lock:
+            if len(self._paths) > 4096:
+                self._paths.clear()
+            self._paths.setdefault(name.lower(), set()).add(path)
+
+    def known_paths(self, name):
+        with self._lock:
+            return set(self._paths.get(str(name or "").lower(), ()))
 
     def lookup(self, sport, dport, proto, src, dst):
         """Return (process_name, pid, direction) for a packet."""
@@ -3373,8 +3397,14 @@ def _exe_of(pid):
         return ""
 
 
-def _exe_of_name(name):
-    """The one exe path all running processes called `name` share, else ''."""
+def _exe_of_name(name, seen=()):
+    """
+    The one exe path for programs called `name`, else ''.
+
+    Running processes first. When nothing by that name is running (an alert
+    about a program that has since exited), the paths NetScope saw it run
+    from this session, `seen`, if they agree on one file.
+    """
     if not psutil:
         return ""
     paths = set()
@@ -3384,6 +3414,8 @@ def _exe_of_name(name):
                 paths.add(pr.info["exe"])
     except Exception:
         return ""
+    if not paths:
+        paths = set(seen)
     return paths.pop() if len(paths) == 1 else ""
 
 
@@ -3413,7 +3445,7 @@ def make_blocker(resolver, demo=False):
     return Blocker(load_settings, save_setting,
                    available=lambda: IS_WINDOWS and is_admin(),
                    local_ips=lambda: resolver.local_ips, program_path=_exe_of,
-                   name_path=_exe_of_name)
+                   name_path=lambda n: _exe_of_name(n, resolver.known_paths(n)))
 
 
 def print_interfaces():

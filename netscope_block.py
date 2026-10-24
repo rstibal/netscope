@@ -181,9 +181,10 @@ class Blocker:
         if not path and name:
             path = self._name_path(str(name))
             if not path:
-                raise BlockError("Can't tell which %s you mean: it isn't running, or "
-                                 "several different programs share that name. Block it "
-                                 "from an open connection instead." % name)
+                raise BlockError("Can't tell which %s you mean: it isn't running and "
+                                 "NetScope hasn't seen where its file is, or several "
+                                 "different programs share that name. Block it from an "
+                                 "open connection while it is running." % name)
         if not path or not os.path.isabs(path):
             raise BlockError("Could not find that program's file. It may have exited.")
         name = os.path.basename(path)
