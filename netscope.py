@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.34.1"
+VERSION = "1.34.2"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3053,6 +3053,10 @@ class Handler(BaseHTTPRequestHandler):
                 "reverse_dns": bool(self.app.reverse and self.app.reverse.enabled),
                 "tracking_evicted": dict(self.app.store.evicted),
                 "reverse_dns_stats": self.app.reverse.stats() if self.app.reverse else None,
+                # Blocks still in force, so a "Blocked ..." note offers Unblock
+                # only while there is something to undo.
+                "blocked": ([e.get("id") for e in self.app.blocker.entries()]
+                            if self.app.blocker else []),
                 # How far back the alert log reaches, for the tab's switch;
                 # None when there is no log to switch to.
                 "log_days": (self.app.history.alert_retain_days
@@ -3336,7 +3340,8 @@ class Handler(BaseHTTPRequestHandler):
                         ":%s" % e["port"] if e.get("port") else "")
                 if alerts:
                     alerts.note_action("block", who, "Blocked %s %s" % (what, who),
-                                       "Added a Windows Firewall rule from the dashboard.")
+                                       "Added a Windows Firewall rule from the dashboard.",
+                                       block_id=e.get("id"))
             else:
                 e = b.unblock(body.get("id"))
                 if e and alerts:

@@ -592,17 +592,22 @@ class AlertEngine:
             self.notifier.notify(f"NetScope: {title}", detail)
         return alert
 
-    def note_action(self, kind, subject, title, detail):
+    def note_action(self, kind, subject, title, detail, block_id=None):
         """
         Record something this person did, in the alert log.
 
         Blocking changes what the machine can reach, so each block and unblock
         is written down like a finding is. Every call is its own entry: the key
         carries the time, so a block, an unblock and a second block of the same
-        host are three lines rather than one folded count.
+        host are three lines rather than one folded count. A block's note
+        keeps the block's id, so the card can offer to undo it right there.
         """
-        return self._fire((kind, "%s@%.3f" % (subject, _now()), subject),
-                          INFO, kind, title, detail)
+        a = self._fire((kind, "%s@%.3f" % (subject, _now()), subject),
+                       INFO, kind, title, detail)
+        if a is not None and block_id:
+            with self._lock:
+                a["block_id"] = block_id
+        return a
 
     def list(self):
         with self._lock:

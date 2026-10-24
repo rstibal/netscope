@@ -87,6 +87,66 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
          'Block host 203.0.113.9', 'Block program Agent.exe'].every(t => lg.items.includes(t)),
         JSON.stringify(lg.items));
 
+  // A block leaves a "Blocked ..." note, which can undo it while it stands.
+  // (Demo mode's firewall is in memory.)
+  await p.evaluate(async ()=>{
+    await control({action: 'blocking', enabled: true});
+    await control({action: 'block', kind: 'host', address: '203.0.113.77'});
+  });
+  await p.mouse.move(5, 5);
+  await p.evaluate(()=>refreshTab('alerts'));
+  await p.waitForSelector('#p-alerts [data-aunblock]', {timeout: 10000}).catch(()=>{});
+  const note = await p.evaluate(()=>{
+    const card = [...document.querySelectorAll('#p-alerts .alert')]
+      .find(c => /Blocked host 203\.0\.113\.77/.test(c.textContent));
+    return card ? {unblock: !!card.querySelector('[data-aunblock]'),
+                   menu: !!card.querySelector('[data-amenu]')} : null;
+  });
+  check('the Blocked note offers Unblock', note && note.unblock, JSON.stringify(note));
+  check('...and no Don\'t record / Block menu of its own', note && !note.menu, JSON.stringify(note));
+  if (note && note.unblock){
+    p.removeAllListeners('dialog');
+    p.on('dialog', d => { dialogs.push(d.message()); d.accept(); });
+    await p.click('#p-alerts [data-aunblock]');
+    await p.waitForFunction(()=>api('/api/blocks').then(r=>r.json())
+        .then(d => !d.blocks.some(b => b.target === '203.0.113.77')), null, {timeout: 10000}).catch(()=>{});
+    const left = await p.evaluate(()=>api('/api/blocks').then(r=>r.json()).then(d=>d.blocks.map(b=>b.target)));
+    check('Unblock on the note removes the block', !left.includes('203.0.113.77'), JSON.stringify(left));
+    await p.mouse.move(5, 5);
+    await p.evaluate(()=>refreshTab('alerts'));
+    await p.waitForFunction(()=>[...document.querySelectorAll('#p-alerts .alert')]
+        .some(c => /Blocked host 203\.0\.113\.77/.test(c.textContent) && /no longer blocked/.test(c.textContent)),
+      null, {timeout: 10000}).catch(()=>{});
+    const after = await p.evaluate(()=>{
+      const card = [...document.querySelectorAll('#p-alerts .alert')]
+        .find(c => /Blocked host 203\.0\.113\.77/.test(c.textContent));
+      return card ? {unblock: !!card.querySelector('[data-aunblock]'), text: card.textContent} : null;
+    });
+    check('...after which the note says it is no longer blocked',
+          after && !after.unblock && /no longer blocked/.test(after.text), JSON.stringify(after));
+    p.removeAllListeners('dialog');
+    p.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
+  }
+  // The demo server is shared with the other tests: switch blocking back
+  // off and dismiss the Blocked/Unblocked notes this test made.
+  await p.evaluate(async ()=>{
+    await control({action: 'blocking', enabled: false});
+    const d = await api('/api/alerts').then(r=>r.json());
+    for (const a of d.alerts)
+      if (/block$/.test(a.rule) && a.subject === '203.0.113.77')
+        await control({action: 'dismiss_alert', id: a.id});
+  });
+
+  // The menu's hint says where blocks are listed.
+  const hint = await p.evaluate(()=>{
+    const b = document.createElement('button'); document.body.appendChild(b);
+    openAlertMenu({id: 1, process: 'Agent.exe', peer: '203.0.113.9'}, b);
+    const t = document.querySelector('#rowmenu .hint').textContent;
+    closeRowMenu(); b.remove(); return t;
+  });
+  check('the menu hint points to Connections > Blocked',
+        /listed, and undone, under Connections > Blocked/.test(hint), hint);
+
   check('no page errors', errs.length===0, errs.join(' | '));
   console.log('\nFAILED:', fails.length?fails:'none');
   await b.close(); process.exit(fails.length?1:0);

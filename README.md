@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.34.1**
+**Version 1.34.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -685,6 +685,8 @@ block the host or program with a firewall rule. Packet rows scroll away in
 seconds, and an alert is often where you first notice something. A program
 is blocked by its file, found on the server: a process ID kept in an alert
 is only used while it still belongs to the program the alert names.
+Blocking leaves a "Blocked …" note in the list with its own **Unblock**
+button; every block is also listed under Connections › Blocked.
 
 **This session / Past 30 days.** The list above is this session's alerts,
 held in memory: repeats fold into a count, and Clear alerts or a restart
@@ -908,6 +910,13 @@ names.
 ---
 
 ## Version history
+
+**1.34.2** — **Undo a block from its note on the Alerts tab.** Blocking
+something adds a "Blocked host …" or "Blocked program …" note to the alert
+list, which now has an **Unblock** button while the block stands, and says
+"no longer blocked" once it has been removed (from there or from
+Connections › Blocked). The *Don't record / Block…* menu's hint now says
+where blocks are listed: Connections › Blocked.
 
 **1.34.1** — **Block from an alert after the program has exited.** An
 alert's *Block program* finds the program's file by name, and looked only

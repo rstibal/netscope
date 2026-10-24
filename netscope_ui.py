@@ -2451,7 +2451,8 @@ function openAlertMenu(a, btn){
   const items = alertMenuItems(a);
   if (!items.length) return;
   const r = btn.getBoundingClientRect();
-  showRowMenu(items, 'Undo under History, or Connections > Blocked.',
+  showRowMenu(items, 'Blocks are listed, and undone, under Connections > Blocked. ' +
+              'What isn\'t recorded is listed on the History tab.',
               r.left, r.bottom + 2);
 }
 
@@ -2601,6 +2602,13 @@ function renderAlerts(d){
             'else">Mute '+esc(a.subject)+'</button>' : '')+
           (a.subject ? '<button class="btn-sm" data-mute1h="'+esc(a.rule)+
             '" data-subject="'+esc(a.subject)+'">Mute 1h</button>' : '')+
+          // A "Blocked ..." note undoes itself while the block stands; once
+          // it is gone (from here or from Connections > Blocked) it says so.
+          (a.rule === 'block' && a.block_id
+            ? ((d.blocked || []).includes(a.block_id)
+                ? '<button class="btn-sm" data-aunblock="'+esc(a.block_id)+'">Unblock</button>'
+                : '<span class="hint" style="margin:0 6px 0 0;align-self:center">no longer blocked</span>')
+            : '')+
           '<button class="btn-sm" data-dismiss="'+a.id+'">Dismiss</button>'+
           (alertMenuItems(a).length ? '<button class="btn-sm" data-amenu="'+a.id+
             '" aria-haspopup="menu">Don\'t record / Block…</button>' : '')+
@@ -2686,6 +2694,10 @@ function renderAlerts(d){
     after(control({action:'unmute', rule:b.dataset.unmute, subject:b.dataset.subject})));
   pane.querySelectorAll('[data-dismiss]').forEach(b => b.onclick = () =>
     after(control({action:'dismiss_alert', id:Number(b.dataset.dismiss)})));
+  pane.querySelectorAll('[data-aunblock]').forEach(b => b.onclick = () => {
+    if (confirm('Remove this block? Traffic to it will flow again.'))
+      blockCall({action: 'unblock', id: b.dataset.aunblock}).then(() => refreshTab('alerts'));
+  });
   pane.querySelectorAll('[data-amenu]').forEach(b => b.onclick = () =>
     openAlertMenu((d.alerts || []).find(a => a.id === Number(b.dataset.amenu)), b));
   pane.querySelectorAll('[data-lmenu]').forEach(b => b.onclick = () =>
