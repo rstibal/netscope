@@ -1483,7 +1483,7 @@ function openRowMenu(rec, x, y){
   const blk = blockItems({
     addr: rec.dir === 'out' || rec.dir === 'in' ? remote : '',
     port: rec.dir === 'out' && /^(tcp|udp)$/i.test(rec.transport || '') ? rec.dport : 0,
-    proto: rec.transport, pid: rec.pid, process: proc});
+    proto: rec.transport, pid: rec.pid, process: proc, host: rec.rhost});
   showRowMenu(hide.concat(keep.length ? [null] : [], keep, blk.length ? [null] : [], blk),
               'Hiding edits the filter box; clear it to show them again.', x, y);
 }
@@ -2443,7 +2443,8 @@ function alertMenuItems(a){
   if (proc) keep.push(['Don\'t record ' + proc + ' in History', () => addExclusion('program', proc)]);
   if (host && !isGroupIP(host) && !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(host))
     keep.push(['Don\'t record ' + host + ' in History', () => addExclusion('host', host)]);
-  const blk = blockItems({addr, port: 0, proto: '', pid: a.pid, process: proc});
+  const blk = blockItems({addr, port: 0, proto: '', pid: a.pid, process: proc,
+                         host: a.host && !tlIsIP(a.host) ? a.host : ''});
   return keep.concat(keep.length && blk.length ? [null] : [], blk);
 }
 
@@ -3022,6 +3023,8 @@ function renderConns(d){
             sparkSVG(r.spark) + '</span>';
     if (connMode === 'active' && !r.closed && r.raddr && !d.offline)
       l1 += '<button class="blk" data-ri="' + ri + '" title="Block this host or program">Block</button>';
+    else if (listening && !d.offline && r.process && !/^[(-]/.test(r.process))
+      l1 += '<button class="blk" data-ri="' + ri + '" title="Block connections to this program">Block</button>';
 
     const bits = [];
     if (connMode === 'quality'){
@@ -3107,34 +3110,69 @@ function askBlock(text, body){
 }
 
 /* The menu items that block something, for one connection or packet or lane.
-   t: {addr, port, proto, pid, process}. Any part may be missing: a timeline
-   lane for a program has only a name, one for a host name has no address. */
+   t: {addr, port, proto, pid, process, host, lport, inbound}. Any part may be
+   missing: a timeline lane for a program has only a name, one for a host name
+   has no address. `lport` with `inbound` is a port something here listens on,
+   which only the Connections tab knows. */
 function blockItems(t){
   const items = [];
-  const undo = '\n\nIt stays in force until you remove it under Connections > Blocked.';
+  const undo = '\n\nOpen TCP connections it covers are ended now. It stays in force ' +
+               'until you remove it under Connections > Blocked.';
   const isMac = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(t.addr || '');
+  const P = String(t.proto || 'tcp').toUpperCase();
+  const local = t.inbound && t.lport ? t.lport : 0;
   if (t.addr && !isMac && tlIsIP(t.addr)){
     const ep = t.addr + (t.port ? ':' + t.port : '');
     items.push(['Block host ' + t.addr, () => askBlock(
       'Block all traffic to and from ' + t.addr + '?' + undo,
       {action: 'block', kind: 'host', address: t.addr})]);
-    if (t.port)
-      items.push(['Block ' + ep + ' only (' + String(t.proto).toUpperCase() + ', outbound)', () => askBlock(
-        'Block outbound ' + String(t.proto).toUpperCase() + ' connections to ' + ep +
+    items.push(['Block host ' + t.addr + ', inbound only', () => askBlock(
+      'Block ' + t.addr + ' from connecting to this machine? This machine can still ' +
+      'reach it.' + undo,
+      {action: 'block', kind: 'host', address: t.addr, dir: 'in'})]);
+    if (t.port && !t.inbound)
+      items.push(['Block ' + ep + ' only (' + P + ', outbound)', () => askBlock(
+        'Block outbound ' + P + ' connections to ' + ep +
         '? Other ports on that host are unaffected.' + undo,
         {action: 'block', kind: 'host', address: t.addr, port: t.port, proto: t.proto})]);
+    if (local)
+      items.push(['Block ' + t.addr + ' to local port ' + local + ' only (' + P + ', inbound)', () => askBlock(
+        'Block ' + t.addr + ' from connecting to port ' + local + ' (' + P + ') here? ' +
+        'Other ports are unaffected.' + undo,
+        {action: 'block', kind: 'host', address: t.addr, lport: local, proto: t.proto})]);
   }
-  if ((t.pid || t.process) && t.process && !/^[(-]/.test(t.process))
+  // By name: the firewall only knows addresses, so the server keeps the rule
+  // up to date with the ones DNS gives this name.
+  if (t.host && !tlIsIP(t.host) && !isGroupIP(t.host) && /^[a-z0-9_][a-z0-9_.-]*$/i.test(t.host))
+    items.push(['Block name ' + t.host, () => askBlock(
+      'Block all traffic to and from ' + t.host + '? The rule holds the addresses it has ' +
+      'now and gains each new one a captured DNS answer gives it. An address shared ' +
+      'with other sites (a CDN) is blocked for them too.' + undo,
+      {action: 'block', kind: 'name', name: t.host})]);
+  if ((t.pid || t.process) && t.process && !/^[(-]/.test(t.process)){
+    const prog = {action: 'block', kind: 'program', pid: t.pid || undefined, name: t.process};
     items.push(['Block program ' + t.process, () => askBlock(
       'Block ' + t.process + ' from using the network at all? This covers that program file ' +
-      'on every outbound connection.' + undo,
-      {action: 'block', kind: 'program', pid: t.pid || undefined, name: t.process})]);
+      'on every outbound connection.' + undo, prog)]);
+    items.push(['Block program ' + t.process + ', inbound only', () => askBlock(
+      'Block connections to ' + t.process + ' from elsewhere? It can still make its own.' + undo,
+      Object.assign({dir: 'in'}, prog))]);
+    if (local)
+      items.push(['Block ' + t.process + ' on local port ' + local + ' only (' + P + ', inbound)', () => askBlock(
+        'Block connections to ' + t.process + ' on port ' + local + ' (' + P + ')? Its other ' +
+        'ports are unaffected.' + undo,
+        Object.assign({lport: local, proto: t.proto}, prog))]);
+  }
   return items;
 }
 
 function openBlockMenu(r, x, y){
+  const d = lastConns || {};
+  // A connection is inbound when its local port is one this machine listens on.
+  const inbound = r.state === 'LISTEN' || (d.listening || []).some(l =>
+    l.proto === r.proto && l.lport === r.lport);
   showRowMenu(blockItems({addr: r.raddr, port: r.rport, proto: r.proto, pid: r.pid,
-                          process: r.process}),
+                          process: r.process, host: r.rhost, lport: r.lport, inbound}),
               'A Windows Firewall rule; undo it under Blocked.', x, y);
 }
 
@@ -3155,6 +3193,7 @@ function blocksBody(){
   return h + d.blocks.map(b => {
     const label = b.kind === 'program' ? b.name
                 : b.kind === 'unknown' ? 'Unrecorded rule ' + b.id
+                : b.kind === 'name' ? b.target
                 : b.target + (b.port ? ':' + b.port + ' ' + b.proto : '');
     const bits = [b.kind === 'unknown' ? 'firewall' : b.kind];
     if (b.state === 'missing')
@@ -3163,7 +3202,17 @@ function blocksBody(){
       bits.push('<b class="warn">in Windows Firewall, no record here</b>');
     else if (b.state === 'unverified') bits.push('not checked');
     else bits.push('<b>blocking</b>');
-    if (b.kind === 'host') bits.push(b.port ? 'outbound' : 'both directions');
+    // Blocks from before 1.35 carry no dir: a program's was outbound, a
+    // host's both ways unless it named a port.
+    const dir = b.dir || (b.kind === 'program' || b.port ? 'out' : 'both');
+    if (b.kind !== 'unknown')
+      bits.push(b.lport ? 'inbound to local port ' + b.lport + ' ' + esc(b.proto || 'TCP')
+                : dir === 'in' ? 'inbound only' : dir === 'out' ? 'outbound' : 'both directions');
+    if (b.kind === 'name'){
+      const n = (b.ips || []).length;
+      bits.push(n + (n === 1 ? ' address' : ' addresses') + ', more as DNS gives them');
+      if (b.capped) bits.push('<b class="warn">address limit reached</b> \u2014 newer ones are not blocked');
+    }
     if (b.kind === 'program') bits.push(esc(b.target));
     if (b.added) bits.push(esc(when(b.added)));
     return '<div class="citem" title="' + esc(label) + '"><div class="l1">' +

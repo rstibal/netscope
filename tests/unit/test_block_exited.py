@@ -58,7 +58,7 @@ try:
     # ---- end to end through the Blocker the real app builds -----------------------
     N.psutil.process_iter = lambda attrs=None: iter(())
     st = {"blocking_enabled": True}
-    b = N.Blocker(lambda: st, st.__setitem__, run=lambda cmd: (0, ""), available=lambda: True,
+    b = N.Blocker(lambda: st, st.__setitem__, drop=lambda e: 0, run=lambda cmd: (0, ""), available=lambda: True,
                   program_path=lambda pid: "",
                   name_path=lambda n: N._exe_of_name(n, r.known_paths(n)))
     e = b.block_program(pid=None, name="Agent.exe")

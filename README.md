@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.34.2**
+**Version 1.35.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -285,9 +285,14 @@ hovering says so, along with the peak rate and how many of the last 40 seconds
 saw traffic. It appears only on open connections: a closed one's shape is
 finished and a listener has none.
 
-**Blocking a connection.** Each open connection has a **Block** button with up
-to three choices: the remote host (both directions), that one port on it
-(outbound, TCP or UDP as the connection was), or the program. NetScope only
+**Blocking a connection.** Each open connection has a **Block** button. It
+offers the remote host (both directions, or inbound only), that one port on it
+(outbound, TCP or UDP as the connection was), the host's name when it has one,
+and the program (outbound, or inbound only). For a connection made *to* this
+machine (its local port is one something here listens on) it also offers the
+host, or the program, on just that local port, inbound. Listeners in the
+**Listening** view have a Block button too, for the program inbound or on its
+port. NetScope only
 sees a copy of each packet and cannot drop the original, so a block is a
 Windows Firewall rule, named `NetScope-block-<id>-out` / `-in`, which Windows
 enforces and keeps across restarts. It needs administrator rights and is **off
@@ -298,18 +303,34 @@ changes what your machine can reach.
 Block is also in the **right-click menu** of the packet table and of the
 Timeline's lanes, under the Hide and History items. A packet offers its remote
 address, that port (only for packets this machine sent, since an inbound
-packet's port is whatever the other end picked) and its program. A Timeline
-lane knows less: an address lane offers the address, a host-name lane offers
-nothing (blocks are by address), and a program lane offers the program, which
-NetScope resolves by name to the one file every running process of that name
-shares, and declines if there are none or several.
+packet's port is whatever the other end picked), its host name and its program.
+A Timeline lane knows less: an address lane offers the address, a host-name
+lane the name, and a program lane the program, which NetScope resolves by name
+to the one file every running process of that name shares, and declines if
+there are none or several. With History on, the files programs ran from are
+kept in the history database, so a program that has exited can still be
+blocked from an alert after NetScope restarts.
+
+**Blocking a name.** The firewall only knows addresses, so a name block is a
+rule on every address the name has been seen to have: the ones DNS answers in
+the capture gave it, plus one lookup through your normal resolver when you
+click Block. After that the rule follows the name, adding each new address a
+captured DNS answer gives it, CNAMEs included (`www.example.com` often answers
+as a CDN's name). Two things to know: a CDN address shared with other sites is
+blocked for them too, and one name stops growing at 256 addresses, which the
+Blocked view says when it happens. A lookup that doesn't pass through this
+machine's capture (a browser using DNS over HTTPS, say) isn't seen, so the
+rule can't follow it.
 
 The **Blocked** view lists every block with an Unblock button, and checks each
 against the firewall every time it is shown: a rule deleted in `wf.msc` reads
 "rule missing — not blocking" rather than "blocking", and a `NetScope-block-*`
 rule in the firewall with no record here is listed too, so nothing stays in
 force out of sight. Blocking and unblocking are written to the alert log as
-notes. An already-open TCP connection may take a moment to stop. Loopback,
+notes. A firewall rule only stops new connections, so a block also **ends the
+open TCP connections it covers** and the note says how many. Windows can only
+do that for IPv4 TCP; IPv6 and UDP traffic stops when the program next opens a
+connection. Loopback,
 wildcard, multicast and this machine's own addresses are refused, and so are
 `svchost.exe` and the other core Windows processes, since blocking one of those
 cuts off far more than one program. A program is blocked by the file path
@@ -838,11 +859,14 @@ NetScope only labels an IP once something already announced a name for it on
 the wire. The "Reverse DNS for unlabeled IPs" checkbox on the Alerts tab is
 the one feature that sends anything out: a background lookup for an IP
 nothing has named yet, using your machine's normal DNS resolver. Leave it
-off and NetScope never originates a single packet of its own.
+off and NetScope never originates a single packet of its own, apart from the
+one lookup below.
 
 **The other exception is blocking, also off by default.** Blocking a host or a
 program writes Windows Firewall rules (see Connections above). NetScope never
 does it on its own: only a click on Block, after you have switched it on.
+Blocking a host *name* looks the name up once through your resolver, and a
+name block then updates its rule as DNS answers for that name are captured.
 
 This is a diagnostic tool for a machine you own. Capturing traffic on networks
 or devices that aren't yours is a different matter entirely, and generally not
@@ -910,6 +934,24 @@ names.
 ---
 
 ## Version history
+
+**1.35.0** — **Narrower and wider blocks, and blocks that take effect at
+once.**
+- **Open connections are ended.** A firewall rule only stops new connections,
+  so a block now also ends the open IPv4 TCP connections it covers, and its
+  note on the Alerts tab says how many.
+- **Block by name.** A host name (from a connection, a packet, a Timeline lane
+  or an alert) can be blocked. The rule holds the name's known addresses and
+  gains each new one a captured DNS answer gives it, following CNAMEs, up to
+  256.
+- **Inbound only, and one local port.** Hosts and programs can be blocked
+  inbound only. A connection made to this machine, and a program in the
+  Listening view (which now has a Block button), can be blocked on just that
+  local port. The Blocked view says which direction each block covers.
+- **Program files are remembered across restarts** in the history database
+  (when History is on), so Block program from an alert still finds the file
+  after NetScope restarts and the program has exited. Erasing history erases
+  them; they age out with the rest of history.
 
 **1.34.2** — **Undo a block from its note on the Alerts tab.** Blocking
 something adds a "Blocked host …" or "Blocked program …" note to the alert

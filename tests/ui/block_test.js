@@ -19,8 +19,11 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 
   await p.click('#p-conns .citem .blk');
   const items = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
-  check('the menu offers host, host:port and program', items.length===3 &&
-        /^Block host /.test(items[0]) && /only \(TCP, outbound\)/.test(items[1]) && /^Block program /.test(items[2]), JSON.stringify(items));
+  check('the menu offers host, host inbound, host:port, program and program inbound',
+        /^Block host [^,]+$/.test(items[0]) && items.some(t=>/^Block host .*, inbound only$/.test(t)) &&
+        items.some(t=>/only \(TCP, outbound\)/.test(t)) && items.some(t=>/^Block program [^,]+$/.test(t)) &&
+        items.some(t=>/^Block program .*, inbound only$/.test(t)), JSON.stringify(items));
+  check('an outbound connection offers no local-port block', !items.some(t=>/local port/.test(t)), JSON.stringify(items));
   check('opening it does not also select the row', !(await p.inputValue('#find')));
 
   // declined: nothing happens
@@ -86,7 +89,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('the packet menu offers host, host:port and program', tmenu.some(t=>/^Block host /.test(t)) &&
         tmenu.some(t=>/only \(TCP, outbound\)/.test(t)) && tmenu.some(t=>/^Block program /.test(t)), JSON.stringify(tmenu));
   check('the existing items are still there', tmenu.some(t=>/^Hide program /.test(t)));
-  await p.locator('#rowmenu button', {hasText: 'Block host '}).click();
+  await p.locator('#rowmenu button', {hasText: 'Block host '}).first().click();
   await p.waitForTimeout(300);
   check('choosing it asks first', dialogs.length===1 && /Block all traffic/.test(dialogs[0]), JSON.stringify(dialogs));
   check('and declining blocks nothing', (await state()).blocks.length===0);
@@ -107,8 +110,20 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   const nameLane = await p.evaluate(()=>[...document.querySelectorAll('#tlLabels .ln')].map(b=>b.dataset.name).find(n=>n!=='(none)' && !/^[\d.]+$/.test(n) && !n.includes(':')));
   if (nameLane){
     await p.locator('#tlLabels .ln[data-name="'+nameLane+'"]').click({button:'right'});
-    check('a host-name lane has no address to block', !(await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].some(x=>/^Block /.test(x.textContent)))));
-    await p.keyboard.press('Escape');
+    const nmenu = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
+    check('a host-name lane offers to block the name, and only that',
+          nmenu.filter(t=>/^Block /.test(t)).join('|')==='Block name '+nameLane, JSON.stringify(nmenu));
+    accept = true; dialogs.length = 0;
+    await p.locator('#rowmenu button', {hasText: 'Block name '}).click();
+    for (let i=0; i<50 && !dialogs.length && !(await state()).blocks.some(x=>x.kind==='name'); i++) await p.waitForTimeout(200);
+    await p.waitForTimeout(300);
+    const nb = (await state()).blocks.find(x=>x.kind==='name');
+    check('blocking it asks, mentioning shared addresses', /CDN/.test(dialogs[0]||''), dialogs[0]);
+    check('...and either blocks its addresses or says none are known yet',
+          (nb && nb.target===nameLane.toLowerCase() && nb.ips.length>0 && nb.dir==='both') ||
+          dialogs.some(d=>/hasn't seen an address/.test(d)), JSON.stringify({nb, dialogs}));
+    if (nb) await p.evaluate(id => blockCall({action:'unblock', id}), nb.id);
+    accept = false;
   }
   if (ipLane){
     await p.locator('#tlLabels .ln[data-name="'+ipLane+'"]').click({button:'right'});
@@ -116,6 +131,40 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
     await p.keyboard.press('Escape');
   }
   await p.click('#vTable');
+
+  // Inbound-only and local-port blocks, from the Listening view
+  accept = true; dialogs.length = 0;
+  await p.click('.tab[data-p="conns"]');
+  await p.click('#p-conns [data-cmode="listening"]');
+  const hasListen = await p.waitForSelector('#p-conns .citem .blk', {timeout:10000}).then(()=>true, ()=>false);
+  check('a listening program has a Block button', hasListen);
+  if (hasListen){
+    await p.click('#p-conns .citem .blk');
+    const lmenu = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
+    check('it offers the program inbound, and on its local port', lmenu.some(t=>/, inbound only$/.test(t)) &&
+          lmenu.some(t=>/on local port \d+ only \((TCP|UDP), inbound\)/.test(t)) && !lmenu.some(t=>/^Block host /.test(t)), JSON.stringify(lmenu));
+    // The demo's one listener is System, which the server refuses (part of
+    // Windows): that refusal is the right answer, so check it, then make the
+    // same kind of block for a demo program through the API.
+    await p.locator('#rowmenu button', {hasText: 'on local port'}).click();
+    await p.waitForTimeout(500);
+    check('blocking System is refused, saying why', dialogs.some(d=>/part of Windows/.test(d)), JSON.stringify(dialogs));
+    await p.evaluate(async () => { await blockCall({action:'block', kind:'program', name:'chrome.exe', lport:8080, proto:'tcp'}); });
+    for (let i=0; i<50 && !(await state()).blocks.some(x=>x.lport); i++) await p.waitForTimeout(200);
+    const lb = (await state()).blocks.find(x=>x.lport);
+    check('the block is inbound to that one port', lb && lb.kind==='program' && lb.dir==='in', JSON.stringify(lb));
+    await p.click('#p-conns [data-cmode="blocked"]');
+    await p.waitForSelector('#p-conns [data-unblock]');
+    check('the Blocked view says so', new RegExp('inbound to local port ' + (lb&&lb.lport)).test(await p.textContent('#p-conns')));
+  }
+  await p.evaluate(async () => { await blockCall({action:'block', kind:'host', address:'198.51.100.77', dir:'in'}); });
+  const ib = (await state()).blocks.find(x=>x.target==='198.51.100.77');
+  check('a host can be blocked inbound only', ib && ib.dir==='in', JSON.stringify(ib));
+  await p.click('#p-conns [data-cmode="blocked"]');
+  await p.waitForFunction(()=>/inbound only/.test(document.getElementById('p-conns').textContent), null, {timeout:10000}).catch(()=>{});
+  check('...and the Blocked view says inbound only', /inbound only/.test(await p.textContent('#p-conns')));
+  check('the alert note names the direction', await p.evaluate(async () =>
+        (await (await api('/api/alerts')).json()).alerts.some(a => a.rule==='block' && /198\.51\.100\.77 inbound$/.test(a.title))));
 
   check('no page errors', errs.length===0, errs.join('; '));
   await b.close();

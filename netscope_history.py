@@ -107,6 +107,15 @@ CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
 
 -- Program-and-host pairs seen contacting each other on a schedule, so the
 -- check-in alert only reports a pair once, ever.
+-- The files each program name was seen running from, so blocking it from an
+-- alert still works after a restart when it is no longer running.
+CREATE TABLE IF NOT EXISTS program_paths (
+    name      TEXT NOT NULL,
+    path      TEXT NOT NULL,
+    last_seen REAL NOT NULL,
+    PRIMARY KEY (name, path)
+);
+
 CREATE TABLE IF NOT EXISTS checkins (
     program    TEXT NOT NULL,
     host       TEXT NOT NULL,
@@ -648,6 +657,24 @@ class HistoryStore:
     def note_host(self, host):
         self._known_hosts.add(host)
 
+    def note_path(self, name, path):
+        """Remember a program's file. Written at once: a pair is new rarely."""
+        if not self.enabled or self._db is None or not name or not path:
+            return
+        try:
+            with self._db_lock:
+                self._db.execute(
+                    "INSERT INTO program_paths(name, path, last_seen) VALUES (?,?,?) "
+                    "ON CONFLICT(name, path) DO UPDATE SET last_seen=excluded.last_seen",
+                    (str(name).lower(), str(path), time.time()))
+                self._db.commit()
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+
+    def known_paths(self, name):
+        return {r["path"] for r in self._q(
+            "SELECT path FROM program_paths WHERE name=?", (str(name or "").lower(),))}
+
     # -- flush --------------------------------------------------------------
 
     def flush(self):
@@ -774,6 +801,8 @@ class HistoryStore:
                 self._db.execute("DELETE FROM usage_pairs WHERE day < ?", (cutoff_day,))
                 self._db.execute("DELETE FROM alerts WHERE ts < ?", (cutoff_ts,))
                 self._db.execute("DELETE FROM sessions WHERE started < ?",
+                                 (time.time() - self.retain_days * 86400,))
+                self._db.execute("DELETE FROM program_paths WHERE last_seen < ?",
                                  (time.time() - self.retain_days * 86400,))
                 self._db.commit()
         except Exception:
@@ -1009,7 +1038,7 @@ class HistoryStore:
         try:
             with self._db_lock:
                 for t in ("usage", "usage_pairs", "processes", "hosts", "alerts",
-                          "dhcp_leases", "sessions", "checkins"):
+                          "dhcp_leases", "sessions", "checkins", "program_paths"):
                     self._db.execute(f"DELETE FROM {t}")
                 self._db.commit()
                 self._db.execute("VACUUM")

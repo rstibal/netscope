@@ -56,7 +56,8 @@ function payload(exclude){
   });
   check('right-clicking a packet opens the menu', menu.on);
   check('...offering its program, host and address, then the History items, then Block',
-        menu.items.length===8 && /^Block host /.test(menu.items[5]) && /^Block program /.test(menu.items[7]) && menu.items[0]==='Hide program '+rec.process &&
+        /^Block host /.test(menu.items[5]) && menu.items.slice(5).every(t=>/^Block /.test(t)) &&
+        menu.items.includes('Block program '+rec.process) && menu.items[0]==='Hide program '+rec.process &&
         menu.items[1]==='Hide host '+rec.rhost && /^Hide address /.test(menu.items[2]) &&
         menu.items[3]==="Don't record "+rec.process+' in History' &&
         menu.items[4]==="Don't record "+rec.rhost+' in History', JSON.stringify(menu.items));

@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.34.2"
+VERSION = "1.35.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -430,6 +430,9 @@ class ProcessResolver:
         self._seen_at = {}
         self._names = {}
         self._paths = {}            # program name (lower) -> exe paths seen
+        # Called with (name, path) the first time a pair is seen, so history
+        # can keep it across restarts.
+        self.on_path = None
         self._last_forced = 0.0
         self._local_ips = set()
         self._lock = threading.Lock()
@@ -566,11 +569,22 @@ class ProcessResolver:
         with self._lock:
             if len(self._paths) > 4096:
                 self._paths.clear()
-            self._paths.setdefault(name.lower(), set()).add(path)
+            seen = self._paths.setdefault(name.lower(), set())
+            new = path not in seen
+            seen.add(path)
+        if new and self.on_path is not None:
+            try:
+                self.on_path(name, path)
+            except Exception:
+                pass
 
     def known_paths(self, name):
         with self._lock:
             return set(self._paths.get(str(name or "").lower(), ()))
+
+    def all_paths(self):
+        with self._lock:
+            return [(n, p) for n, ps in self._paths.items() for p in ps]
 
     def lookup(self, sport, dport, proto, src, dst):
         """Return (process_name, pid, direction) for a packet."""
@@ -633,6 +647,9 @@ class PacketStore:
         self.tunnel_bytes = 0
         self.unowned = 0
         self.dns_cache = {}
+        # Called with each live DNS response's answers: a block by name follows
+        # the addresses the name moves to. Not for an imported .pcap's.
+        self.dns_listener = None
         self.evicted = {"processes": 0, "hosts": 0, "names": 0}
         self._buckets = deque(maxlen=90)  # one second each
         self._cur_bucket = None
@@ -734,11 +751,23 @@ class PacketStore:
             with self._lock:
                 self._remember(ip, name, False)
 
-    def note_dns(self, answers):
+    def note_dns(self, answers, live=True):
         with self._lock:
             for a in answers:
                 if a["type"] in ("A", "AAAA") and a["data"]:
                     self._remember(a["data"], a["name"], True)
+        if live and self.dns_listener is not None:
+            try:
+                self.dns_listener(answers)
+            except Exception:
+                pass
+
+    def addresses_of(self, name):
+        """The addresses DNS answers seen so far gave a name."""
+        name = str(name or "").rstrip(".").lower()
+        with self._lock:
+            return [ip for ip, n in self.dns_cache.items()
+                    if str(n).rstrip(".").lower() == name]
 
     def hostname(self, ip: str):
         return self.dns_cache.get(ip)
@@ -1683,7 +1712,7 @@ class CaptureEngine:
                     decoded["dns"] = d
                     info = _dns_info(d)
                     if d["response"]:
-                        self.store.note_dns(d["answers"])
+                        self.store.note_dns(d["answers"], live=not self._offline)
             elif DNS in pkt:
                 d = decode_dns(pkt[DNS])
                 if d:
@@ -1691,7 +1720,7 @@ class CaptureEngine:
                     decoded["dns"] = d
                     info = _dns_info(d)
                     if d["response"]:
-                        self.store.note_dns(d["answers"])
+                        self.store.note_dns(d["answers"], live=not self._offline)
         except Exception:
             # A decoder tripping on a malformed packet must not make the
             # packet disappear: _on_packet drops anything _build raises
@@ -3330,17 +3359,30 @@ class Handler(BaseHTTPRequestHandler):
             if action == "blocking":
                 b.set_enabled(bool(body.get("enabled")))
             elif action == "block":
-                if body.get("kind") == "program":
-                    e = b.block_program(pid=body.get("pid"), name=body.get("name"))
+                kind, d = body.get("kind"), body.get("dir")
+                if kind == "program":
+                    e = b.block_program(pid=body.get("pid"), name=body.get("name"),
+                                        dir=d, lport=body.get("lport"),
+                                        proto=body.get("proto"))
                     what, who = "program", e["name"]
+                elif kind == "name":
+                    e = b.block_name(body.get("name"))
+                    what, who = "name", e["target"]
                 else:
                     e = b.block_host(body.get("address"), body.get("port"),
-                                     body.get("proto"))
+                                     body.get("proto"), dir=d, lport=body.get("lport"))
                     what, who = "host", e["target"] + (
                         ":%s" % e["port"] if e.get("port") else "")
+                scope = {"in": " inbound", "out": " outbound"}.get(e.get("dir"), "") \
+                    if not (kind == "program" and e.get("dir") == "out") else ""
+                if e.get("lport"):
+                    scope += " to local port %s" % e["lport"]
+                n = e.get("dropped") or 0
                 if alerts:
-                    alerts.note_action("block", who, "Blocked %s %s" % (what, who),
-                                       "Added a Windows Firewall rule from the dashboard.",
+                    alerts.note_action("block", who, "Blocked %s %s%s" % (what, who, scope),
+                                       "Added a Windows Firewall rule from the dashboard."
+                                       + (" Ended %d open connection%s." % (n, "" if n == 1 else "s")
+                                          if n else ""),
                                        block_id=e.get("id"))
             else:
                 e = b.unblock(body.get("id"))
@@ -3424,7 +3466,31 @@ def _exe_of_name(name, seen=()):
     return paths.pop() if len(paths) == 1 else ""
 
 
-def make_blocker(resolver, demo=False):
+def _name_ips(store, name):
+    """
+    A name's addresses: what captured DNS answers gave it, plus one lookup
+    through the OS resolver. Asked only when someone blocks the name, so it
+    is a lookup they chose, not traffic NetScope starts on its own.
+    """
+    ips = list(store.addresses_of(name)) if store is not None else []
+    try:
+        for info in socket.getaddrinfo(name, None):
+            ip = info[4][0]
+            if ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+
+def _saved_paths(history, name):
+    """Paths history kept for a program name, that are still files."""
+    if history is None:
+        return set()
+    return {p for p in history.known_paths(name) if os.path.isfile(p)}
+
+
+def make_blocker(resolver, demo=False, store=None, history=None):
     """
     Demo mode gets a firewall of its own, in memory: it fabricates traffic, so
     a block there must never write a rule into the real Windows Firewall or
@@ -3443,14 +3509,22 @@ def make_blocker(resolver, demo=False):
             elif "show" in cmd:
                 return (0 if name in rules else 1), ""
             return 0, ""
+        # No lookups either: a demo name's addresses are the demo's own.
         return Blocker(lambda: mem, lambda k, v: mem.__setitem__(k, v), run=fake,
                        available=lambda: True, local_ips=lambda: resolver.local_ips,
                        program_path=lambda pid: r"C:\Demo\app%d.exe" % pid,
-                       name_path=lambda name: "C:\\Demo\\" + name)
+                       name_path=lambda name: "C:\\Demo\\" + name,
+                       name_ips=lambda n: store.addresses_of(n) if store else [],
+                       drop=lambda e: 0)
+    # Paths seen this session first; history's from earlier runs only when
+    # this session has seen none, since an older one may be a file the
+    # program has since moved away from.
     return Blocker(load_settings, save_setting,
                    available=lambda: IS_WINDOWS and is_admin(),
                    local_ips=lambda: resolver.local_ips, program_path=_exe_of,
-                   name_path=lambda n: _exe_of_name(n, resolver.known_paths(n)))
+                   name_path=lambda n: _exe_of_name(
+                       n, resolver.known_paths(n) or _saved_paths(history, n)),
+                   name_ips=lambda n: _name_ips(store, n))
 
 
 def print_interfaces():
@@ -3752,7 +3826,12 @@ def main(argv=None):
             print(f"  Capture failed to start: {engine.error}")
             print("  The dashboard will still open; pick another interface there.")
 
-    blocker = make_blocker(resolver, demo=args.demo)
+    blocker = make_blocker(resolver, demo=args.demo, store=store, history=history)
+    store.dns_listener = blocker.note_dns
+    if history.enabled and not args.demo:
+        resolver.on_path = history.note_path
+        for n, p in resolver.all_paths():   # seen before this was attached
+            history.note_path(n, p)
     token = secrets.token_urlsafe(18)
     Handler.app = App(store, engine, resolver, token, demo=args.demo,
                       streams=streams, objects=objects, scanner=scanner,

@@ -351,7 +351,32 @@ Windows reuses them); Windows core processes
 against an in-memory firewall and settings so a demo can never touch the real
 ones. The rules themselves were not exercised against a real firewall in the
 automated tests (a fake runner stands in): test Block/Unblock on Windows as
-administrator.
+administrator. (Rob did, through 1.34.2, and it worked as designed.)
+
+**A block ends what is already open (1.35).** A firewall rule only stops new
+connections, so `_add()` also calls `drop_connections()` (`SetTcpEntry`
+DELETE_TCB). Windows offers that for IPv4 TCP only; IPv6 and UDP are left to
+stop on their own, and the README says so. A failure to drop never undoes the
+block. "Inbound" for dropping, and for the page's local-port items, means the
+local port is one something here LISTENs on: the only way to tell who opened a
+connection after the fact.
+
+**A name block follows DNS on the wire.** `kind: "name"` holds an `ips` list
+in one `remoteip=` rule, grown by `Blocker.note_dns()` (CNAMEs followed,
+capped at `MAX_NAME_IPS` with `capped` shown in the Blocked view, firewall
+updated off the capture thread). It starts from the DNS cache plus one
+`getaddrinfo`, the only lookup NetScope makes besides reverse DNS, made only on
+a Block click. An imported .pcap's answers never feed it (`note_dns(live=)`).
+Subdomains are deliberately not covered. Entries from before 1.35 carry no
+`dir`; `direction()` reads them as before (program out, host both unless it
+has a port).
+
+**Program paths persist only with history on.** `program_paths` in the
+history database, written via `ProcessResolver.on_path`; session paths win
+over saved ones, saved ones must still exist as files. With history off
+nothing reaches disk, so blocking from a pre-restart alert can still be
+refused there. Re-applying a "missing" block was offered and declined as not
+worth it: don't build it unprompted.
 
 **Demo mode never touches this machine's real state.** Its history is a
 `:memory:` database, its settings a dict that lives for the session, its
