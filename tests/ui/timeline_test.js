@@ -264,6 +264,13 @@ let mode = 1;
   await p.click('#theme');
   await p.waitForTimeout(200);
 
+  // A lane name uses the room it has: a 60% cap cut names off at ~22
+  // characters beside empty space.
+  const lw = await p.evaluate(()=>{
+    const nm=document.querySelector('#tlLabels .ln .nm'); nm.textContent='update.googleapis.com.example';
+    return {sw: nm.scrollWidth, cw: nm.clientWidth}; });
+  check('a 29-character lane name is not cut short', lw.sw<=lw.cw+1, JSON.stringify(lw));
+
   check('no page errors', errs.length===0, errs.join(' | '));
   console.log('\nFAILED:', fails.length?fails:'none');
   await b.close(); process.exit(fails.length?1:0);

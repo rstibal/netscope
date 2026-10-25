@@ -17,17 +17,17 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   const state = () => p.evaluate(async () => (await (await api('/api/blocks')).json()));
   check('nothing is blocked to start', (await state()).blocks.length===0);
 
-  await p.click('#p-conns .citem .blk');
+  await p.locator('#p-conns .citem:has(.l2:has-text("ESTAB")) .blk').first().click();
   const items = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
   check('the menu offers host, host inbound, host:port, program and program inbound',
-        /^Block host [^,]+$/.test(items[0]) && items.some(t=>/^Block host .*, inbound only$/.test(t)) &&
+        items[0]==='End this connection' && /^Block host [^,]+$/.test(items[1]) && items.some(t=>/^Block host .*, inbound only$/.test(t)) &&
         items.some(t=>/only \(TCP, outbound\)/.test(t)) && items.some(t=>/^Block program [^,]+$/.test(t)) &&
         items.some(t=>/^Block program .*, inbound only$/.test(t)), JSON.stringify(items));
   check('an outbound connection offers no local-port block', !items.some(t=>/local port/.test(t)), JSON.stringify(items));
   check('opening it does not also select the row', !(await p.inputValue('#find')));
 
   // declined: nothing happens
-  await p.click('#rowmenu button:first-child');
+  await p.locator('#rowmenu button[title^="Block host "]').first().click();
   await p.waitForTimeout(300);
   check('it asks first', dialogs.length===1 && /Block all traffic to and from/.test(dialogs[0]), dialogs[0]);
   check('declining blocks nothing', (await state()).blocks.length===0);
@@ -35,8 +35,8 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   // accepted: blocking is off, so it offers to turn it on, then blocks
   accept = true; dialogs.length = 0;
   await p.waitForSelector('#p-conns .citem .blk');
-  await p.click('#p-conns .citem .blk');
-  await p.click('#rowmenu button:first-child');
+  await p.locator('#p-conns .citem:has(.l2:has-text("ESTAB")) .blk').first().click();
+  await p.locator('#rowmenu button[title^="Block host "]').first().click();
   for (let i=0; i<50 && (await state()).blocks.length!==1; i++) await p.waitForTimeout(200);
   check('blocking being off is explained before it is switched on',
         dialogs.length===2 && /switched off/.test(dialogs[1]), JSON.stringify(dialogs));
@@ -165,6 +165,34 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('...and the Blocked view says inbound only', /inbound only/.test(await p.textContent('#p-conns')));
   check('the alert note names the direction', await p.evaluate(async () =>
         (await (await api('/api/alerts')).json()).alerts.some(a => a.rule==='block' && /198\.51\.100\.77 inbound$/.test(a.title))));
+
+  // End this connection: ends one IPv4 TCP connection, blocks nothing
+  dialogs.length = 0; accept = true;
+  await p.click('#p-conns [data-cmode="active"]');
+  await p.waitForSelector('#p-conns .citem .blk');
+  // Fresh, and the newest: demo connections only last a few seconds.
+  await p.evaluate(() => refreshTab('conns'));
+  const target = await p.evaluate(() => { const r = lastConns.connections.filter(c => c.proto==='tcp' && c.raddr && !c.raddr.includes(':') && c.state==='ESTABLISHED')
+      .sort((a, b) => a.age - b.age)[0];
+    return r && {laddr: r.laddr, lport: r.lport, raddr: r.raddr, rport: r.rport}; });
+  const ri = await p.evaluate(t => [...document.querySelectorAll('#p-conns .citem')].findIndex(it =>
+    it.getAttribute('title').includes(t.laddr + ':' + t.lport + ' → ' + t.raddr + ':' + t.rport)), target);
+  await p.locator('#p-conns .citem').nth(ri).locator('.blk').click();
+  const before = (await state()).blocks.length;
+  await p.locator('#rowmenu button', {hasText: 'End this connection'}).click();
+  let gone = false;
+  for (let i=0; i<50 && !gone; i++){
+    await p.waitForTimeout(200);
+    gone = await p.evaluate(async t => !(await (await api('/api/connections')).json()).connections.some(c =>
+      c.lport===t.lport && c.raddr===t.raddr && c.rport===t.rport && c.state==='ESTABLISHED'), target);
+  }
+  check('ending asks first, saying nothing is blocked', /Nothing is blocked/.test(dialogs[0]||''), dialogs[0]);
+  check('the connection is no longer open', gone, JSON.stringify(target));
+  check('nothing was blocked', (await state()).blocks.length===before, JSON.stringify(dialogs));
+  check('the alert log records it', await p.evaluate(async t =>
+        (await (await api('/api/alerts')).json()).alerts.some(a => a.rule==='end' && a.title==='Ended connection to '+t.raddr+':'+t.rport), target), JSON.stringify(await p.evaluate(async () => (await (await api('/api/alerts')).json()).alerts.filter(a => a.rule==='end' || /^End/.test(a.title)))));
+  check('a connection that is not open is refused', await p.evaluate(async () => (await api('/api/control',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'end',laddr:'192.168.1.20',lport:1,raddr:'203.0.113.1',rport:443})})).status)===400);
 
   check('no page errors', errs.length===0, errs.join('; '));
   await b.close();

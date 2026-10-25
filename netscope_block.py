@@ -209,7 +209,7 @@ def clean_address(text, local_ips=()):
 class Blocker:
     def __init__(self, load, save, run=None, available=None, local_ips=None,
                  own_exes=None, program_path=None, name_path=None, name_ips=None,
-                 drop=None, background=True):
+                 drop=None, background=True, end_tcp=None):
         """
         load/save   settings accessors (netscope_history.load_settings / save_setting)
         run         command runner: list -> (exit code, output). Injected by tests
@@ -221,6 +221,8 @@ class Blocker:
                     that name shares, or "" when there are none or several
         name_ips    callable host name -> addresses it is known to have now
         drop        callable entry -> how many open connections it ended
+        end_tcp     callable conn -> True once Windows has ended that one
+                    connection (End connection); demo mode passes a pretend one
         background  apply DNS-learned addresses on a thread of their own (tests
                     pass False and get them applied inside note_dns)
         """
@@ -233,6 +235,7 @@ class Blocker:
         self._name_path = name_path or (lambda name: "")
         self._name_ips = name_ips or (lambda name: ())
         self._drop = drop or drop_connections
+        self._end_tcp = end_tcp or _delete_tcb
         self._background = background
         self._lock = threading.RLock()
         self._name_targets = None           # names with a block, for note_dns
@@ -302,12 +305,12 @@ class Blocker:
 
     # -- adding --------------------------------------------------------------
 
-    def _check_allowed(self):
+    def _check_allowed(self, adding=True):
         if not self.available():
             raise BlockError("Blocking needs Windows and administrator rights.")
         if not self.enabled:
             raise BlockError("Blocking is switched off. Turn it on in the Blocked list first.")
-        if self.count() >= MAX_BLOCKS:
+        if adding and self.count() >= MAX_BLOCKS:
             raise BlockError("The block list is full (%d)." % MAX_BLOCKS)
 
     def block_host(self, address, port=None, proto=None, dir=None, lport=None):
@@ -416,6 +419,35 @@ class Blocker:
         except Exception:
             dropped = 0
         return dict(entry, dropped=dropped)
+
+    # -- ending one connection ------------------------------------------------
+
+    def end_connection(self, conn):
+        """
+        End one open connection without blocking anything: the program may
+        simply connect again. conn is a row from the socket table, never what
+        the page sent (the caller looks it up), with lip/lport/rip/rport.
+        Only IPv4 TCP: it is the one kind Windows can end from outside the
+        program that owns it.
+        """
+        self._check_allowed(adding=False)
+        try:
+            lip = ipaddress.ip_address(str(conn.get("lip") or ""))
+            rip = ipaddress.ip_address(str(conn.get("rip") or ""))
+        except ValueError:
+            raise BlockError("That connection has no remote end to end.")
+        if lip.version != 4 or rip.version != 4:
+            raise BlockError("Windows can only end IPv4 connections from outside the "
+                             "program. Close the program, or block it, to stop this one.")
+        if rip.is_loopback:
+            raise BlockError("Connections within this machine can't be ended from here.")
+        try:
+            ok = self._end_tcp(conn)
+        except Exception as exc:
+            raise BlockError("Windows would not end it: %s" % exc)
+        if not ok:
+            raise BlockError("Windows would not end it. It may have closed already.")
+        return True
 
     # -- following a name's addresses ------------------------------------------
 

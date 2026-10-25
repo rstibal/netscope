@@ -197,5 +197,29 @@ b, fw, st = make(drop=lambda e: 1 / 0)
 check("a failure ending them doesn't undo the block", b.block_host("203.0.113.9")["dropped"] == 0
       and b.count() == 1)
 
+# -- ending one connection ------------------------------------------------------
+ended = []
+st = {"blocking_enabled": True}
+b = B.Blocker(lambda: st, st.__setitem__, run=Fw(), available=lambda: True,
+              drop=lambda e: 0, end_tcp=lambda c: ended.append(c) or True)
+conn = {"lip": "192.168.1.5", "lport": 51000, "rip": "203.0.113.9", "rport": 443}
+check("an IPv4 connection is ended", b.end_connection(conn) and ended == [conn])
+check("...and nothing is blocked", b.count() == 0)
+v6 = {"lip": "2001:db8::5", "lport": 51000, "rip": "2001:db8::9", "rport": 443}
+check("an IPv6 one is refused, saying why", "IPv4" in (refuses(b.end_connection, v6) or "")
+      and len(ended) == 1)
+check("one within this machine is refused",
+      refuses(b.end_connection, dict(conn, rip="127.0.0.1")) is not None)
+check("one with no remote end is refused", refuses(b.end_connection, dict(conn, rip="")) is not None)
+b2 = B.Blocker(lambda: st, st.__setitem__, run=Fw(), available=lambda: True,
+               drop=lambda e: 0, end_tcp=lambda c: False)
+check("Windows saying no is reported", "would not end" in (refuses(b2.end_connection, conn) or ""))
+st["blocking_enabled"] = False
+check("with blocking off it is refused", "switched off" in (refuses(b.end_connection, conn) or ""))
+st["blocking_enabled"] = True
+st["blocks"] = [{"id": "%08x" % i, "kind": "host", "target": "198.51.100.%d" % (i % 250)}
+                for i in range(B.MAX_BLOCKS)]
+check("a full block list doesn't stop ending one", b.end_connection(conn) is True)
+
 print(); print("FAILED:", fails or "none")
 sys.exit(1 if fails else 0)

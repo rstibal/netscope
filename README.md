@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.35.0**
+**Version 1.36.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -330,7 +330,15 @@ force out of sight. Blocking and unblocking are written to the alert log as
 notes. A firewall rule only stops new connections, so a block also **ends the
 open TCP connections it covers** and the note says how many. Windows can only
 do that for IPv4 TCP; IPv6 and UDP traffic stops when the program next opens a
-connection. Loopback,
+connection.
+
+**Ending a connection without blocking anything.** The Block menu on an open
+connection starts with **End this connection**: Windows ends that one
+connection and nothing is blocked, so the program is free to connect again
+(most will, at once). Like blocking it needs administrator rights and blocking
+switched on, and it is written to the alert log. It is offered only for IPv4
+TCP, the one kind Windows can end from outside the program that owns it; for
+an IPv6 connection the menu says so instead. Loopback,
 wildcard, multicast and this machine's own addresses are refused, and so are
 `svchost.exe` and the other core Windows processes, since blocking one of those
 cuts off far more than one program. A program is blocked by the file path
@@ -934,6 +942,20 @@ names.
 ---
 
 ## Version history
+
+**1.36.0** — **End a connection without blocking it.** An open IPv4 TCP
+connection's Block menu now starts with *End this connection*, which has
+Windows end that one connection and blocks nothing, so the program can connect
+again. It needs blocking switched on, is recorded in the alert log, and only
+ends a connection that is in the socket table at that moment. IPv6
+connections can't be ended this way (Windows has no way to do it from outside
+the program); their menu says so.
+- **Names no longer cut short.** Open connections' activity mark and Block
+  button moved to the second line, which leaves the first line for the
+  program and host (a 12-character program and a 21-character host:port didn't
+  fit beside them). Timeline lane names use all the room beside the total
+  instead of stopping at 60% of the column; a check-in box still gives way
+  first.
 
 **1.35.0** — **Narrower and wider blocks, and blocks that take effect at
 once.**

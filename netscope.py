@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.35.0"
+VERSION = "1.36.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2639,6 +2639,14 @@ class DemoEngine:
                 opened, _closed, pr = self._conns[(sport, dport, ip)]
                 self._conns[(sport, dport, ip)] = (opened, time.time(), pr)
 
+    def end_conn(self, lport, raddr, rport):
+        """End connection, in the demo: its socket goes to TIME_WAIT."""
+        with self._sock_lock:
+            k = (lport, rport, raddr)
+            if k in self._conns:
+                opened, _closed, pr = self._conns[k]
+                self._conns[k] = (opened, time.time(), pr)
+
     def _loop(self):
         local = self.LOCAL
         if not self._seeded:
@@ -3287,7 +3295,7 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             elif action == "clear_alerts":
                 self.app.alerts.clear()
-            elif action in ("blocking", "block", "unblock"):
+            elif action in ("blocking", "block", "unblock", "end"):
                 return self._block_action(action, body)
             elif action == "history_flush":
                 if self.app.history:
@@ -3356,6 +3364,8 @@ class Handler(BaseHTTPRequestHandler):
         if b is None:
             return self._send(400, {"error": "Blocking is not available."})
         try:
+            if action == "end":
+                return self._end_connection(b, alerts, body)
             if action == "blocking":
                 b.set_enabled(bool(body.get("enabled")))
             elif action == "block":
@@ -3393,6 +3403,42 @@ class Handler(BaseHTTPRequestHandler):
         except BlockError as exc:
             return self._send(400, {"error": str(exc)})
         return self._send(200, {"status": self.status(), "blocks": b.listing()})
+
+    def _end_connection(self, b, alerts, body):
+        """
+        End one open TCP connection. Only one that is in the socket table right
+        now: the page names it, but what is ended is the row found here.
+        """
+        try:
+            want = (str(body.get("laddr") or ""), int(body.get("lport") or 0),
+                    str(body.get("raddr") or ""), int(body.get("rport") or 0))
+        except (TypeError, ValueError):
+            raise BlockError("That is not a connection.")
+        if self.app.source:
+            raise BlockError("This is a saved capture, not a live connection.")
+        if self.app.demo and hasattr(self.app.engine, "sockets"):
+            rows = self.app.engine.sockets()
+        else:
+            rows = self.app.sockets.rows()
+        row = next((r for r in rows if r.get("proto") == "tcp"
+                    and r.get("state") not in ("LISTEN", "TIME_WAIT", "CLOSE")
+                    and (r.get("laddr"), r.get("lport"), r.get("raddr"), r.get("rport")) == want),
+                   None)
+        if row is None:
+            raise BlockError("That connection isn't open any more.")
+        b.end_connection({"lip": row["laddr"], "lport": row["lport"],
+                          "rip": row["raddr"], "rport": row["rport"]})
+        # Its socket row is cached for a second; the next poll should not
+        # still show it open.
+        self.app.sockets._at = 0.0
+        if self.app.demo and hasattr(self.app.engine, "end_conn"):
+            self.app.engine.end_conn(row["lport"], row["raddr"], row["rport"])
+        if alerts:
+            who = "%s:%s" % (row["raddr"], row["rport"])
+            alerts.note_action("end", who, "Ended connection to " + who,
+                               "Ended from the dashboard. Nothing is blocked: the "
+                               "program can connect again.")
+        return self._send(200, {"status": self.status(), "ended": True})
 
     # -- helpers -------------------------------------------------------------
 
@@ -3515,7 +3561,7 @@ def make_blocker(resolver, demo=False, store=None, history=None):
                        program_path=lambda pid: r"C:\Demo\app%d.exe" % pid,
                        name_path=lambda name: "C:\\Demo\\" + name,
                        name_ips=lambda n: store.addresses_of(n) if store else [],
-                       drop=lambda e: 0)
+                       drop=lambda e: 0, end_tcp=lambda c: True)
     # Paths seen this session first; history's from earlier runs only when
     # this session has seen none, since an older one may be a file the
     # program has since moved away from.

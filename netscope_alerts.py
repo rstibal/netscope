@@ -146,6 +146,8 @@ RULE_WHY = {
              "The rule lives in Windows Firewall as NetScope-block-*.",
     "unblock": "A record, not a finding: you removed a block from the "
                "dashboard.",
+    "end": "A record, not a finding: you ended this connection from the "
+           "dashboard. Nothing was blocked, so the program can connect again.",
     "rogue_ra": "Fires when an IPv6 Router Advertisement arrives from a "
                "router this machine has not seen on this adapter before. A "
                "fake RA can redirect IPv6 traffic through an attacker's "

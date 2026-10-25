@@ -252,12 +252,14 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
   border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;
   color:var(--fg);font:12px var(--mono);text-align:left;cursor:pointer;min-width:0}
 .ln:hover,.ln:focus-visible{background:var(--panel2);color:var(--fg);outline:none}
-.ln .nm{flex:0 0 auto;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The name takes whatever the total and the box leave. A 60% cap cut
+   oauthaccountmanager.googleapis.com off at 22 characters beside empty space. */
+.ln .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ln.sys .nm{color:var(--dim)}
 .ln .tot{flex:0 0 auto;margin-left:auto;padding-left:4px;color:var(--faint);font-size:10.5px}
 /* The box gives way before the name does: which program it is matters more
    than which host it checks in with, and the box's title has it in full. */
-.ln .rg{flex:0 3 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+.ln .rg{flex:0 1000 auto;min-width:3.6em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font:700 9.5px var(--sans);color:var(--accent);
   border:1px solid var(--accent);border-radius:3px;padding:0 4px;letter-spacing:.2px}
 .ln .rg:hover{background:var(--accent);color:#fff}
@@ -361,6 +363,8 @@ h4{margin:0 0 8px;font:600 11px var(--sans);letter-spacing:.5px;text-transform:u
 .berr{color:var(--out);font-size:12px;margin:0 0 8px}
 .citem .l2{color:var(--dim);font:11px/1.35 var(--mono);margin-top:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.citem .l2.lx{display:flex;align-items:center;gap:6px;overflow:visible}
+.citem .l2 .nums{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .citem .l2 b{color:var(--fg);font-weight:600}
 .citem .l2 b.warn{color:var(--out)}
 .citem .l2 .sx{color:var(--faint)}
@@ -3018,13 +3022,17 @@ function renderConns(d){
     let l1 = '<span class="who">' + esc(r.process) + '</span>' +
              (listening ? '' : '<span class="ar">→</span>') +
              '<span class="peer">' + esc(peer) + '</span>';
+    // The activity mark and Block go on the second line. On the first they
+    // left a 12-character program and a 21-character host:port no room in
+    // the 429px panel, and the identity is what the row is for.
+    let tail = '';
     if (connMode === 'active')
-      l1 += '<span class="spw" title="' + esc(sparkTitle(r.spark)) + '">' +
-            sparkSVG(r.spark) + '</span>';
+      tail += '<span class="spw" title="' + esc(sparkTitle(r.spark)) + '">' +
+              sparkSVG(r.spark) + '</span>';
     if (connMode === 'active' && !r.closed && r.raddr && !d.offline)
-      l1 += '<button class="blk" data-ri="' + ri + '" title="Block this host or program">Block</button>';
+      tail += '<button class="blk" data-ri="' + ri + '" title="Block this host or program">Block</button>';
     else if (listening && !d.offline && r.process && !/^[(-]/.test(r.process))
-      l1 += '<button class="blk" data-ri="' + ri + '" title="Block connections to this program">Block</button>';
+      tail += '<button class="blk" data-ri="' + ri + '" title="Block connections to this program">Block</button>';
 
     const bits = [];
     if (connMode === 'quality'){
@@ -3047,7 +3055,8 @@ function renderConns(d){
            ' data-ip="' + esc(r.raddr) + '" data-port="' + r.lport + '"' +
            ' title="' + title + '">' +
              '<div class="l1">' + l1 + '</div>' +
-             '<div class="l2">' + bits.join(sep) + '</div>' +
+             (tail ? '<div class="l2 lx"><span class="nums">' + bits.join(sep) + '</span>' + tail + '</div>'
+                   : '<div class="l2">' + bits.join(sep) + '</div>') +
            '</div>';
   }).join('');
 
@@ -3106,7 +3115,7 @@ function askBlock(text, body){
   if (!confirm('Blocking is switched off. Turn it on? It lets this dashboard add ' +
                'Windows Firewall rules (NetScope-block-*), and every one is listed ' +
                'under Connections > Blocked.')) return;
-  blockCall({action: 'blocking', enabled: true}).then(ok => ok && go());
+  return blockCall({action: 'blocking', enabled: true}).then(ok => ok && go());
 }
 
 /* The menu items that block something, for one connection or packet or lane.
@@ -3171,9 +3180,23 @@ function openBlockMenu(r, x, y){
   // A connection is inbound when its local port is one this machine listens on.
   const inbound = r.state === 'LISTEN' || (d.listening || []).some(l =>
     l.proto === r.proto && l.lport === r.lport);
-  showRowMenu(blockItems({addr: r.raddr, port: r.rport, proto: r.proto, pid: r.pid,
-                          process: r.process, host: r.rhost, lport: r.lport, inbound}),
-              'A Windows Firewall rule; undo it under Blocked.', x, y);
+  const items = blockItems({addr: r.raddr, port: r.rport, proto: r.proto, pid: r.pid,
+                            process: r.process, host: r.rhost, lport: r.lport, inbound});
+  // Ending one connection blocks nothing. Windows can only do it for IPv4
+  // TCP, so an IPv6 one says so instead of offering it.
+  const tcp = r.proto === 'tcp' && r.raddr && !/^(LISTEN|TIME_WAIT|CLOSE)/.test(r.state || '');
+  const v4 = tcp && !String(r.raddr).includes(':') && !String(r.laddr).includes(':');
+  if (v4)
+    items.unshift(['End this connection', () => {
+      const done = askBlock(
+        'End this connection to ' + r.raddr + ':' + r.rport + '? Nothing is blocked: ' +
+        (r.process && r.process !== '-' ? r.process : 'the program') + ' can connect again.',
+        {action: 'end', laddr: r.laddr, lport: r.lport, raddr: r.raddr, rport: r.rport});
+      if (done) done.then(ok => ok && refreshTab('conns'));
+    }], null);
+  showRowMenu(items, tcp && !v4
+    ? 'Windows can only end IPv4 connections; to stop this one, close or block the program.'
+    : 'A Windows Firewall rule; undo it under Blocked.', x, y);
 }
 
 function blocksBody(){

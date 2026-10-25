@@ -89,7 +89,9 @@ row shifts every later cell onto the wrong `<col>`.
 **The Connections tab is two-line items, not a table.** A readable text column
 needs ~90px and the side panel is 429px; seven columns need ~530px. Five
 different column arrangements were tried before the arithmetic was done. Files
-and Streams use the same two-line pattern.
+and Streams use the same two-line pattern. The activity mark and Block button
+sit on the second line (since 1.36): on the first they clipped a third of the
+demo's program/host pairs.
 
 **Chart hues are blue/orange, not the app's green/orange.** Green vs orange
 fails deuteranope separation on the dark surface — measured, not guessed. The
@@ -377,6 +379,13 @@ over saved ones, saved ones must still exist as files. With history off
 nothing reaches disk, so blocking from a pre-restart alert can still be
 refused there. Re-applying a "missing" block was offered and declined as not
 worth it: don't build it unprompted.
+
+**End connection is IPv4 TCP only, and stays that way (1.36).**
+`Blocker.end_connection()` uses the same `SetTcpEntry` call as a block's
+drop, on a row the server finds in the socket table (never the page's
+endpoints alone). Windows has no equivalent for IPv6; injecting forged TCP
+resets from captured sequence numbers was asked for and is not something to
+build. IPv6 rows say why there is no End item.
 
 **Demo mode never touches this machine's real state.** Its history is a
 `:memory:` database, its settings a dict that lives for the session, its

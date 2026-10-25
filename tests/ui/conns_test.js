@@ -95,6 +95,21 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('...and identity still is not clipped', !multi.clipped);
   check('...and the panel still does not scroll', multi.pane<=1, multi.pane);
 
+  // A program and host:port that clipped while the sparkline and Block button
+  // shared their line (36 of 108 demo pairings did).
+  const fit = await p.evaluate(()=>{
+    connMode='active';
+    renderConns({connections:[{proto:'tcp',state:'ESTABLISHED',pid:1,process:'CrashReporter.exe',
+      laddr:'192.168.1.20',lport:50000,raddr:'203.0.113.5',rport:50123,rhost:'legacy-ftp.example.com',
+      iface:'x',in:1,out:1,packets:2,spark:[1,2],age:5,idle:1}],
+      listening:[],closed:[],offline:false,demo:false,detached:false,supported:true,error:''});
+    const it=document.querySelector('#p-conns .citem');
+    return {clipped:['.who','.peer'].some(s=>{const e=it.querySelector(s); return e.scrollWidth>e.clientWidth+1;}),
+            blk: !!it.querySelector('.l2 .blk'), spark: !!it.querySelector('.l2 .spw')};
+  });
+  check('a long program and host:port fit on the first line', !fit.clipped, JSON.stringify(fit));
+  check('...with the activity mark and Block on the second', fit.blk && fit.spark, JSON.stringify(fit));
+
   check('no page errors', errs.length===0, errs.join(' | '));
   console.log('\nFAILED:', fails.length?fails:'none');
   await b.close(); process.exit(fails.length?1:0);
