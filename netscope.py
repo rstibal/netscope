@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.37.0"
+VERSION = "1.38.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -2314,10 +2314,12 @@ class DemoEngine:
         """A realistic DISCOVER/OFFER/REQUEST/ACK, as genuine DHCP bytes —
         the one exchange that names a machine before it sends anything else,
         and the one an unexpected second server would answer instead."""
-        mac = bytes(int(x, 16) for x in "aa:bb:cc:11:22:33".split(":"))
+        # This machine renewing its own lease: its MAC, and the address the
+        # rest of the demo traffic comes from.
+        mac = bytes(int(x, 16) for x in self.MAC_LOCAL.split(":"))
         xid = random.randint(0, 2**32 - 1)
         hostname = self._dhcp_opt(12, b"robs-laptop")
-        client_ip = bytes([192, 168, 1, 77])
+        client_ip = socket.inet_aton(self.LOCAL)
         server_ip = bytes([192, 168, 1, 1])
         lease = self._dhcp_opt(51, struct.pack("!I", 86400))
         server_id = self._dhcp_opt(54, server_ip)
@@ -2338,7 +2340,9 @@ class DemoEngine:
         for payload, outbound in ((discover, True), (offer, False),
                                   (request, True), (ack, False)):
             if outbound:
-                self._emit_dhcp(payload, True, self.LOCAL, BCAST, 68, 67)
+                # A client asking for an address has none yet: DISCOVER and
+                # REQUEST come from 0.0.0.0, as a real one's do.
+                self._emit_dhcp(payload, True, "0.0.0.0", BCAST, 68, 67)
             else:
                 self._emit_dhcp(payload, False, SERVER, self.LOCAL, 67, 68)
             self._stop.wait(0.05)
@@ -3008,6 +3012,32 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
 
+        if path == "/api/export":
+            what = qs.get("what", [""])[0]
+            fmt = "json" if qs.get("fmt", ["csv"])[0] == "json" else "csv"
+            got = export_rows(self.app, what)
+            if got is None:
+                return self._send(404, {"error": "nothing to export by that name"})
+            columns, rows = got
+            if fmt == "json":
+                blob = json.dumps(rows, indent=1, default=str).encode("utf-8")
+                ctype = "application/json"
+            else:
+                # A byte-order mark, so Excel reads the UTF-8 as UTF-8.
+                blob = ("\ufeff" + to_csv(columns, rows)).encode("utf-8")
+                ctype = "text/csv; charset=utf-8"
+            name = "netscope-%s-%s.%s" % (what, datetime.now().strftime("%Y%m%d-%H%M%S"), fmt)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(blob)))
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+            self.end_headers()
+            try:
+                self.wfile.write(blob)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
         if path == "/api/history":
             h = self.app.history
             ex = h.exclusions() if h else {"programs": [], "hosts": []}
@@ -3510,6 +3540,96 @@ def _exe_of_name(name, seen=()):
     if not paths:
         paths = set(seen)
     return paths.pop() if len(paths) == 1 else ""
+
+
+# -- text export ------------------------------------------------------------------
+
+def csv_cell(v):
+    """
+    One CSV field. Text that a spreadsheet would run as a formula (=, +, -,
+    @, tab, CR first) gets a leading apostrophe: host names, Info and alert
+    details all come off the network, and a crafted one is otherwise a
+    formula the moment the file is opened. Numbers are left alone.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        s = "true" if v else "false"
+    elif isinstance(v, (int, float)):
+        return str(v)
+    elif isinstance(v, (list, dict, tuple)):
+        s = json.dumps(v, default=str)
+    else:
+        s = str(v)
+    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        s = "'" + s
+    if any(c in s for c in ',"\r\n'):
+        s = '"' + s.replace('"', '""') + '"'
+    return s
+
+
+def to_csv(columns, rows):
+    lines = [",".join(columns)]
+    for r in rows:
+        lines.append(",".join(csv_cell(r.get(c)) for c in columns))
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _iso(ts):
+    try:
+        return datetime.fromtimestamp(float(ts)).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+
+CONN_COLUMNS = ["list", "state", "proto", "process", "pid", "laddr", "lport",
+                "raddr", "rport", "rhost", "iface", "in", "out", "packets",
+                "age", "idle", "rtt", "tls_ms", "resent", "dup_ack"]
+TOTAL_COLUMNS = ["kind", "name", "first_seen", "last_seen", "bytes_in", "bytes_out",
+                 "packets"]
+ALERT_COLUMNS = ["id", "time", "severity", "rule", "title", "detail", "process",
+                 "peer", "subject"]
+
+
+def export_rows(app, what):
+    """(columns, rows) for /api/export, or None. Packets are exported by the
+    page itself: the display filter runs there."""
+    if what == "connections":
+        offline = bool(app.source)
+        if app.demo and hasattr(app.engine, "sockets"):
+            socks = app.engine.sockets()
+        else:
+            socks = [] if (offline or app.demo) else app.sockets.rows()
+        open_rows, listening, closed = build_view(
+            socks, app.store.flows, name_for_pid=app.resolver.name_for_pid,
+            host_for_ip=lambda ip: app.store.dns_cache.get(ip, ""))
+        rows = [dict(r, list=kind) for kind, part in (("open", open_rows),
+                ("listening", listening), ("closed", closed)) for r in part]
+        for r in rows:
+            r.pop("spark", None)
+        return CONN_COLUMNS, rows
+    if what == "history":
+        h = app.history
+        if h is None or not h.enabled:
+            return TOTAL_COLUMNS, []
+        h.flush()
+        rows = h.totals()
+        for r in rows:
+            r["first_seen"], r["last_seen"] = _iso(r["first_seen"]), _iso(r["last_seen"])
+        return TOTAL_COLUMNS, rows
+    if what == "alerts":
+        # The log when there is one (it outlives restarts and Clear alerts);
+        # with history off, this session's alerts are all there are.
+        h = app.history
+        if h is not None and h.enabled:
+            h.flush()
+            rows = h.all_alerts()
+        else:
+            rows = [dict(a, detail=a.get("detail", "")) for a in reversed(app.alerts.list())]                 if app.alerts else []
+        for r in rows:
+            r["time"] = _iso(r.get("ts"))
+        return ALERT_COLUMNS, rows
+    return None
 
 
 def _name_ips(store, name):

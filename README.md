@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.37.0**
+**Version 1.38.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -373,12 +373,14 @@ schedule.
   program, `every ~45s · Example.exe` on a host. A busy program's check-in is
   otherwise invisible, because its other traffic fills the gaps. Hover the box
   for every pair that qualifies; **click the box** to filter to that program
-  and host together.
+  and host together, in the table.
 - **Hover** a lane for the time, bytes each way and packet count at that point,
   and for where its traffic goes: the hosts a program talks to, or the
   programs behind a host, with each one's share. **Click a lane's name** to
-  filter to it; **right-click** it for the same hide and don't-record menu the
-  packet table has.
+  see its packets: the view switches to the table, filtered to that lane (the
+  clause is in the filter box; clear it to see everything again), with the
+  lane's newest packet selected and open in the Packet tab. **Right-click** it
+  for the same hide and don't-record menu the packet table has.
 - Lanes are ordered busiest first, and the order holds for ten seconds at a
   time so lanes don't swap places under the pointer.
 
@@ -487,6 +489,14 @@ still pauses.
 **Save ↓** writes everything currently buffered to a standard `.pcap` — real
 Ethernet frames, microsecond timestamps, correct wire lengths for anything that
 was snapped short. Wireshark, tcpdump and tshark all open it.
+
+**Export ↓** saves text for a spreadsheet or a script, each as CSV or JSON:
+the packets the display filter shows (across the whole buffer, the same set
+*Search buffer* searches; everything when the filter is empty), the
+connections the Connections tab lists, History's all-time totals per program
+and per host, and the alert log (this session's alerts when History is off).
+CSV cells that would start a spreadsheet formula (`=`, `+`, `-`, `@`) get a
+leading apostrophe, since host names and packet info come off the network.
 
 **Open ↑** loads a `.pcap` or `.pcapng` back in (or `--read file.pcap` from the
 command line). NetScope switches to offline mode, stops capturing, and re-runs
@@ -945,6 +955,18 @@ names.
 ---
 
 ## Version history
+
+**1.38.0** — **Export, and clicks that show you something.**
+- **Export ↓** next to Save: the filtered packets, connections, History totals
+  or the alert log, as CSV or JSON.
+- **Clicking a Timeline lane** shows its packets in the table, filtered to the
+  lane, with the newest one open in the Packet tab. It used to filter the
+  Timeline down to the lane you had just clicked.
+- **Clicking a packet opens the Packet tab.** It used to leave you on whatever
+  tab was showing (History, at first), which looked like nothing happened.
+- **DHCP:** a client's DISCOVER or REQUEST showed 0.0.0.0 in the packet list
+  instead of the address it asked for. Demo mode's DHCP exchange now comes from
+  0.0.0.0 and leases the demo machine its own address and MAC.
 
 **1.37.0** — **Alerts say more of what they mean.**
 - **The bandwidth threshold is per hour.** It was per session, and a session

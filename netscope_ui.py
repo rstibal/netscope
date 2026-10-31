@@ -658,6 +658,7 @@ while you were paused. Shortcut: space.">Pause</button>
 back through the table while the capture continues."><input type="checkbox"
     id="follow" checked> follow</label>
   <button id="savePcap" title="Save the buffered packets as a .pcap Wireshark can open">Save ↓</button>
+  <button id="exportTxt" title="Export packets, connections, History totals or the alert log as CSV or JSON" aria-haspopup="menu">Export ↓</button>
   <button id="openPcap" title="Load a .pcap or .pcapng for offline analysis">Open ↑</button>
   <input type="file" id="pcapFile" accept=".pcap,.pcapng,.cap" style="display:none">
   <button id="theme" title="Toggle theme">◐</button>
@@ -1107,7 +1108,7 @@ function addRow(p){
     '<td><span class="pr '+esc(p.proto)+'">'+esc(p.proto)+'</span></td>'+
     '<td class="num">'+p.length+'</td>'+
     '<td class="info" title="'+esc(p.info)+'">'+esc(p.info)+'</td>';
-  tr.onclick = () => select(p.seq, tr);
+  tr.onclick = () => { select(p.seq, tr); showTab('detail'); };
   return tr;
 }
 
@@ -1430,11 +1431,9 @@ function frameBadge(seq){
 function select(seq, tr){
   selected = seq;
   for (const r of $('rows').children) r.classList.toggle('sel', r === tr);
-  // Deliberately does NOT switch tabs. Files, Streams and Talkers are
-  // session-wide views; yanking the user back to Packet every time they
-  // click a row made them feel like they belonged to the selection.
-  // The Packet pane still updates underneath, and its tab shows the frame
-  // number so it's clear the selection registered.
+  // Doesn't switch tabs itself; a click on a row or a Timeline lane does
+  // (1.38: staying on History made a click look like it did nothing). The
+  // Packet tab's badge shows the frame number either way.
   const b = $('nPkt');
   b.textContent = frameBadge(seq);
   b.title = 'frame ' + seq;
@@ -3662,7 +3661,28 @@ $('tlLabels').addEventListener('click', e => {
   const pair = e.target.closest('.rg') && l && l.checks.length ? l.checks[0].name : null;
   addClause(fieldOf(name, TL.group), '==', name);
   if (pair) addClause(fieldOf(pair, TL.group === 'process' ? 'host' : 'process'), '==', pair);
+  // Filtering the Timeline down to the one lane just clicked said nothing
+  // new. Show its packets instead: the table, filtered (the clause stays in
+  // the box, so clearing it brings everything back), with the newest one
+  // open in the Packet tab.
+  setView('table');
+  openNewestVisible();
 });
+
+/* Select the newest packet the filter shows and open it in the Packet tab.
+   Nothing to open when the lane's packets have left the buffer; the
+   filtered, empty table and "Search buffer" say so. */
+function openNewestVisible(){
+  let seq = null;
+  for (const [k, r] of [...records].reverse()) if (rowVisible(r)){ seq = k; break; }
+  if (seq == null) return false;
+  const tr = $('rows').querySelector('tr[data-seq="' + seq + '"]');
+  if (!tr) return false;
+  select(seq, tr);
+  tr.scrollIntoView({block: 'nearest'});
+  showTab('detail');
+  return true;
+}
 $('tlLabels').addEventListener('contextmenu', e => {
   const b = e.target.closest && e.target.closest('.ln');
   if (!b || b.dataset.name === '(none)') return;
@@ -4237,6 +4257,60 @@ function pcapStamp(){
 $('savePcap').onclick = () => {
   saveOnce('pcap', 'netscope-' + pcapStamp() + '.pcap',
            '/api/export.pcap?t=' + encodeURIComponent(TOKEN));
+};
+/* Text export. Packets are built here, because the display filter runs in
+   the page: the file holds what the filter shows, across the whole buffer
+   (the same set "Search buffer" searches), not just the rows on screen. The
+   rest come from the server. CSV cells that a spreadsheet would run as a
+   formula get a leading apostrophe, as on the server (csv_cell): host names
+   and Info come off the network. */
+const PKT_COLUMNS = ['seq', 'time', 'ts', 'iface', 'dir', 'src', 'sport', 'dst', 'dport',
+                     'proto', 'length', 'process', 'pid', 'rhost', 'info'];
+function csvCell(v){
+  if (v == null) return '';
+  if (typeof v === 'number') return String(v);
+  let s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function toCSV(columns, rows){
+  return [columns.join(',')].concat(rows.map(r => columns.map(c => csvCell(r[c])).join(',')))
+    .join('\r\n') + '\r\n';
+}
+let _exportUrl = null;
+async function exportPackets(fmt){
+  const d = await (await api('/api/buffer')).json();
+  const rows = (d.packets || []).filter(rowVisible).map(r => {
+    const o = {}; PKT_COLUMNS.forEach(c => o[c] = r[c]); return o; });
+  const body = fmt === 'json' ? JSON.stringify(rows, null, 1)
+                              : '﻿' + toCSV(PKT_COLUMNS, rows);
+  if (_exportUrl) URL.revokeObjectURL(_exportUrl);
+  _exportUrl = URL.createObjectURL(new Blob([body],
+    {type: fmt === 'json' ? 'application/json' : 'text/csv;charset=utf-8'}));
+  saveOnce('packets-' + fmt, 'netscope-packets-' + pcapStamp() + '.' + fmt, _exportUrl);
+}
+function exportServer(what, fmt){
+  saveOnce(what + '-' + fmt, 'netscope-' + what + '-' + pcapStamp() + '.' + fmt,
+           '/api/export?what=' + what + '&fmt=' + fmt + '&t=' + encodeURIComponent(TOKEN));
+}
+$('exportTxt').onclick = e => {
+  e.stopPropagation();
+  const shown = [...records.values()].filter(rowVisible).length;
+  const f = $('find').value.trim();
+  const both = (label, fn) => [[label + ' — CSV', () => fn('csv')],
+                               [label + ' — JSON', () => fn('json')]];
+  const items = [].concat(
+    both(f ? 'Packets the filter shows' : 'All buffered packets', exportPackets), [null],
+    both('Connections', fmt => exportServer('connections', fmt)), [null],
+    both('History totals per program and host', fmt => exportServer('history', fmt)), [null],
+    both(lastStatus && lastStatus.history === false ? "This session's alerts" : 'Alert log',
+         fmt => exportServer('alerts', fmt)));
+  const r = $('exportTxt').getBoundingClientRect();
+  showRowMenu(items, f ? 'Packets: what "' + f + '" shows, across the whole buffer ' +
+                         '(' + shown + ' on screen now).'
+                       : 'Packets: everything in the buffer. Type a filter first to narrow it.',
+              Math.min(r.left, innerWidth - 320), r.bottom + 2);
 };
 $('openPcap').onclick = () => $('pcapFile').click();
 $('pcapFile').onchange = async () => {

@@ -972,6 +972,20 @@ class HistoryStore:
             " ORDER BY id DESC LIMIT ?", args + [int(limit) + 1])
         return rows[:limit], len(rows) > limit
 
+    def totals(self):
+        """All-time totals per program and per host, for export."""
+        return self._q(
+            "SELECT * FROM (SELECT 'program' AS kind, name, first_seen, last_seen, bytes_in, "
+            "bytes_out, packets FROM processes "
+            "UNION ALL SELECT 'host' AS kind, host AS name, first_seen, last_seen, "
+            "bytes_in, bytes_out, packets FROM hosts "
+            ") ORDER BY kind DESC, (bytes_in + bytes_out) DESC")
+
+    def all_alerts(self):
+        """Every logged alert, oldest first, for export."""
+        return self._q("SELECT id, ts, severity, rule, title, detail, process, peer, "
+                       "subject FROM alerts ORDER BY id")
+
     def alert_counts(self, days=None):
         """{"total", "high", "warn", "info", "newest"} over `days`, or all kept."""
         since = 0 if days is None else time.time() - days * 86400

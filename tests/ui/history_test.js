@@ -20,15 +20,16 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
         !/Loading history/.test(await p.textContent('#p-history')),
         (await p.textContent('#p-history')).slice(0,80));
 
-  // --- Clicking a packet still doesn't pull you off the tab you're on
-  //     (a deliberate choice, see select()); the Packet badge shows it took.
+  // --- Clicking a packet opens it in the Packet tab (since 1.38; it used to
+  //     leave you on History, which looked like nothing happened).
   await p.waitForFunction(()=>document.querySelectorAll('#rows tr').length>20,null,{timeout:90000});
   await p.click('#rows tr:nth-child(5)');
   await p.waitForTimeout(400);
   const after = await p.evaluate(()=>({tab: document.querySelector('.tab.on').dataset.p,
                                       badge: document.getElementById('nPkt').textContent}));
-  check('clicking a packet leaves History showing', after.tab==='history', after.tab);
-  check('...and the Packet tab badge shows the selection', /^#\d+$/.test(after.badge), after.badge);
+  check('clicking a packet opens the Packet tab', after.tab==='detail', after.tab);
+  check('...and its badge shows the selection', /^#\d+$/.test(after.badge), after.badge);
+  await p.click('.tab[data-p="history"]');
 
   // --- The daily chart's axis fits the data. It used to jump straight from
   //     8 to 1024 of a unit, so a month of 10-40 GB days drew against a 1 TB

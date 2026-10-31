@@ -124,7 +124,10 @@ def summarise(d: dict) -> str:
     bits = [d["msg_type"]]
     if d.get("hostname"):
         bits.append(d["hostname"])
-    ip = d.get("your_ip") or d.get("requested_ip")
+    # A client's own messages carry 0.0.0.0 as "your IP"; the address it
+    # wants is in the requested-IP option.
+    ip = next((x for x in (d.get("your_ip"), d.get("requested_ip"))
+               if x and x != "0.0.0.0"), "")
     if ip:
         bits.append(ip)
     if d.get("server_id") and d["msg_type"] in ("OFFER", "ACK", "NAK"):
@@ -170,7 +173,7 @@ class DhcpTracker:
             self.servers.add(d["server_id"])
             if d["msg_type"] == "ACK":
                 pend = self._pending.get(d["xid"], {})
-                ip = d.get("your_ip") or pend.get("requested_ip", "")
+                ip = (d.get("your_ip") if d.get("your_ip") != "0.0.0.0" else "")                     or pend.get("requested_ip", "")
                 hostname = pend.get("hostname", "")
                 existing = self._leases.get(d["mac"])
                 lease = {

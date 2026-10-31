@@ -102,5 +102,14 @@ check("a RELEASE (no server_id) doesn't touch the completed lease",
       t.latest("aa:bb:cc:11:22:33") == before, str(t.latest("aa:bb:cc:11:22:33")))
 
 print()
+# -- a client's REQUEST names the address it wants, not its empty yiaddr -------
+from netscope_dhcp import summarise
+check("summary of a REQUEST shows the requested IP, not 0.0.0.0",
+      summarise({"msg_type": "REQUEST", "hostname": "pc", "your_ip": "0.0.0.0",
+                 "requested_ip": "192.168.1.20"}) == "REQUEST  pc  192.168.1.20")
+check("...and a DISCOVER with neither shows no address",
+      summarise({"msg_type": "DISCOVER", "hostname": "pc", "your_ip": "0.0.0.0",
+                 "requested_ip": ""}) == "DISCOVER  pc")
+
 print("FAILED:", fails if fails else "none")
 sys.exit(1 if fails else 0)

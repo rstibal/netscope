@@ -165,7 +165,10 @@ let mode = 1;
   await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length===3);
   await p.click('#tlLabels .ln[data-name="beacon.exe"] .nm');
   check('clicking a lane filters to it', await p.inputValue('#find')==='process == "beacon.exe"', await p.inputValue('#find'));
+  check('...and shows its packets in the table', await p.evaluate(()=>viewMode==='table' &&
+        getComputedStyle(document.getElementById('tlview')).display==='none'));
   await p.fill('#find', '');
+  await p.click('#vTime');
   await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length===3);
   await p.click('#tlLabels .ln[data-name="beacon.exe"]', {button:'right'});
   const items = await p.evaluate(()=>[...document.querySelectorAll('#rowmenu button')].map(x=>x.textContent));
@@ -184,6 +187,7 @@ let mode = 1;
   await p.click('#tlLabels .ln[data-name="198.51.100.7"] .nm');
   check('...and an address lane filters by ip', await p.inputValue('#find')==='ip == "198.51.100.7"', await p.inputValue('#find'));
   await p.fill('#find', '');
+  await p.click('#vTime');
 
   // ---------------- a check-in hidden inside a busy program ----------------
   mode = 2;
@@ -212,6 +216,7 @@ let mode = 1;
         await p.inputValue('#find')==='process == "Claude.exe" && host == "downloads.example.com"',
         await p.inputValue('#find'));
   await p.fill('#find', '');
+  await p.click('#vTime');
 
   await p.click('#tlGroup button[data-g="host"]');
   await p.waitForFunction(()=>document.querySelectorAll('#tlLabels .ln').length===2);
