@@ -1844,13 +1844,15 @@ function capPath(x, y, w, h, r){
        + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
 }
 
-/* "6 h 20 m", "45 m", "2 d 3 h": how long something was or wasn't watched. */
+/* "6h 20m", "45m", "2d 3h": how long something was or wasn't watched. Each
+   number keeps its unit, since "6 h 20 m" in the monospace tooltip read as
+   letter-spaced text. */
 function span(secs){
   secs = Math.round(Number(secs) || 0);
-  if (secs < 60) return secs ? '<1 m' : '0 m';
+  if (secs < 60) return secs ? '<1m' : '0m';
   const d = Math.floor(secs / 86400), h = Math.floor(secs % 86400 / 3600),
         m = Math.floor(secs % 3600 / 60);
-  return d ? d + ' d' + (h ? ' ' + h + ' h' : '') : h ? h + ' h' + (m ? ' ' + m + ' m' : '') : m + ' m';
+  return d ? d + 'd' + (h ? ' ' + h + 'h' : '') : h ? h + 'h' + (m ? ' ' + m + 'm' : '') : m + 'm';
 }
 function coverageText(r){
   if (!r.expected) return 'not recorded (before 1.40)';

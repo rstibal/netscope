@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.41.0**
+**Version 1.41.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -999,6 +999,9 @@ names.
 ---
 
 ## Version history
+
+**1.41.1** — Durations on the History tab read "1h 7m", not "1 h 7 m", which
+looked letter-spaced in the chart's tooltip.
 
 **1.41.0** — **Every adapter, always; filter what you look at.**
 - **The header dropdown filters the view; it no longer chooses what is

@@ -66,7 +66,7 @@ function history(iface){
   check('a part day has a shorter strip', t.fills[2].w < t.fills[0].w * 0.6, JSON.stringify(t.fills));
   check('a day with an adapter missed is hatched, the others solid',
         t.fills[3].hatch && t.fills.filter(f => f.hatch).length === 1, JSON.stringify(t.fills));
-  check('only adapters that were missed are listed', /Not captured: Wi-Fi 6 h/.test(t.adapters) && !/Ethernet|VR/.test(t.adapters), t.adapters);
+  check('only adapters that were missed are listed', /Not captured: Wi-Fi 6h/.test(t.adapters) && !/Ethernet|VR/.test(t.adapters), t.adapters);
   check('the strip is explained on the Captured figure, not in the page',
         await p.evaluate(() => /strip under each day/.test($('kpiCov').title) &&
           ![...document.querySelectorAll('#p-history .hint')].some(h => /strip under each day/.test(h.textContent))));
@@ -79,8 +79,8 @@ function history(iface){
   const box = await p.$eval('#cw-daily .hitrect[data-i="5"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
   await p.mouse.move(box[0], box[1]);
   const tip = await p.$eval('#tip-daily', x => x.textContent);
-  check('the day\'s tooltip says how much was captured', /captured24 h of 24 h|captured1 d of 1 d/.test(tip), tip);
-  check('...and which adapter was not, for how long', /Wi-Fi not captured6 h/.test(tip), tip);
+  check('the day\'s tooltip says how much was captured', /captured1d of 1d/.test(tip), tip);
+  check('...and which adapter was not, for how long', /Wi-Fi not captured6h/.test(tip), tip);
   const box0 = await p.$eval('#cw-daily .hitrect[data-i="0"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
   await p.mouse.move(box0[0], box0[1]);
   check('a day before coverage says so', /not recorded \(before 1\.40\)/.test(await p.$eval('#tip-daily', x => x.textContent)));
