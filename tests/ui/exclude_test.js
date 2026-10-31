@@ -12,6 +12,7 @@ function payload(exclude){
     bytes_in: G*0.8, bytes_out: G*0.2, packets: 1000});
   return {enabled:true, days:30, daily, hourly:[], hosts:[], new_hosts:[], alerts:[], sessions:[],
           processes:[{name:'chrome.exe', bytes_in:G, bytes_out:G/4, packets:10}], exclude,
+          range:{bytes_in: total*0.8, bytes_out: total*0.2, packets: 123, programs: 1, hosts: 0},
           summary:{bytes_in: total*0.8, bytes_out: total*0.2, packets: 123, processes: 1, hosts: 0,
                    size: 1024*1024, retain_days: 90, since:'2026-09-01', path:'C:\\history.db'}};
 }
@@ -133,7 +134,7 @@ function payload(exclude){
   await p.waitForFunction(()=>document.querySelectorAll('#histEx .exrow').length===2);
   const l2 = await serverList();
   check('the form adds a program, trimmed and lower-cased', JSON.stringify(l2.programs)==='["secret.exe"]', JSON.stringify(l2));
-  check('...the program erase warning says hosts stay', dialogs.length===1 && /hosts it talked to stay/.test(dialogs[0]), JSON.stringify(dialogs));
+  check('...the program erase warning says hosts stay', dialogs.length===1 && /hosts it talked to stay known/.test(dialogs[0]), JSON.stringify(dialogs));
   check('...and the result is reported', /secret\.exe is no longer recorded\. Erased nothing/.test(
         await p.textContent('#exMsg')), await p.textContent('#exMsg'));
   check('...and the field is cleared', await p.inputValue('#exPat')==='');

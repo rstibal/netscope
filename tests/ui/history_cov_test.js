@@ -1,0 +1,91 @@
+const { chromium } = require('playwright');
+const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
+
+// History since 1.40: one range for every figure, a coverage strip under the
+// daily chart, the extras folded under More. The data is answered here so the
+// strip has every case: before coverage, a full day, a part day, a day with an
+// adapter missed.
+const G = Math.pow(1024,3);
+function history(){
+  const daily = [];
+  for (let i = 0; i < 7; i++){
+    const r = {day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:G, bytes_out:G/4, packets:10,
+               expected: i < 2 ? 0 : 86400, ran: i < 2 ? 0 : 86400, missed:{}};
+    if (i === 4) r.ran = 43200;
+    if (i === 5) r.missed = {'Wi-Fi': 21600};
+    daily.push(r);
+  }
+  return {enabled:true, days:7, daily, hosts:[{host:'a.example', bytes_in:G, bytes_out:1, packets:1, first_seen:1.8e9}],
+          new_hosts:[], sessions:[{started:1.8e9, iface:'Ethernet', version:'1.40.0', packets:9}],
+          processes:[{name:'chrome.exe', bytes_in:G, bytes_out:1, packets:1}],
+          range:{bytes_in:3*G, bytes_out:G, packets:40, programs:3, hosts:7},
+          adapters:[{iface:'Ethernet', captured:5*86400, missed:0, ignored:0},
+                    {iface:'Wi-Fi', captured:0, missed:21600, ignored:0},
+                    {iface:'VR', captured:0, missed:0, ignored:5*86400}],
+          alert_counts:{total:2, high:0, warn:2, info:0, newest:2},
+          exclude:{programs:[],hosts:[]}, week_hours:{cells:Array.from({length:7},()=>Array.from({length:24},()=>[1,1])), counts:[1,1,1,1,1,1,1]},
+          summary:{bytes_in:99*G, bytes_out:G, packets:1, processes:50, hosts:500, size:1024, retain_days:90,
+                   alert_retain_days:30, since:'2026-10-27', path:'C:\\history.db',
+                   reset_backup:'C:\\history.db.before-1.40'}};
+}
+
+(async () => {
+  const b = await chromium.launch({ executablePath: process.env.NETSCOPE_CHROMIUM || undefined });
+  const p = await b.newPage({ viewport:{width:1680,height:900} });
+  const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
+  const live = await (await fetch(process.argv[2].replace(/\/\?/, '/api/history?days=7&'))).json().catch(()=>null);
+  check('the server answers with the range and the adapters',
+        live && (!live.enabled || (live.range && Array.isArray(live.adapters) && live.daily[0].expected !== undefined)),
+        JSON.stringify(live && Object.keys(live)));
+
+  await p.route('**/api/history?*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(history())}));
+  await p.goto(process.argv[2]);
+  await p.waitForSelector('#cw-daily svg', {timeout: 30000});
+
+  const t = await p.evaluate(() => ({
+    kpi: [...document.querySelectorAll('#p-history .kpi')].map(k => k.textContent),
+    heads: [...document.querySelectorAll('#p-history h4')].map(h => h.textContent),
+    tracks: document.querySelectorAll('#cw-daily .cvtrack').length,
+    fills: [...document.querySelectorAll('#cw-daily .cvfill')].map(r => ({w: +r.getAttribute('width'),
+             hatch: /cvhatch/.test(r.getAttribute('style') || '')})),
+    adapters: ($('histAdapters') || {}).textContent || '',
+    reset: !!$('histReset'),
+    moreOpen: $('histMore') && $('histMore').open,
+  }));
+  check('totals are the range\'s, not all time', t.kpi[0].includes('4.0 GB'), t.kpi[0]);
+  check('...and so is the program count', /Programs3/.test(t.kpi[3]) && /7 hosts/.test(t.kpi[3]), t.kpi[3]);
+  check('a Captured figure covers the days with a record', /Captured\d+%/.test(t.kpi[4]) && /1 adapter missed/.test(t.kpi[4]), t.kpi[4]);
+  check('By host follows the range', t.heads.includes('By host · last 7 days'), t.heads.join(' | '));
+  check('nothing on the tab says all time', !t.heads.some(h => /all time/.test(h)));
+  check('no strip before coverage began, one for each day after', t.tracks === 5, t.tracks);
+  check('a part day has a shorter strip', t.fills[2].w < t.fills[0].w * 0.6, JSON.stringify(t.fills));
+  check('a day with an adapter missed is hatched, the others solid',
+        t.fills[3].hatch && t.fills.filter(f => f.hatch).length === 1, JSON.stringify(t.fills));
+  check('each adapter\'s coverage is listed', /Wi-Fi missed 6 h/.test(t.adapters) && /VR ignored 5 d/.test(t.adapters), t.adapters);
+  check('the reset is explained', t.reset);
+  check('More is folded at first', t.moreOpen === false);
+  check('busy hours, alerts and sessions are inside it',
+        await p.evaluate(() => ['cw-week', 'alertsJump'].every(id => $('histMore').contains($(id)))));
+
+  // Hover the hatched day: the tooltip says how long and what was missed.
+  const box = await p.$eval('#cw-daily .hitrect[data-i="5"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
+  await p.mouse.move(box[0], box[1]);
+  const tip = await p.$eval('#tip-daily', x => x.textContent);
+  check('the day\'s tooltip says how much was captured', /captured24 h of 24 h|captured1 d of 1 d/.test(tip), tip);
+  check('...and which adapter was not, for how long', /Wi-Fi not captured6 h/.test(tip), tip);
+  const box0 = await p.$eval('#cw-daily .hitrect[data-i="0"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
+  await p.mouse.move(box0[0], box0[1]);
+  check('a day before coverage says so', /not recorded \(before 1\.40\)/.test(await p.$eval('#tip-daily', x => x.textContent)));
+  await p.mouse.move(5, 5);
+
+  // Opened, More stays open across the tab's own refresh.
+  await p.click('#histMore > summary');
+  await p.evaluate(() => { histSeen = ''; return loadHistory(true); });
+  await p.waitForTimeout(300);
+  check('More stays open across a refresh', await p.evaluate(() => $('histMore').open));
+  check('the VPN erase button is gone', !(await p.$('#histVpn')));
+
+  check('no page errors', errs.length===0, errs.join(' | '));
+  console.log('\nFAILED:', fails.length?fails:'none');
+  await b.close(); process.exit(fails.length?1:0);
+})();

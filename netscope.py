@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.39.0"
+VERSION = "1.40.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3057,15 +3057,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"enabled": False, "exclude": ex,
                                         "error": (h.error if h else "disabled")})
             days = max(1, min(365, int(qs.get("days", ["30"])[0])))
+            # Every figure here is for the same `days`, read from the hourly
+            # rows. The all-time counters on programs and hosts only say
+            # whether something is new; showing them beside a 7-day chart
+            # mixed two periods on one tab.
             return self._send(200, {
                 "enabled": True,
                 "summary": h.summary(),
+                "range": h.range_totals(days),
                 "daily": h.daily(days),
-                "hourly": h.hourly(),
+                "adapters": h.adapters(days),
                 "week_hours": h.week_hours(days),
                 "processes": h.by_process(days, 15),
-                "hosts": h.top_hosts(15),
-                "new_hosts": h.new_hosts(7, 20),
+                "hosts": h.by_host(days, 15),
+                "new_hosts": h.new_hosts(days, 20),
                 "alert_counts": h.alert_counts(days),
                 "sessions": h.sessions(10),
                 "exclude": ex,
@@ -3375,15 +3380,6 @@ class Handler(BaseHTTPRequestHandler):
                 gone = (h.purge(body.get("kind"), body.get("pattern"))
                         if h else {"usage": 0, "hosts": 0, "alerts": 0})
                 return self._send(200, {"status": self.status(), "purged": gone})
-            elif action == "history_vpn":
-                h = self.app.history
-                if not h:
-                    return self._send(200, {"status": self.status(),
-                                            "vpn": {"programs": {}, "usage": 0}})
-                if not body.get("dry"):
-                    h.flush()
-                return self._send(200, {"status": self.status(),
-                                        "vpn": h.purge_vpn(dry=bool(body.get("dry")))})
             elif action == "history_retain":
                 h = self.app.history
                 if h:
@@ -3701,6 +3697,24 @@ def _saved_paths(history, name):
     if history is None:
         return set()
     return {p for p in history.known_paths(name) if os.path.isfile(p)}
+
+
+def coverage_now(engine, app):
+    """
+    What History's coverage records right now: (captured, missed, ignored)
+    adapter names, or None when nothing live is being captured (stopped, or
+    looking at an imported file). Missed and ignored count only adapters
+    that have an address, the ones "all" would otherwise capture.
+    """
+    if not engine.running or getattr(app, "source", None):
+        return None
+    captured = [n for n in (getattr(engine, "ifaces", None) or []) if n]
+    ignored = list(getattr(engine, "ignored", None) or [])
+    usable = [i["name"] for i in engine.interfaces()
+              if i.get("ip") and not i["ip"].startswith("127.")]
+    return (captured,
+            [n for n in usable if n not in captured and n not in ignored],
+            [n for n in usable if n in ignored and n not in captured])
 
 
 def make_blocker(resolver, demo=False, store=None, history=None):
@@ -4108,6 +4122,10 @@ def main(argv=None):
         where = ("in memory only (demo)" if history.in_memory
                  else history.path)
         print(f"  History:   {where}{span}")
+        if history.reset_backup:
+            print("             restarted for 1.40: earlier usage had no record of "
+                  "which adapters were captured")
+            print(f"             the old database is kept as {history.reset_backup}")
         if alerts.baselining:
             print("             first run — recording a baseline, so "
                   "'never seen before' alerts start next time")
@@ -4120,6 +4138,7 @@ def main(argv=None):
         print(f"  Log:       {logfile}")
     print("\n  Press Ctrl+C to stop.\n")
 
+    history.coverage_source = lambda: coverage_now(engine, Handler.app)
     history.start(iface=getattr(engine, "iface", None), version=VERSION)
 
     if not args.no_browser and not args.tray:

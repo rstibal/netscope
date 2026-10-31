@@ -115,13 +115,15 @@ function history(){
   await p.reload();
   await p.waitForFunction(()=>document.querySelectorAll('#rows tr').length>5,null,{timeout:90000});
   await p.waitForSelector('.tab[data-p="history"].on');
+  await p.waitForSelector('#histMore', {timeout: 15000});
+  await p.click('#histMore > summary');       // the alert count is under More (1.40)
   await p.waitForSelector('#alertsJump', {timeout: 15000});
   const hist = await p.evaluate(()=>({
     old: [...document.querySelectorAll('#p-history h4')].some(x=>/Alert history/.test(x.textContent)),
     cards: document.querySelectorAll('#p-history .alert').length,
     text: document.getElementById('alertsJump').parentNode.textContent}));
   check('History no longer repeats the alerts', !hist.old && hist.cards===0, JSON.stringify(hist));
-  check('...it counts them and links to them', /^151 alerts|^150 alerts logged in this period \(6 high, 144 warn\)/.test(hist.text), hist.text);
+  check('...it counts them and links to them', /^151 alerts|^150 alerts logged \(6 high, 144 warn\)/.test(hist.text), hist.text);
   await p.evaluate(()=>localStorage.setItem('netscope-alertview','session'));
   await p.click('#alertsJump');
   await p.waitForFunction(()=>document.querySelector('.tab[data-p="alerts"]').classList.contains('on') &&

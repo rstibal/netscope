@@ -613,6 +613,16 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .dayrange button{padding:3px 10px;font:600 11px var(--sans)}
 .dayrange button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .dayrange a{color:var(--faint);font:11px var(--mono)}
+.cvtrack{fill:var(--faint);opacity:.35}
+.cvfill{fill:var(--dim)}
+#p-history .adapters{font:11px var(--mono);color:var(--dim);margin:4px 0 2px;line-height:1.6}
+#p-history .adapters b{color:var(--fg);font-weight:600}
+#p-history details.more>summary{cursor:pointer;list-style:none}
+#p-history details.more>summary::-webkit-details-marker{display:none}
+#p-history details.more>summary h4{display:inline}
+#p-history details.more>summary h4::before{content:'▸ ';color:var(--faint)}
+#p-history details.more[open]>summary h4::before{content:'▾ '}
+#p-history details.more>summary .hint{display:inline;margin-left:6px}
 .exrow{align-items:center}
 .exrow span:first-child{flex:1 1 auto;color:var(--fg);word-break:break-all}
 .exrow .kind{color:var(--faint);font:10.5px var(--sans);margin-left:8px}
@@ -1852,8 +1862,21 @@ function capPath(x, y, w, h, r){
        + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
 }
 
+/* "6 h 20 m", "45 m", "2 d 3 h": how long something was or wasn't watched. */
+function span(secs){
+  secs = Math.round(Number(secs) || 0);
+  if (secs < 60) return secs ? '<1 m' : '0 m';
+  const d = Math.floor(secs / 86400), h = Math.floor(secs % 86400 / 3600),
+        m = Math.floor(secs % 3600 / 60);
+  return d ? d + ' d' + (h ? ' ' + h + ' h' : '') : h ? h + ' h' + (m ? ' ' + m + ' m' : '') : m + ' m';
+}
+function coverageText(r){
+  if (!r.expected) return 'not recorded (before 1.40)';
+  return span(r.ran) + ' of ' + span(r.expected);
+}
+
 function dailyChart(rows){
-  const W = 560, H = 168, PADL = 46, PADR = 8, PADT = 12, PADB = 22;
+  const W = 560, H = 174, PADL = 46, PADR = 8, PADT = 12, PADB = 28;
   const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
   const max = niceMax(Math.max(1, ...rows.map(r => r.bytes_in + r.bytes_out)));
   const band = plotW / rows.length;
@@ -1871,6 +1894,22 @@ function dailyChart(rows){
   let peak = 0;
   rows.forEach((r,i) => { if (r.bytes_in + r.bytes_out >
                               rows[peak].bytes_in + rows[peak].bytes_out) peak = i; });
+
+  // Under each column, how much of the day was captured: a full solid strip
+  // is a day fully watched, a short one a day NetScope was off for part of,
+  // hatched one where an adapter with an address wasn't being captured. No
+  // strip: before coverage was recorded. Shape, not hue, carries it.
+  let cov = '<defs><pattern id="cvhatch" width="4" height="4" patternUnits="userSpaceOnUse" ' +
+            'patternTransform="rotate(45)"><rect width="2" height="4" fill="var(--dim)"/></pattern></defs>';
+  rows.forEach((r, i) => {
+    if (!r.expected) return;
+    const x = PADL + band * i + (band - bw) / 2, yy = PADT + plotH + 3;
+    const f = Math.max(0, Math.min(1, r.ran / r.expected));
+    const miss = r.missed && Object.keys(r.missed).length;
+    cov += `<rect class="cvtrack" x="${x}" y="${yy}" width="${bw}" height="4" rx="1"/>`;
+    if (f > 0) cov += `<rect class="cvfill" x="${x}" y="${yy}" width="${Math.max(1, bw * f)}" height="4" rx="1"` +
+                      (miss ? ' style="fill:url(#cvhatch)"' : '') + '/>';
+  });
 
   let bars = '', hits = '';
   rows.forEach((r, i) => {
@@ -1914,7 +1953,7 @@ function dailyChart(rows){
   });
 
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily traffic">`
-       + g + bars + xl + hits + '</svg>';
+       + g + cov + bars + xl + hits + '</svg>';
 }
 
 // One program that streams VR can be ten times everything else, and on a
@@ -1970,8 +2009,9 @@ function detailHtml(d){
   const prog = d.kind === 'program';
   let h = '';
   if (d.rows.length){
+    const rows = prog ? d.rows : d.rows.map(r => r.name === '-' ? Object.assign({}, r, {name: '(no program)'}) : r);
     h += '<h5>' + (prog ? 'Talked to' : 'Contacted by') + ' · last ' + d.days + ' days</h5>' +
-         hbars(d.rows, 'name', true);
+         hbars(rows, 'name', true);
   }
   if (prog && d.unlisted > 0){
     const early = !d.pairs_since || d.pairs_since > histData.daily[0].day;
@@ -2065,10 +2105,16 @@ function renderHistory(d){
     return;
   }
   histData = d;
-  const s = d.summary, daily = d.daily;
-  const tot = s.bytes_in + s.bytes_out;
+  const s = d.summary, daily = d.daily, rg = d.range || {};
+  const tot = (rg.bytes_in || 0) + (rg.bytes_out || 0);
   const ex = d.exclude || {programs: [], hosts: []};
   const exN = ex.programs.length + ex.hosts.length;
+  const per = ' · last ' + d.days + ' days';
+  // Everything on the tab is for the chosen range; the all-time counters are
+  // only how NetScope knows what is new, and no longer shown.
+  const exp = daily.reduce((a, r) => a + (r.expected || 0), 0);
+  const ran = daily.reduce((a, r) => a + Math.min(r.ran || 0, r.expected || 0), 0);
+  const missed = (d.adapters || []).filter(x => x.missed > 0);
 
   let h = '<div class="dayrange">' +
     [7,30,90].map(n => '<button class="btn-sm'+(n===histDays?' on':'')+
@@ -2077,35 +2123,52 @@ function renderHistory(d){
     (s.since ? 'since '+esc(s.since) : 'no data yet')+'</span>' +
     (exN ? '<a href="#" id="exJump">· '+exN+' not recorded</a>' : '') + '</div>';
 
+  if (s.reset_backup)
+    h += '<div class="hint" id="histReset" style="margin:0 0 10px">History started over with 1.40. ' +
+         'Usage from before had no record of which adapters were being captured, so a day ' +
+         'watching one adapter looked like a quiet day. The old database is kept as ' +
+         '<code class="k">' + esc(s.reset_backup) + '</code>.</div>';
+
   h += '<div class="kpirow">' +
     '<div class="kpi"><div class="k">Total</div><div class="v">'+esc(hb(tot))+
-      '</div><div class="s">'+Number(s.packets).toLocaleString()+' packets</div></div>' +
-    '<div class="kpi"><div class="k">▼ Received</div><div class="v">'+esc(hb(s.bytes_in))+'</div></div>' +
-    '<div class="kpi"><div class="k">▲ Sent</div><div class="v">'+esc(hb(s.bytes_out))+'</div></div>' +
-    '<div class="kpi"><div class="k">Programs</div><div class="v">'+s.processes+
-      '</div><div class="s">'+s.hosts+' hosts</div></div>' +
-    '<div class="kpi"><div class="k">Database</div><div class="v">'+esc(hb(s.size))+
-      '</div><div class="s">'+s.retain_days+'d retention</div></div>' +
+      '</div><div class="s">'+Number(rg.packets || 0).toLocaleString()+' packets</div></div>' +
+    '<div class="kpi"><div class="k">▼ Received</div><div class="v">'+esc(hb(rg.bytes_in))+'</div></div>' +
+    '<div class="kpi"><div class="k">▲ Sent</div><div class="v">'+esc(hb(rg.bytes_out))+'</div></div>' +
+    '<div class="kpi"><div class="k">Programs</div><div class="v">'+(rg.programs || 0)+
+      '</div><div class="s">'+(rg.hosts || 0)+' hosts</div></div>' +
+    '<div class="kpi" id="kpiCov" title="How much of the range NetScope was capturing, from when coverage began. '+
+      'Hover a day in the chart for its own figure."><div class="k">Captured</div><div class="v">'+
+      (exp ? Math.min(100, Math.round(ran / exp * 100)) + '%' : '—')+'</div><div class="s">'+
+      (missed.length ? missed.length + ' adapter' + (missed.length === 1 ? '' : 's') + ' missed'
+                     : exp ? 'of ' + esc(span(exp)) : 'not recorded yet')+'</div></div>' +
     '</div>';
 
-  h += '<div class="sec"><h4>Daily traffic · last '+d.days+' days</h4>' + legend() +
+  const adapterLine = (d.adapters || []).length > 1 || missed.length || (d.adapters || []).some(x => x.ignored)
+    ? '<div class="adapters" id="histAdapters">' + d.adapters.map(x =>
+        '<span><b>' + esc(x.iface) + '</b> ' + [
+          x.captured ? 'captured ' + span(x.captured) : '',
+          x.missed ? 'missed ' + span(x.missed) : '',
+          x.ignored ? 'ignored ' + span(x.ignored) : ''].filter(Boolean).join(', ') + '</span>')
+        .join(' · ') + '</div>' : '';
+
+  h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
        '<div class="chartwrap" id="cw-daily">' + dailyChart(daily) +
        '<div class="tip" id="tip-daily"></div></div>' +
+       '<div class="hint" style="margin:2px 0 0">The strip under each day is how much of it was ' +
+       'captured: full and solid is the whole day on every adapter, hatched means an adapter with an ' +
+       'address wasn\'t being captured.</div>' + adapterLine +
        tableView(daily, [
          {h:'Day', f:r=>r.day},
          {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
          {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)},
-         {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) +
+         {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()},
+         {h:'Captured', f:r=>coverageText(r)},
+         {h:'Not captured', f:r=>Object.entries(r.missed || {}).map(([n, sec]) =>
+            n + ' ' + span(sec)).join(', ') || '—'}]) +
        '</div>';
 
-  if (d.week_hours){
-    h += '<div class="sec"><h4>Busy hours · last '+d.days+' days</h4>' + weekHoursKey() +
-         '<div class="chartwrap" id="cw-week">' + weekHoursChart(d.week_hours) +
-         '<div class="tip" id="tip-week"></div></div>' + weekHoursTable(d.week_hours) + '</div>';
-  }
-
   if (d.processes.length){
-    h += '<div class="sec"><h4>By program · last '+d.days+' days</h4>' +
+    h += '<div class="sec"><h4>By program'+per+'</h4>' +
          hbarNote(d.processes) + hbars(d.processes, 'name') +
          tableView(d.processes, [
            {h:'Program', f:r=>r.name},
@@ -2115,16 +2178,19 @@ function renderHistory(d){
   }
 
   if (d.hosts.length){
-    h += '<div class="sec"><h4>By host · all time</h4>' + hbarNote(d.hosts) + hbars(d.hosts, 'host') +
+    h += '<div class="sec"><h4>By host'+per+'</h4>' + hbarNote(d.hosts) + hbars(d.hosts, 'host') +
          tableView(d.hosts, [
            {h:'Host', f:r=>r.host},
-           {h:'First seen', f:r=>new Date(r.first_seen*1000).toLocaleDateString()},
+           {h:'First seen', f:r=>r.first_seen ? new Date(r.first_seen*1000).toLocaleDateString() : '—'},
            {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
            {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)}]) + '</div>';
   }
 
+  if (!d.processes.length && !d.hosts.length)
+    h += '<div class="sec"><div class="hint">Nothing recorded in this period yet.</div></div>';
+
   if (d.new_hosts.length){
-    h += '<div class="sec"><h4>First contacted in the last 7 days</h4><div class="tlist">' +
+    h += '<div class="sec"><h4>First contacted'+per+'</h4><div class="tlist">' +
       d.new_hosts.map(r => '<div class="t"><div class="top">'+
         '<span class="nm">'+esc(r.host)+'</span>'+
         '<span class="by">'+esc(hb(r.bytes_in+r.bytes_out))+'</span></div>'+
@@ -2132,26 +2198,33 @@ function renderHistory(d){
         '</div></div>').join('') + '</div></div>';
   }
 
+  // The rest is there when wanted, folded so the figures above are the tab.
+  let more = '';
+  if (d.week_hours){
+    more += '<div class="sec"><h4>Busy hours'+per+'</h4>' + weekHoursKey() +
+         '<div class="chartwrap" id="cw-week">' + weekHoursChart(d.week_hours) +
+         '<div class="tip" id="tip-week"></div></div>' + weekHoursTable(d.week_hours) + '</div>';
+  }
   // The alerts themselves are on the Alerts tab ("Past N days"), where they
-  // can be muted and explained. This used to repeat them here in the same
-  // cards, which read as a duplicate of that tab rather than as the log.
+  // can be muted and explained.
   const ac = d.alert_counts;
   if (ac && ac.total){
-    h += '<div class="sec"><h4>Alerts</h4><div class="hint" style="margin-top:0">' +
-      ac.total.toLocaleString() + ' alert' + (ac.total === 1 ? '' : 's') +
-      ' logged in this period' +
+    more += '<div class="sec"><h4>Alerts'+per+'</h4><div class="hint" style="margin-top:0">' +
+      ac.total.toLocaleString() + ' alert' + (ac.total === 1 ? '' : 's') + ' logged' +
       (ac.high || ac.warn ? ' (' + [ac.high ? ac.high + ' high' : '', ac.warn ? ac.warn + ' warn' : '']
         .filter(Boolean).join(', ') + ')' : '') +
       '. <a href="#" id="alertsJump">See them on the Alerts tab</a>.</div></div>';
   }
-
   if (d.sessions.length){
-    h += '<div class="sec"><h4>Recent sessions</h4>' + tableView(d.sessions, [
+    more += '<div class="sec"><h4>Recent sessions</h4>' + tableView(d.sessions, [
       {h:'Started', f:r=>new Date(r.started*1000).toLocaleString()},
       {h:'Interface', f:r=>r.iface||'—'},
       {h:'Version', f:r=>r.version||'—'},
       {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) + '</div>';
   }
+  if (more)
+    h += '<div class="sec"><details class="more" id="histMore"><summary><h4>More</h4>' +
+         '<span class="hint">busy hours, alerts, sessions</span></summary>' + more + '</details></div>';
 
   // Said on the tab itself, count and all, so an exclusion added months ago
   // can't quietly go on hiding things from someone who has forgotten it.
@@ -2174,10 +2247,10 @@ function renderHistory(d){
 
   h += '<div class="sec"><h4>Storage</h4><div class="row"><span>File</span>'+
        '<span>'+esc(s.path)+'</span></div>'+
+       '<div class="row"><span>Size</span><span>'+esc(hb(s.size))+' · usage kept '+
+       s.retain_days+' days, alerts '+s.alert_retain_days+'</span></div>'+
        '<div class="rowbtns"><button class="btn-sm" id="histFlush">Flush now</button>'+
-       '<button class="btn-sm" id="histVpn">Erase VPN overhead</button>'+
        '<button class="btn-sm danger" id="histWipe">Erase all history</button></div>'+
-       (histVpnMsg ? '<div class="io" role="status" id="vpnMsg">' + esc(histVpnMsg) + '</div>' : '') +
        '</div>';
 
   const as = (lastStatus && lastStatus.autostart) || {};
@@ -2213,7 +2286,6 @@ function renderHistory(d){
   const fl = $('histFlush');
   if (fl) fl.onclick = () => control({action:'history_flush'})
     .then(() => refreshTab('history'));
-  $('histVpn').onclick = eraseVpnOverhead;
   const wp = $('histWipe');
   if (wp) wp.onclick = () => {
     if (confirm('Erase all recorded history? This cannot be undone.'))
@@ -2322,7 +2394,10 @@ function wireDailyHover(rows){
       tip.innerHTML = '<div class="th">'+esc(r.day)+'</div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-in)"></span>▼ received</span><b>'+esc(hb(r.bytes_in))+'</b></div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-out)"></span>▲ sent</span><b>'+esc(hb(r.bytes_out))+'</b></div>'+
-        '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>';
+        '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>'+
+        '<div class="tr"><span>captured</span><b>'+esc(coverageText(r))+'</b></div>'+
+        Object.entries(r.missed || {}).map(([n, sec]) =>
+          '<div class="tr"><span>'+esc(n)+' not captured</span><b>'+esc(span(sec))+'</b></div>').join('');
       tip.classList.add('on');
       const box = wrap.getBoundingClientRect();
       const x = (ev.clientX !== undefined ? ev.clientX - box.left : box.width / 2);
@@ -4022,8 +4097,8 @@ function addExclusion(kind, pattern){
     const ask = kind === 'host'
       ? 'Also erase what is already recorded for ' + pat + ' (and its subdomains)?'
       : 'Also erase what is already recorded for ' + pat + '?\n\nIts usage and its ' +
-        'per-host breakdown are erased. The hosts it talked to stay in the host ' +
-        'list: their all-time totals are not split by program.';
+        'per-host breakdown are erased, so its traffic leaves By host too. The hosts ' +
+        'it talked to stay known, so they do not count as new.';
     if (!confirm(ask)) return refreshTab('history');
     return excludeCall({action: 'history_purge', kind, pattern: pat}).then(r => {
       const g = r.purged || {}, bits = [];
@@ -4034,32 +4109,6 @@ function addExclusion(kind, pattern){
       return refreshTab('history');
     });
   }).catch(() => { histExMsg = 'Could not reach NetScope.'; return refreshTab('history'); });
-}
-
-/* Before 1.28.4 the history counted a VPN's encrypted outer copy as well as the
-   real traffic. That copy sits under the VPN client's name, so erasing those
-   programs' usage removes most of the double count. Previewed first, since it
-   is a delete. */
-let histVpnMsg = '';
-function eraseVpnOverhead(){
-  return excludeCall({action: 'history_vpn', dry: true}).then(d => {
-    const p = (d.vpn && d.vpn.programs) || {}, names = Object.keys(p);
-    if (!names.length){
-      histVpnMsg = 'No usage is recorded under a VPN client, so there is nothing to erase.';
-      return refreshTab('history');
-    }
-    const lines = names.map(n => '  ' + n + ' - ' + hb(p[n])).join('\n');
-    if (!confirm('Erase the usage recorded under these VPN programs?\n\n' + lines +
-        '\n\nThis is the tunnel\'s encrypted copy of traffic already counted under the ' +
-        'programs that made it. Traffic of that kind recorded under System or no ' +
-        'program cannot be told apart and stays. This cannot be undone.'))
-      return refreshTab('history');
-    return excludeCall({action: 'history_vpn'}).then(r => {
-      const n = Object.keys((r.vpn && r.vpn.programs) || {}).length;
-      histVpnMsg = 'Erased the usage of ' + n + ' VPN program' + (n === 1 ? '' : 's') + '.';
-      return refreshTab('history');
-    });
-  }).catch(() => { histVpnMsg = 'Could not reach NetScope.'; return refreshTab('history'); });
 }
 
 function removeExclusion(kind, pattern){

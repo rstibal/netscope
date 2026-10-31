@@ -61,13 +61,17 @@ d = h.detail("program", "old.exe", 7)
 check("usage with no pair rows is reported as not broken down",
       d["rows"] == [] and d["unlisted"] == 700 == d["total"], d)
 
-# ---- unattributed traffic and blank hosts get no pair row
+# ---- a blank host gets no pair row; unattributed traffic does (1.40), since
+# By host is read from these rows and would otherwise leave it out
 h = store("blank")
 h.record(pkt("-", "somewhere.example"))
 h.record({"process": "a.exe", "length": 10, "dir": "out", "ts": time.time()})
 h.flush()
-check("a program of '-' and a blank host are not paired",
-      q(h, "SELECT COUNT(*) FROM usage_pairs") == [(0,)])
+check("a blank host is not paired",
+      q(h, "SELECT process, host FROM usage_pairs") == [("-", "somewhere.example")],
+      q(h, "SELECT process, host FROM usage_pairs"))
+check("...and unattributed traffic still counts toward its host",
+      [r["host"] for r in h.by_host(7)] == ["somewhere.example"], h.by_host(7))
 
 # ---- the pending batch is bounded
 H.MAX_PENDING_PAIRS = 5

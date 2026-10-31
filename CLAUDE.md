@@ -317,6 +317,19 @@ whole pane (not just a card) pauses the automatic redraw, since the shift
 happens while aiming; user actions still refresh at once. UI tests that wait
 for an automatic refresh must move the pointer off the pane first.
 
+**History is one period and says what it didn't see (1.40).** Every figure on
+the tab follows the 7/30/90-day choice and comes from the hourly rows (`usage`,
+`usage_pairs`). The `processes`/`hosts` byte counters are no longer shown; those
+tables exist only for first-seen ("is this new?"). By host used to read them
+and showed all time beside a 7-day chart. `coverage` records seconds per hour
+per adapter: captured, missed (has an address, not captured, not ignored) or
+ignored, plus `*`/`running`. It is fed from `coverage_now()` on the writer's
+10 s beat. Without it, a day with the dropdown on one adapter is
+indistinguishable from a quiet day. Rob hit exactly that. Usage from before
+1.40 was erased once (`user_version` 2, the file copied to `.before-1.40`
+first) at Rob's choice. Unattributed traffic (`-`) gets `usage_pairs` rows
+now, so By host doesn't lose it.
+
 **Ignoring an adapter means not capturing it (1.39).** Asked for to keep a
 VR headset's dedicated router out of History; capturing it and only skipping
 History was offered and declined. Its traffic would still cost capture time and

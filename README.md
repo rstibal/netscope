@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.39.0**
+**Version 1.40.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -505,8 +505,8 @@ was snapped short. Wireshark, tcpdump and tshark all open it.
 **Export ↓** saves text for a spreadsheet or a script, each as CSV or JSON:
 the packets the display filter shows (across the whole buffer, the same set
 *Search buffer* searches; everything when the filter is empty), the
-connections the Connections tab lists, History's all-time totals per program
-and per host, and the alert log (this session's alerts when History is off).
+connections the Connections tab lists, History's totals per program and per
+host over everything it keeps, and the alert log (this session's alerts when History is off).
 CSV cells that would start a spreadsheet formula (`=`, `+`, `-`, `@`) get a
 leading apostrophe, since host names and packet info come off the network.
 
@@ -574,21 +574,45 @@ pcap analysis, but live capture needs the task.
 ### History
 
 Everything else in NetScope lives in memory and dies when you close it. History
-does not. It records hourly per-process rollups, first-seen and last-seen for
-every program and host, the alert log, and one row per session, into a SQLite
-database at `%LOCALAPPDATA%\NetScope\history.db` (override with `--db`, disable
-with `--no-history`).
+does not. It records hourly per-program and per-host rollups, which adapters
+were being captured each hour, first-seen and last-seen for every program and
+host, the alert log, and one row per session, into a SQLite database at
+`%LOCALAPPDATA%\NetScope\history.db` (override with `--db`, disable with
+`--no-history`).
 
-The History tab — the one the dashboard opens on — shows totals as a KPI row,
-daily traffic as a stacked column chart over 7, 30 or 90 days (its scale
-follows your busiest day, so the tallest column fills most of the chart), a
-**busy hours** heatmap, per-program and per-host breakdowns, hosts first
-contacted in the last week, how many alerts were logged (the alerts
-themselves are on the Alerts tab, under **Past 30 days**) and recent
-sessions. Every chart has
-a table view underneath it, so no value is only reachable by hovering. While
-it's showing it refreshes itself every 10 seconds, holding off while you
-have text in it selected.
+**One period for the whole tab.** Pick 7, 30 or 90 days at the top and every
+figure on the tab is for that period, read from the same hourly rows: the
+totals, the daily chart, **By program**, **By host** and the hosts first
+contacted in it. Nothing on the tab is "all time".
+
+**What was being watched.** History can only hold what was captured. If
+capture was stopped, NetScope wasn't running, or the adapter dropdown was on
+one adapter while others had traffic, that time is missing. It isn't
+quiet. The **Captured** figure says how much of the period NetScope was
+capturing. Under each day of the chart, a strip shows the same for that day:
+- full and solid: the whole day on every adapter
+- shorter: NetScope was off for part of the day
+- hatched: an adapter with an address wasn't being captured
+- no strip: before this was recorded (1.40)
+
+Hover a day for the exact time and which adapter was missed for how long. The
+line under the chart lists each adapter's captured, missed and ignored time.
+An ignored adapter (see *Ignoring an adapter*) is a choice, not a gap.
+
+The tab shows the totals, the daily chart, By program, By host and first
+contacts. **More**, folded at the bottom, holds the **busy hours** heatmap, how
+many alerts were logged (the alerts themselves are on the Alerts tab) and
+recent sessions. Every chart has a table view underneath it, so no value is
+only reachable by hovering. While it's showing it refreshes itself every 10
+seconds, holding off while you have text in it selected.
+
+**History started over in 1.40.** Usage recorded before it had no record of
+which adapters were being captured, so a day spent watching one adapter looked
+like a quiet day, and the two can't be told apart afterwards. On the first
+run of 1.40 the database is copied to `history.db.before-1.40`, then its usage,
+per-host breakdown and sessions are erased. Known programs and hosts, check-ins,
+the alert log, DHCP leases and saved program paths are kept, so nothing counts
+as new again.
 
 **Why a program or host has that many bytes.** Click a bar under **By program**
 or **By host** (or focus it and press Enter) to open it. A program shows the
@@ -643,9 +667,9 @@ still see the traffic. Only what is written to disk changes:
 
 Excluding something stops future recording. Afterwards NetScope asks, as a
 separate step, whether to erase what is already recorded. For a program that
-erases its usage and its per-host breakdown. The hosts it contacted in the
-past stay in the host list, because their all-time totals are not split by
-program; exclude those hosts too if that matters. Removing an entry resumes recording from then on. The list is
+erases its usage and its per-host breakdown, so its traffic leaves **By host**
+too. The hosts it contacted stay known (so they don't count as new), with
+whatever other programs sent them. Removing an entry resumes recording from then on. The list is
 kept in `settings.json` beside the database, and **Erase all history** keeps
 it.
 
@@ -967,6 +991,21 @@ names.
 ---
 
 ## Version history
+
+**1.40.0** — **History, simplified, and honest about gaps.**
+- **One period for the whole tab.** By host used to show all-time totals
+  beside a 7-day chart. Every figure now follows the 7/30/90-day choice.
+- **Coverage.** History records which adapters were captured each hour. The
+  daily chart marks days NetScope was off for part of, or missed an adapter.
+  The new **Captured** figure says how much of the period was watched.
+- **History started over**, after copying the old file to
+  `history.db.before-1.40`. Usage from before had no coverage record, so gaps
+  looked like quiet days. Known programs and hosts, alerts and check-ins stay.
+- **Busy hours, the alert count and sessions moved under More.** **Erase VPN
+  overhead** is gone, since the reset leaves nothing from before 1.28.4 for it
+  to clean up.
+- Traffic with no program now counts toward its host in **By host**, as it
+  always did in the all-time totals.
 
 **1.39.0** — **Ignore an adapter.**
 - **Ignore adapters…** in the adapter dropdown keeps chosen adapters out of

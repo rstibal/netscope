@@ -14,6 +14,7 @@ function payload(){
   const processes = [];
   for (let i=0;i<15;i++) processes.push({name:'prog'+i+'.exe', bytes_in: G, bytes_out: G/4, packets: 10});
   return {enabled:true, days:30, daily, hourly:[], processes, hosts:[], new_hosts:[], alerts:[], sessions,
+          range:{bytes_in: total*0.8, bytes_out: total*0.2, packets: 123, programs: 15, hosts: 0},
           summary:{bytes_in: total*0.8, bytes_out: total*0.2, packets: 123, processes: 15, hosts: 0,
                    size: 1024*1024, retain_days: 90, since:'2026-09-01', path:'C:\\history.db'}};
 }
@@ -43,7 +44,10 @@ function payload(){
   // --- New data shows up by itself, keeping the reader's place.
   await p.evaluate(()=>{
     const pane = document.getElementById('p-history');
-    const s = [...pane.querySelectorAll('.sec')].find(x=>/Recent sessions/.test(x.textContent));
+    // Sessions are under More (1.40): open both, as a reader would.
+    $('histMore').open = true;
+    const s = [...pane.querySelectorAll('.sec')].find(x=>{
+      const h = x.querySelector('h4'); return h && h.textContent==='Recent sessions'; });
     s.querySelector('details').open = true;
     pane.scrollTop = 300;
   });
@@ -58,7 +62,7 @@ function payload(){
     return {open, top: pane.scrollTop};
   });
   check('an opened Table view stays open across the refresh',
-        kept.open.length===1 && kept.open[0]==='Recent sessions', JSON.stringify(kept.open));
+        kept.open.join()==='More,Recent sessions', JSON.stringify(kept.open));
   check('...and the scroll position is kept', before>0 && kept.top===before, before+' -> '+kept.top);
 
   // --- Nothing changed: the pane is not rebuilt at all.

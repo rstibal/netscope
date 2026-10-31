@@ -25,6 +25,7 @@ function history(){
   for (let i=0;i<30;i++) daily.push({day:'2026-09-'+String(i+1).padStart(2,'0'), bytes_in:G, bytes_out:G/4, packets:10});
   return {enabled:true, days:30, daily, hourly:[], hosts:[], new_hosts:[], sessions:[], processes:[],
           exclude:{programs:[],hosts:[]}, week_hours: weekHours(),
+          range:{bytes_in: total*0.8, bytes_out: total*0.2, packets:1, programs:1, hosts:0},
           summary:{bytes_in: total*0.8, bytes_out: total*0.2, packets:1, processes:1, hosts:0, size:1024,
                    retain_days:90, since:'2026-09-01', path:'C:\\history.db'}};
 }
@@ -35,6 +36,8 @@ function history(){
   const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
   await p.route('**/api/history*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(history())}));
   await p.goto(process.argv[2]);
+  await p.waitForSelector('#histMore', {timeout: 30000});
+  await p.click('#histMore > summary');       // busy hours are under More (1.40)
   await p.waitForSelector('#cw-week svg', {timeout: 30000});
 
   const g = await p.evaluate(()=>{
