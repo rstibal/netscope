@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.38.0"
+VERSION = "1.39.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -1036,6 +1036,7 @@ class CaptureEngine:
         self._watch_stop = threading.Event()
         self._watcher = None
         self.ifaces = []
+        self.ignored = []           # adapters "all" leaves out (ignore_ifaces)
         self.spec = "default"
         self.iface = None
         self.bpf = ""
@@ -1109,14 +1110,19 @@ class CaptureEngine:
     # -- lifecycle -----------------------------------------------------------
 
     @staticmethod
-    def resolve_ifaces(spec):
+    def resolve_ifaces(spec, ignore=()):
         """
         Turn an --iface value into a list of interface names.
 
         Accepts a single name, a comma-separated list, or "all" for every
         adapter that currently has an address. Loopback is only included when
         asked for by name — on a normal machine it is pure noise.
+
+        `ignore` (the ignore_ifaces setting) is left out of "all", including
+        adapters that turn up later. Naming an ignored adapter still captures
+        it: that is a choice made on purpose, the ignore list is a standing one.
         """
+        ignore = set(ignore or ())
         names = [i["name"] for i in CaptureEngine.interfaces()]
         if not spec or spec == "default":
             # Watching everything is the sane default: picking one adapter and
@@ -1128,8 +1134,9 @@ class CaptureEngine:
             return [d] if d else names[:1]
         if spec == "all":
             usable = [i for i in CaptureEngine.interfaces()
-                      if i.get("ip") and not i["ip"].startswith("127.")]
-            return [i["name"] for i in usable] or names
+                      if i.get("ip") and not i["ip"].startswith("127.")
+                      and i["name"] not in ignore]
+            return [i["name"] for i in usable] or [n for n in names if n not in ignore]
         wanted = [s.strip() for s in spec.split(",") if s.strip()]
         # Be forgiving about description-vs-name, since the dropdown shows
         # descriptions and people copy those.
@@ -1152,7 +1159,7 @@ class CaptureEngine:
                 return False
 
             self.spec = iface or "default"
-            self.ifaces = self.resolve_ifaces(self.spec)
+            self.ifaces = self.resolve_ifaces(self.spec, self.ignored)
             self.iface = ", ".join(self.ifaces) if self.ifaces else None
             self.bpf = bpf or ""
             self.error = None
@@ -1258,7 +1265,7 @@ class CaptureEngine:
                 continue
             try:
                 self.refresh_interfaces(force=True)
-                wanted = self.resolve_ifaces(self.spec)
+                wanted = self.resolve_ifaces(self.spec, self.ignored)
             except Exception:
                 continue
             with self._lock:
@@ -1878,6 +1885,7 @@ class DemoEngine:
         self.error = None
         self.iface = "demo0"
         self.ifaces = ["demo0"]
+        self.ignored = []
         self.spec = "demo0"
         self.bpf = ""
         self._stop = threading.Event()
@@ -1892,11 +1900,15 @@ class DemoEngine:
 
     @staticmethod
     def interfaces(refresh=True):
+        # demo1 carries nothing. It is there so a demo has a second adapter
+        # to ignore; the demo traffic itself is all on demo0.
         return [{"name": "demo0", "description": "Synthetic demo traffic",
-                 "ip": "192.168.1.20", "mac": "00:11:22:33:44:55"}]
+                 "ip": "192.168.1.20", "mac": "00:11:22:33:44:55"},
+                {"name": "demo1", "description": "Synthetic second adapter (silent)",
+                 "ip": "10.7.0.20", "mac": "00:11:22:33:44:66"}]
 
     @staticmethod
-    def resolve_ifaces(spec):
+    def resolve_ifaces(spec, ignore=()):
         return ["demo0"]
 
     @staticmethod
@@ -3230,6 +3242,7 @@ class Handler(BaseHTTPRequestHandler):
                 "current": eng.iface,
                 "active": list(getattr(eng, "ifaces", []) or []),
                 "spec": getattr(eng, "spec", "default"),
+                "ignored": list(getattr(eng, "ignored", []) or []),
             })
 
         return self._send(404, {"error": "not found"})
@@ -3285,6 +3298,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.app.save_setting("iface", want)
             elif action == "stop":
                 eng.stop()
+            elif action == "ignore_ifaces":
+                return self._ignore_ifaces(body)
             elif action == "clear":
                 self.app.store.clear()
                 self.app.streams.clear()
@@ -3389,6 +3404,37 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "not found"})
 
+    def _ignore_ifaces(self, body):
+        """
+        Set the adapters "All active interfaces" leaves out, and apply it.
+
+        A running all-adapters capture is restarted only when the set of
+        adapters it should be on actually changed. Ignoring every adapter
+        with an address is refused rather than left to capture nothing.
+        """
+        eng = self.app.engine
+        raw = body.get("ignore")
+        if not isinstance(raw, list):
+            return self._send(400, {"error": "ignore must be a list of adapter names"})
+        names = []
+        for n in raw[:64]:
+            if isinstance(n, str) and n.strip() and n.strip() not in names:
+                names.append(n.strip())
+        known = eng.interfaces(refresh=False)
+        left = [i for i in known if i.get("ip") and not i["ip"].startswith("127.")
+                and i["name"] not in names]
+        if known and not left:
+            return self._send(400, {"error": "That would leave no adapter to capture on.",
+                                    "status": self.status()})
+        eng.ignored = names
+        self.app.save_setting("ignore_ifaces", names)
+        if eng.running and eng.spec in ("all", "default", None, ""):
+            want = eng.resolve_ifaces(eng.spec, names)
+            if set(want) != set(getattr(eng, "ifaces", []) or []):
+                eng.stop()
+                eng.start(eng.spec, eng.bpf)
+        return self._send(200, {"status": self.status()})
+
     def _block_action(self, action, body):
         b, alerts = self.app.blocker, self.app.alerts
         if b is None:
@@ -3482,6 +3528,7 @@ class Handler(BaseHTTPRequestHandler):
             "iface": eng.iface,
             "ifaces": list(getattr(eng, "ifaces", []) or []),
             "multi": len(getattr(eng, "ifaces", []) or []) > 1,
+            "ignored_ifaces": list(getattr(eng, "ignored", []) or []),
             "filter": eng.bpf,
             "error": eng.error,
             "demo": self.app.demo,
@@ -3966,6 +4013,10 @@ def main(argv=None):
     decoder = (CaptureEngine(store, resolver, streams=streams, alerts=alerts,
                              history=history, dhcp=dhcp, reverse=reverse)
               if args.demo else engine)
+    # Adapters "all" leaves out, from the start, so --read followed by Start
+    # in the dashboard honours them too.
+    engine.ignored = [n for n in (settings_load().get("ignore_ifaces") or [])
+                      if isinstance(n, str)]
     if args.stress_drops and hasattr(engine, "stress_us"):
         engine.stress_us = max(0, args.stress_drops)
         print(f"  Stress:    stalling the capture {engine.stress_us}us per "

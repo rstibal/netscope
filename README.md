@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.38.0**
+**Version 1.39.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -181,6 +181,18 @@ launch. `--iface auto` reverts to just the primary adapter. The
 **Iface** column says where each packet was seen, and `iface` is a filter field
 (`iface == Wi-Fi`). If one adapter fails to open, the others still capture and
 the status line says which failed.
+
+**Ignoring an adapter.** Some adapters carry traffic you don't want watched,
+such as a dedicated router for a VR headset that streams far more than
+everything else together. **Ignore adapters…** at the bottom of the adapter
+dropdown lists each adapter that has an address. An ignored adapter is not
+captured under **All active interfaces**, now or when it reconnects. Nothing
+from it reaches the packet table, the Timeline or History, and it costs no
+capture time. The status line says how many are ignored (hover for their
+names; click to change it), and the dropdown marks them. Picking an ignored
+adapter by name in the dropdown still captures it. NetScope refuses to ignore
+every adapter that has an address. The list is kept in `settings.json` as
+`ignore_ifaces`, by adapter name, so renaming an adapter in Windows undoes it.
 
 **Choosing columns.** Every column is shown by default. **Columns** in the
 filter bar hides any of them except Info, which always stays because it takes
@@ -955,6 +967,14 @@ names.
 ---
 
 ## Version history
+
+**1.39.0** — **Ignore an adapter.**
+- **Ignore adapters…** in the adapter dropdown keeps chosen adapters out of
+  **All active interfaces** for good, including each time they reconnect. Use it
+  for an adapter whose traffic would otherwise swamp the capture and History,
+  such as a VR headset's dedicated router. The status line shows how many are
+  ignored, and a click there changes it. Demo mode has a second, silent adapter
+  so there is something to ignore.
 
 **1.38.0** — **Export, and clicks that show you something.**
 - **Export ↓** next to Save: the filtered packets, connections, History totals

@@ -317,6 +317,15 @@ whole pane (not just a card) pauses the automatic redraw, since the shift
 happens while aiming; user actions still refresh at once. UI tests that wait
 for an automatic refresh must move the pointer off the pane first.
 
+**Ignoring an adapter means not capturing it (1.39).** Asked for to keep a
+VR headset's dedicated router out of History; capturing it and only skipping
+History was offered and declined. Its traffic would still cost capture time and
+push everything else out of the ring buffer. `ignore_ifaces` (settings, by
+adapter name) is applied in `resolve_ifaces()` to "all"/default only, so
+the watcher never re-attaches it. Naming an ignored adapter still captures it.
+The status line's "N ignored" keeps it on screen, as with hidden packets.
+Ignoring every adapter that has an address is refused.
+
 **Interface tabs narrow the table the way the filter does, and combine with
 it.** `rowVisible()` checks `ifaceTab` first, so the Timeline and "Search
 buffer" follow it too. The tabs sit in the filter row beside the box (since

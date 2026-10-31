@@ -291,6 +291,7 @@ footer b{font-variant-numeric:tabular-nums;display:inline-block}
 #sAttr{min-width:5ch}                /* 100%      */
 #sDrop{min-width:7ch;color:var(--out)}
 #dropNote{cursor:help}
+#ignNote{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
 #dropNote.dropnow{color:#f0883e}
 #dropNote.droppast{color:var(--dim);font-weight:600}
 
@@ -3782,6 +3783,10 @@ function renderStatus(st){
             : 'capturing on <b>' + esc(st.iface || '?') + '</b>');
   else txt = 'stopped';
   if (st.filter) txt += ' · filter <b>' + esc(st.filter) + '</b>';
+  const ign = st.ignored_ifaces || [];
+  if (ign.length && !st.source)
+    txt += ' · <b id="ignNote" role="button" tabindex="0" title="Not captured: ' +
+           esc(ign.join(', ')) + '. Click to change.">' + ign.length + ' ignored</b>';
   if (!st.demo && !st.admin) txt += ' · <b style="color:#f0883e">not elevated</b>';
   // Losing packets invalidates every count on the page, so it is said here
   // rather than left to a number in the footer nobody is looking at.
@@ -4145,15 +4150,23 @@ try{
   if (t) document.documentElement.dataset.theme = t;
 }catch(e){}
 
+let ifaceList = [], ignoredIfaces = [];
 function loadInterfaces(){
   return api('/api/interfaces').then(r=>r.json()).then(d => {
     const sel = $('iface');
-    sel.innerHTML = '<option value="all">All active interfaces</option>' +
-      d.interfaces.map(i =>
+    ifaceList = d.interfaces || [];
+    ignoredIfaces = d.ignored || [];
+    sel.innerHTML = '<option value="all">All active interfaces' +
+      (ignoredIfaces.length ? ' but ' + ignoredIfaces.length + ' ignored' : '') + '</option>' +
+      ifaceList.map(i =>
         '<option value="'+esc(i.name)+'">'+esc((i.description||i.name).slice(0,44)) +
-        (i.ip ? '  ('+esc(i.ip)+')' : '') + '</option>').join('');
+        (i.ip ? '  ('+esc(i.ip)+')' : '') +
+        (ignoredIfaces.includes(i.name) ? ' — ignored' : '') + '</option>').join('') +
+      '<option disabled>──────────</option>' +
+      '<option value="__ignore">Ignore adapters…</option>';
     sel.value = (d.spec === 'all') ? 'all'
               : ((d.active && d.active.length === 1) ? d.active[0] : (d.current || 'all'));
+    sel.dataset.prev = sel.value;
   }).catch(()=>{});
 }
 
@@ -4180,9 +4193,69 @@ function syncIface(st){
   const want = st.multi ? 'all'
              : ((st.ifaces && st.ifaces.length === 1) ? st.ifaces[0] : st.iface);
   if (!want || sel.value === want) return;
-  if (Array.from(sel.options).some(o => o.value === want)) sel.value = want;
+  if (Array.from(sel.options).some(o => o.value === want)) sel.value = sel.dataset.prev = want;
   else loadInterfaces();
 }
+
+/* Ignoring an adapter keeps it out of "All active interfaces" for good,
+   including each time it reconnects: a VR headset's dedicated router moves
+   more than everything else together, fills the buffer and the History with
+   it, and costs capture time. The choice lives on the server (ignore_ifaces)
+   and the header says how many are ignored, so it is never out of sight.
+   Picking an ignored adapter by name still captures it. */
+function ifaceLabel(name){
+  const i = ifaceList.find(x => x.name === name);
+  if (!i) return name + ' (not attached now)';
+  const d = i.description && i.description !== i.name ? i.description : '';
+  return i.name + (d && !d.startsWith(i.name) ? ' · ' + d.slice(0, 40) : '') +
+         (i.ip ? '  (' + i.ip + ')' : '');
+}
+function setIgnored(names, msg){
+  return api('/api/control', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'ignore_ifaces', ignore: names})})
+    .then(r => r.json()).then(d => {
+      if (d.status) renderStatus(d.status);
+      if (d.error){ flash(d.error); return; }
+      flash(msg);
+      return loadInterfaces();
+    }).catch(() => flash('Could not change the ignored adapters.'));
+}
+function openIgnoreMenu(x, y){
+  const usable = ifaceList.filter(i => i.ip && !i.ip.startsWith('127.')).map(i => i.name);
+  const names = usable.concat(ignoredIfaces.filter(n => !usable.includes(n)));
+  const items = names.map(n => ignoredIfaces.includes(n)
+    ? ['Capture again: ' + ifaceLabel(n),
+       () => setIgnored(ignoredIfaces.filter(m => m !== n), 'capturing ' + n + ' again')]
+    : ['Ignore ' + ifaceLabel(n),
+       () => setIgnored(ignoredIfaces.concat([n]), 'ignoring ' + n)]);
+  if (!items.length) items.push(['No adapters with an address right now', () => {}]);
+  const all = $('iface').value === 'all';
+  showRowMenu(items, 'An ignored adapter is not captured under All active interfaces, ' +
+    'now or when it reconnects, and nothing from it reaches History. Picking it by name ' +
+    'in this list still captures it.' +
+    (all ? '' : ' Takes effect once you capture on All active interfaces.'),
+    x, y);
+}
+$('iface').addEventListener('focus', e => { e.target.dataset.prev = e.target.value; });
+$('iface').addEventListener('change', e => {
+  const sel = e.target;
+  if (sel.value !== '__ignore'){ sel.dataset.prev = sel.value; return; }
+  sel.value = sel.dataset.prev || 'all';
+  const r = sel.getBoundingClientRect();
+  sel.blur();
+  openIgnoreMenu(r.left, r.bottom + 2);
+});
+$('statusText').addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.id === 'ignNote'){
+    e.preventDefault(); e.target.click(); }
+});
+$('statusText').addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('#ignNote');
+  if (!b) return;
+  e.stopPropagation();
+  const r = b.getBoundingClientRect();
+  openIgnoreMenu(r.left, r.bottom + 2);
+});
 
 loadInterfaces();
 
