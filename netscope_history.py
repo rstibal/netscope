@@ -43,8 +43,9 @@ OTHER_HOSTS = "(other)"
 # can't also fill the machine's memory.
 MAX_PENDING_ALERTS = 5000
 # The database layout. 2 (1.40.0) added coverage and reset the usage recorded
-# before it, which had no record of which adapters were being captured.
-SCHEMA_VERSION = 2
+# before it, which had no record of which adapters were being captured. 3
+# (1.41.0) put the adapter in the usage keys, so History can show one.
+SCHEMA_VERSION = 3
 # Coverage counts at most this much per tick, so a machine waking from sleep
 # doesn't credit the hours it was asleep to whatever it was capturing.
 MAX_TICK = FLUSH_INTERVAL + 5.0
@@ -57,10 +58,11 @@ CREATE TABLE IF NOT EXISTS usage (
     day       TEXT    NOT NULL,
     hour      INTEGER NOT NULL,
     process   TEXT    NOT NULL,
+    iface     TEXT    NOT NULL DEFAULT '',
     bytes_in  INTEGER NOT NULL DEFAULT 0,
     bytes_out INTEGER NOT NULL DEFAULT 0,
     packets   INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (day, hour, process)
+    PRIMARY KEY (day, hour, process, iface)
 );
 CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
 
@@ -72,18 +74,18 @@ CREATE TABLE IF NOT EXISTS usage_pairs (
     hour      INTEGER NOT NULL,
     process   TEXT    NOT NULL,
     host      TEXT    NOT NULL,
+    iface     TEXT    NOT NULL DEFAULT '',
     bytes_in  INTEGER NOT NULL DEFAULT 0,
     bytes_out INTEGER NOT NULL DEFAULT 0,
     packets   INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (day, hour, process, host)
+    PRIMARY KEY (day, hour, process, host, iface)
 );
 CREATE INDEX IF NOT EXISTS usage_pairs_host ON usage_pairs(host);
 CREATE INDEX IF NOT EXISTS usage_pairs_day ON usage_pairs(day);
 
--- What was being captured, per hour: seconds each adapter spent captured,
--- missed (it had an address but capture wasn't on it) or ignored (the
--- ignore_ifaces setting), and under iface '*' state 'running', seconds
--- NetScope was capturing at all. Usage alone can't tell a quiet hour from
+-- What was being captured, per hour: seconds each adapter spent captured or
+-- missed (it had an address but capture wasn't on it), and under iface '*'
+-- state 'running', seconds NetScope was capturing at all. Usage alone can't tell a quiet hour from
 -- one nobody was watching.
 CREATE TABLE IF NOT EXISTS coverage (
     day     TEXT    NOT NULL,
@@ -297,8 +299,8 @@ class HistoryStore:
         self.flushes = 0
         self.last_flush = 0.0
 
-        self._acc = {}          # (day, hour, process) -> [in, out, packets]
-        self._pairs = {}        # (day, hour, process, host) -> [in, out, packets]
+        self._acc = {}          # (day, hour, process, iface) -> [in, out, packets]
+        self._pairs = {}        # (day, hour, process, host, iface) -> [in, out, packets]
         self._procs = {}        # name -> [first, last, in, out, packets]
         self._hosts = {}        # host -> [first, last, in, out, packets]
         self._pending_alerts = []
@@ -306,7 +308,7 @@ class HistoryStore:
         self._cov = {}          # (day, hour, iface, state) -> seconds
         self._cov_last = None
         self._cov_first = None  # when this run's first credited tick began
-        # Returns (captured, missed, ignored) adapter names, or None while
+        # Returns (captured, missed) adapter names, or None while
         # nothing live is being captured. Set by the app; None records nothing.
         self.coverage_source = None
         # Where the pre-1.40 database was copied before its usage was reset,
@@ -384,7 +386,7 @@ class HistoryStore:
             return
         had = self._db.execute("SELECT EXISTS(SELECT 1 FROM usage) "
                                "OR EXISTS(SELECT 1 FROM sessions)").fetchone()[0]
-        if had:
+        if v < 2 and had:
             if not self.in_memory:
                 backup = self.path + ".before-1.40"
                 if not os.path.exists(backup):
@@ -398,6 +400,24 @@ class HistoryStore:
                 self._db.execute(f"DELETE FROM {t}")
             for t in ("processes", "hosts"):
                 self._db.execute(f"UPDATE {t} SET bytes_in=0, bytes_out=0, packets=0")
+        # To 3: the adapter joins the usage keys. SQLite can't change a
+        # primary key in place, so the two tables are rebuilt; rows from
+        # before carry no adapter ('') and count under "All adapters" only.
+        cols = {r[1] for r in self._db.execute("PRAGMA table_info(usage)")}
+        if "iface" not in cols:
+            for t in ("usage", "usage_pairs"):
+                self._db.execute(f"ALTER TABLE {t} RENAME TO {t}_old")
+            self._db.executescript(SCHEMA)
+            self._db.execute(
+                "INSERT INTO usage(day,hour,process,iface,bytes_in,bytes_out,packets) "
+                "SELECT day,hour,process,'',bytes_in,bytes_out,packets FROM usage_old")
+            self._db.execute(
+                "INSERT INTO usage_pairs(day,hour,process,host,iface,bytes_in,bytes_out,"
+                "packets) SELECT day,hour,process,host,'',bytes_in,bytes_out,packets "
+                "FROM usage_pairs_old")
+            for t in ("usage", "usage_pairs"):
+                self._db.execute(f"DROP TABLE {t}_old")
+            self._db.executescript(SCHEMA)      # the indexes went with the old tables
         self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self._db.commit()
 
@@ -467,13 +487,12 @@ class HistoryStore:
             got = None
         if not got:
             return
-        captured, missed, ignored = got
+        captured, missed = got[0], got[1]
         day, hour = _day_hour(now)
         with self._lock:
             for iface, state in ([("*", "running")] +
                                  [(n, "captured") for n in captured] +
-                                 [(n, "missed") for n in missed] +
-                                 [(n, "ignored") for n in ignored]):
+                                 [(n, "missed") for n in missed]):
                 k = (day, hour, iface, state)
                 self._cov[k] = self._cov.get(k, 0.0) + secs
 
@@ -490,6 +509,7 @@ class HistoryStore:
             host = ""
         size = rec.get("length", 0)
         ts = rec.get("ts", time.time())
+        iface = rec.get("iface") or ""
         inbound = rec.get("dir") != "out"
         day, hour = _day_hour(ts)
         # An excluded program keeps only its name and first/last seen — the
@@ -502,17 +522,17 @@ class HistoryStore:
 
         with self._lock:
             if not proc_out:
-                slot = self._acc.get((day, hour, proc))
+                slot = self._acc.get((day, hour, proc, iface))
                 if slot is None:
-                    slot = self._acc[(day, hour, proc)] = [0, 0, 0]
+                    slot = self._acc[(day, hour, proc, iface)] = [0, 0, 0]
                 slot[0 if inbound else 1] += size
                 slot[2] += 1
                 if host and not host_out:
-                    pk = (day, hour, proc, host)
+                    pk = (day, hour, proc, host, iface)
                     ps = self._pairs.get(pk)
                     if ps is None:
                         if len(self._pairs) >= MAX_PENDING_PAIRS:
-                            pk = (day, hour, proc, OTHER_HOSTS)
+                            pk = (day, hour, proc, OTHER_HOSTS, iface)
                         ps = self._pairs.setdefault(pk, [0, 0, 0])
                     ps[0 if inbound else 1] += size
                     ps[2] += 1
@@ -761,24 +781,24 @@ class HistoryStore:
         try:
             with self._db_lock:
                 self._db.executemany(
-                    "INSERT INTO usage(day,hour,process,bytes_in,bytes_out,packets) "
-                    "VALUES (?,?,?,?,?,?) "
-                    "ON CONFLICT(day,hour,process) DO UPDATE SET "
+                    "INSERT INTO usage(day,hour,process,iface,bytes_in,bytes_out,packets) "
+                    "VALUES (?,?,?,?,?,?,?) "
+                    "ON CONFLICT(day,hour,process,iface) DO UPDATE SET "
                     "bytes_in=bytes_in+excluded.bytes_in, "
                     "bytes_out=bytes_out+excluded.bytes_out, "
                     "packets=packets+excluded.packets",
-                    [(d, h, p, v[0], v[1], v[2]) for (d, h, p), v in acc.items()])
+                    [(d, h, p, i, v[0], v[1], v[2]) for (d, h, p, i), v in acc.items()])
 
                 if pairs:
                     self._db.executemany(
-                        "INSERT INTO usage_pairs(day,hour,process,host,bytes_in,"
-                        "bytes_out,packets) VALUES (?,?,?,?,?,?,?) "
-                        "ON CONFLICT(day,hour,process,host) DO UPDATE SET "
+                        "INSERT INTO usage_pairs(day,hour,process,host,iface,bytes_in,"
+                        "bytes_out,packets) VALUES (?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(day,hour,process,host,iface) DO UPDATE SET "
                         "bytes_in=bytes_in+excluded.bytes_in, "
                         "bytes_out=bytes_out+excluded.bytes_out, "
                         "packets=packets+excluded.packets",
-                        [(d, h, p, ho, v[0], v[1], v[2])
-                         for (d, h, p, ho), v in pairs.items()])
+                        [(d, h, p, ho, i, v[0], v[1], v[2])
+                         for (d, h, p, ho, i), v in pairs.items()])
 
                 for table, col, data in (("processes", "name", procs),
                                          ("hosts", "host", hosts)):
@@ -908,6 +928,11 @@ class HistoryStore:
         return [(today - timedelta(days=i)).strftime("%Y-%m-%d")
                 for i in range(days - 1, -1, -1)]
 
+    @staticmethod
+    def _on(iface, col="iface"):
+        """(" AND col = ?", [iface]) for one adapter; nothing for all of them."""
+        return (f" AND {col} = ?", [iface]) if iface else ("", [])
+
     def coverage_since(self):
         """When coverage was first recorded, as a datetime, or None."""
         r = self._q("SELECT value FROM meta WHERE key = 'coverage_start'")
@@ -916,35 +941,37 @@ class HistoryStore:
         except (TypeError, ValueError):
             return None
 
-    def daily(self, days=30):
+    def daily(self, days=30, iface=""):
         """
         Per-day totals, zero-filled so the chart has no missing columns, with
         what was being watched: `ran` seconds NetScope was capturing, out of
         `expected` (the day so far, from when coverage began), and `missed`
         {adapter: seconds} for adapters that had an address and weren't
-        captured. `expected` is 0 for days before coverage began.
+        captured. `expected` is 0 for days before coverage began. For one
+        adapter, `ran` is the time that adapter was captured.
         """
         wanted = self._range_days(days)
+        w, a = self._on(iface)
         rows = {r["day"]: r for r in self._q(
             "SELECT day, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, "
-            "SUM(packets) AS packets FROM usage WHERE day >= ? GROUP BY day "
-            "ORDER BY day", (wanted[0],))}
+            "SUM(packets) AS packets FROM usage WHERE day >= ?" + w + " GROUP BY day "
+            "ORDER BY day", [wanted[0]] + a)}
         ran, missed = {}, {}
+        ran_state = ("captured", iface) if iface else ("running", "*")
+
+        def add(d, i, st, v):
+            if (st, i) == ran_state:
+                ran[d] = ran.get(d, 0) + v
+            elif st == "missed" and (not iface or i == iface):
+                missed.setdefault(d, {})[i] = round(missed.get(d, {}).get(i, 0) + v)
         for r in self._q("SELECT day, iface, state, SUM(seconds) AS s FROM coverage "
-                         "WHERE day >= ? AND state IN ('running', 'missed') "
-                         "GROUP BY day, iface, state", (wanted[0],)):
-            if r["state"] == "running":
-                ran[r["day"]] = r["s"]
-            else:
-                missed.setdefault(r["day"], {})[r["iface"]] = round(r["s"])
+                         "WHERE day >= ? GROUP BY day, iface, state", (wanted[0],)):
+            add(r["day"], r["iface"], r["state"], r["s"])
         # Seconds already counted but not yet flushed belong in today's figure,
         # or a fresh run reads as a third missed.
         with self._lock:
-            for (d, _h, iface, st), v in self._cov.items():
-                if st == "running":
-                    ran[d] = ran.get(d, 0) + v
-                elif st == "missed":
-                    missed.setdefault(d, {})[iface] = round(missed.get(d, {}).get(iface, 0) + v)
+            for (d, _h, i, st), v in self._cov.items():
+                add(d, i, st, v)
         since = self.coverage_since() or (
             datetime.fromtimestamp(self._cov_first) if self._cov_first else None)
         now = datetime.now()
@@ -970,7 +997,7 @@ class HistoryStore:
         return [rows.get(h, {"hour": h, "bytes_in": 0, "bytes_out": 0, "packets": 0})
                 for h in range(24)]
 
-    def week_hours(self, days=30):
+    def week_hours(self, days=30, iface=""):
         """
         Average traffic per hour of each weekday, local time, Monday first:
         {"cells": 7 rows of 24 [bytes_in, bytes_out], "counts": how many of
@@ -989,30 +1016,32 @@ class HistoryStore:
             if d >= since:
                 counts[datetime.strptime(d, "%Y-%m-%d").weekday()] += 1
         cells = [[[0, 0] for _ in range(24)] for _ in range(7)]
+        w, a = self._on(iface)
         for r in self._q(
                 "SELECT CAST(strftime('%w', day) AS INTEGER) AS wd, hour, "
                 "SUM(bytes_in) AS bi, SUM(bytes_out) AS bo FROM usage "
-                "WHERE day >= ? GROUP BY wd, hour", (since,)):
+                "WHERE day >= ?" + w + " GROUP BY wd, hour", [since] + a):
             wd = (r["wd"] + 6) % 7          # SQLite counts from Sunday
             n = counts[wd] or 1
             if 0 <= r["hour"] < 24:
                 cells[wd][r["hour"]] = [round(r["bi"] / n), round(r["bo"] / n)]
         return {"cells": cells, "counts": counts}
 
-    def by_process(self, days=30, limit=15):
+    def by_process(self, days=30, limit=15, iface=""):
         since = self._range_days(days)[0]
+        w, a = self._on(iface)
         return self._q(
             "SELECT process AS name, SUM(bytes_in) AS bytes_in, "
             "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
-            "FROM usage WHERE day >= ? AND process <> '-' GROUP BY process "
-            "ORDER BY (SUM(bytes_in)+SUM(bytes_out)) DESC LIMIT ?", (since, limit))
+            "FROM usage WHERE day >= ? AND process <> '-'" + w + " GROUP BY process "
+            "ORDER BY (SUM(bytes_in)+SUM(bytes_out)) DESC LIMIT ?", [since] + a + [limit])
 
     def pairs_since(self):
         """First day with a per-host breakdown, or None if none is recorded."""
         r = self._q("SELECT MIN(day) AS d FROM usage_pairs")
         return r[0]["d"] if r and r[0]["d"] else None
 
-    def detail(self, kind, name, days=30, limit=8):
+    def detail(self, kind, name, days=30, limit=8, iface=""):
         """
         Why a program or host has the bytes it has. A program: the hosts it
         talked to, its last 72 hours hour by hour, and its busiest hours with
@@ -1021,83 +1050,103 @@ class HistoryStore:
         (before 1.32.0, or past `limit`), so the parts add up to the whole.
         """
         since = self._range_days(days)[0]
-        out = {"kind": kind, "name": name, "days": days,
+        w, a = self._on(iface)
+        out = {"kind": kind, "name": name, "days": days, "iface": iface,
                "pairs_since": self.pairs_since(), "rows": [], "unlisted": 0,
                "total": 0, "hours": [], "busiest": []}
         if kind == "program":
             tot = self._q("SELECT SUM(bytes_in+bytes_out) AS t FROM usage "
-                          "WHERE day >= ? AND process = ?", (since, name))
+                          "WHERE day >= ? AND process = ?" + w, [since, name] + a)
             out["total"] = (tot[0]["t"] or 0) if tot else 0
             out["rows"] = self._q(
                 "SELECT host AS name, SUM(bytes_in) AS bytes_in, "
                 "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
-                "FROM usage_pairs WHERE day >= ? AND process = ? GROUP BY host "
-                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", (since, name, limit))
+                "FROM usage_pairs WHERE day >= ? AND process = ?" + w + " GROUP BY host "
+                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", [since, name] + a + [limit])
             now = datetime.now().replace(minute=0, second=0, microsecond=0)
             slots = [now - timedelta(hours=i) for i in range(71, -1, -1)]
             have = {(r["day"], r["hour"]): r for r in self._q(
-                "SELECT day, hour, bytes_in, bytes_out FROM usage WHERE process = ? "
-                "AND day >= ?", (name, slots[0].strftime("%Y-%m-%d")))}
+                "SELECT day, hour, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out "
+                "FROM usage WHERE process = ? AND day >= ?" + w + " GROUP BY day, hour",
+                [name, slots[0].strftime("%Y-%m-%d")] + a)}
             for t in slots:
                 r = have.get((t.strftime("%Y-%m-%d"), t.hour))
                 out["hours"].append({"day": t.strftime("%Y-%m-%d"), "hour": t.hour,
                                      "bytes_in": r["bytes_in"] if r else 0,
                                      "bytes_out": r["bytes_out"] if r else 0})
             busy = self._q(
-                "SELECT day, hour, bytes_in, bytes_out FROM usage WHERE day >= ? "
-                "AND process = ? ORDER BY (bytes_in+bytes_out) DESC LIMIT 5",
-                (since, name))
+                "SELECT day, hour, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out "
+                "FROM usage WHERE day >= ? AND process = ?" + w + " GROUP BY day, hour "
+                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT 5", [since, name] + a)
             for b in busy:
                 top = self._q(
                     "SELECT host FROM usage_pairs WHERE day = ? AND hour = ? AND "
-                    "process = ? ORDER BY (bytes_in+bytes_out) DESC LIMIT 1",
-                    (b["day"], b["hour"], name))
+                    "process = ?" + w + " GROUP BY host "
+                    "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT 1",
+                    [b["day"], b["hour"], name] + a)
                 b["host"] = top[0]["host"] if top else ""
             out["busiest"] = busy
             listed = sum(r["bytes_in"] + r["bytes_out"] for r in out["rows"])
             out["unlisted"] = max(0, out["total"] - listed)
         else:
             tot = self._q("SELECT SUM(bytes_in+bytes_out) AS t FROM usage_pairs "
-                          "WHERE day >= ? AND host = ?", (since, name))
+                          "WHERE day >= ? AND host = ?" + w, [since, name] + a)
             out["total"] = (tot[0]["t"] or 0) if tot else 0
             out["rows"] = self._q(
                 "SELECT process AS name, SUM(bytes_in) AS bytes_in, "
                 "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
-                "FROM usage_pairs WHERE day >= ? AND host = ? GROUP BY process "
-                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", (since, name, limit))
+                "FROM usage_pairs WHERE day >= ? AND host = ?" + w + " GROUP BY process "
+                "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", [since, name] + a + [limit])
         return out
 
-    def by_host(self, days=30, limit=15):
+    def by_host(self, days=30, limit=15, iface=""):
         """Hosts by traffic in the range, from the per-hour breakdown."""
         since = self._range_days(days)[0]
+        w, a = self._on(iface, "p.iface")
         return self._q(
             "SELECT p.host AS host, SUM(p.bytes_in) AS bytes_in, "
             "SUM(p.bytes_out) AS bytes_out, SUM(p.packets) AS packets, "
             "h.first_seen AS first_seen FROM usage_pairs p "
-            "LEFT JOIN hosts h ON h.host = p.host WHERE p.day >= ? "
-            "GROUP BY p.host ORDER BY SUM(p.bytes_in+p.bytes_out) DESC LIMIT ?",
-            (since, limit))
+            "LEFT JOIN hosts h ON h.host = p.host WHERE p.day >= ?" + w +
+            " GROUP BY p.host ORDER BY SUM(p.bytes_in+p.bytes_out) DESC LIMIT ?",
+            [since] + a + [limit])
 
-    def new_hosts(self, days=7, limit=25):
-        """Hosts first contacted in the range, with their traffic in it."""
+    def new_hosts(self, days=7, limit=25, iface=""):
+        """
+        Hosts first contacted in the range, with their traffic in it. For one
+        adapter, only hosts that had traffic on it.
+        """
         since_day = self._range_days(days)[0]
         since = datetime.strptime(since_day, "%Y-%m-%d").timestamp()
+        w, a = self._on(iface, "p.iface")
         return self._q(
             "SELECT h.host AS host, h.first_seen AS first_seen, "
             "COALESCE(SUM(p.bytes_in), 0) AS bytes_in, "
             "COALESCE(SUM(p.bytes_out), 0) AS bytes_out FROM hosts h "
-            "LEFT JOIN usage_pairs p ON p.host = h.host AND p.day >= ? "
-            "WHERE h.first_seen >= ? GROUP BY h.host "
-            "ORDER BY h.first_seen DESC LIMIT ?", (since_day, since, limit))
+            "LEFT JOIN usage_pairs p ON p.host = h.host AND p.day >= ?" + w +
+            " WHERE h.first_seen >= ? GROUP BY h.host" +
+            (" HAVING COUNT(p.host) > 0" if iface else "") +
+            " ORDER BY h.first_seen DESC LIMIT ?", [since_day] + a + [since, limit])
 
-    def range_totals(self, days=30):
+    def ifaces(self):
+        """Every adapter History has usage or coverage for, busiest first."""
+        rows = self._q(
+            "SELECT iface, SUM(n) AS n FROM ("
+            "SELECT iface, SUM(bytes_in+bytes_out) AS n FROM usage WHERE iface <> '' "
+            "GROUP BY iface UNION ALL SELECT iface, 0 FROM coverage "
+            "WHERE iface <> '*' GROUP BY iface) GROUP BY iface ORDER BY n DESC, iface")
+        return [r["iface"] for r in rows]
+
+    def range_totals(self, days=30, iface=""):
         """What the range adds up to, read from the same rows as its charts."""
         since = self._range_days(days)[0]
+        w, a = self._on(iface)
         t = self._q("SELECT SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, "
                     "SUM(packets) AS packets, COUNT(DISTINCT CASE WHEN process <> '-' "
-                    "THEN process END) AS programs FROM usage WHERE day >= ?", (since,))
+                    "THEN process END) AS programs FROM usage WHERE day >= ?" + w,
+                    [since] + a)
         n = self._q("SELECT COUNT(DISTINCT host) AS hosts FROM usage_pairs "
-                    "WHERE day >= ? AND host <> ?", (since, OTHER_HOSTS))
+                    "WHERE day >= ? AND host <> ?" + w, [since, OTHER_HOSTS] + a)
         t = t[0] if t else {}
         return {"bytes_in": t.get("bytes_in") or 0, "bytes_out": t.get("bytes_out") or 0,
                 "packets": t.get("packets") or 0, "programs": t.get("programs") or 0,
@@ -1168,13 +1217,16 @@ class HistoryStore:
             "SELECT id, started, ended, iface, packets, version FROM sessions "
             "ORDER BY started DESC LIMIT ?", (limit,))
 
-    def adapters(self, days=30):
-        """Per adapter over the range: seconds captured, missed and ignored."""
+    def adapters(self, days=30, iface=""):
+        """Per adapter over the range: seconds captured and missed."""
         since = self._range_days(days)[0]
+        w, a = self._on(iface)
         out = {}
         for r in self._q("SELECT iface, state, SUM(seconds) AS s FROM coverage "
-                         "WHERE day >= ? AND iface <> '*' GROUP BY iface, state", (since,)):
-            out.setdefault(r["iface"], {"captured": 0, "missed": 0, "ignored": 0})[
+                         "WHERE day >= ? AND iface <> '*'" + w +
+                         " AND state IN ('captured', 'missed') GROUP BY iface, state",
+                         [since] + a):
+            out.setdefault(r["iface"], {"captured": 0, "missed": 0})[
                 r["state"]] = round(r["s"])
         return [dict(iface=k, **v) for k, v in
                 sorted(out.items(), key=lambda kv: -kv[1]["captured"])]

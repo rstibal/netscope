@@ -291,7 +291,8 @@ footer b{font-variant-numeric:tabular-nums;display:inline-block}
 #sAttr{min-width:5ch}                /* 100%      */
 #sDrop{min-width:7ch;color:var(--out)}
 #dropNote{cursor:help}
-#ignNote{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+#histIface{max-width:190px}
+#iface.on,#histIface.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
 #dropNote.dropnow{color:#f0883e}
 #dropNote.droppast{color:var(--dim);font-weight:600}
 
@@ -468,9 +469,6 @@ code.k{color:var(--accent);font-family:var(--mono)}
   background:var(--accent);color:#fff;font:700 11px var(--sans);line-height:20px}
 #findClear:hover{filter:brightness(1.15)}
 .findwrap:has(#find.bad) #findClear{background:#f85149}
-#ifbar .btn-sm{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#ifbar .btn-sm.on{background:var(--accent);border-color:var(--accent);color:#fff;
-  position:relative;z-index:1}
 .fcount{color:var(--dim);font:11px var(--mono);white-space:nowrap;min-width:96px;text-align:right}
 #fhelpbox{padding:9px 14px;background:var(--panel);border-bottom:1px solid var(--line);
   color:var(--dim);font-size:11.5px;line-height:1.8;flex:0 0 auto}
@@ -656,7 +654,7 @@ details.tvw summary:hover{color:var(--accent)}
 
   <div class="spacer"></div>
 
-  <select id="iface" title="Capture interface"></select>
+  <select id="iface" aria-label="Show adapter" title="Show the packets of one adapter. Every adapter is always captured and recorded; this only narrows the table, the Timeline, Search buffer and Export."></select>
   <input type="text" id="bpf" placeholder="BPF filter — e.g. tcp port 443" size="26"
          title="Capture filter applied at the driver, Wireshark syntax">
   <button id="apply">Apply</button>
@@ -681,7 +679,6 @@ back through the table while the capture continues."><input type="checkbox"
     <button id="vTime" class="btn-sm" aria-pressed="false"
             title="One lane per program or host against time: what runs when, and what checks in on a schedule">Timeline</button>
   </span>
-  <span id="ifbar" class="viewsw" role="group" aria-label="Interface" style="display:none"></span>
   <span class="flabel">filter</span>
   <span class="findwrap" id="findwrap">
     <input type="text" id="find" spellcheck="false"
@@ -1284,36 +1281,21 @@ function refilter(){
   tlDraw();
 }
 
-/* ---------------- interface tabs ----------------
-   A segmented group in the filter row, one tab per adapter that has shown a
-   packet. It narrows the same way the filter box does (and the two combine),
-   which is why it sits beside it, and it stays on screen, so nothing is hidden
-   out of sight. It appears once a second adapter is seen and then stays, so
-   it can't pop in and out and slide the filter box around. */
+/* ---------------- adapter filter ----------------
+   The header dropdown narrows the view to one adapter, the same way the
+   filter box does (and the two combine). It never changes what is captured:
+   every adapter is captured and recorded all the time. It used to choose
+   the capture adapter, which read as a filter, and the other adapters went
+   unrecorded for as long as it was left on one. While it is narrowing, it
+   is outlined (and shows the adapter's name) and the count beside the filter
+   box reads "N of M". A note in the status line too wrapped the header. */
 let ifaceTab = '';
 const seenIfaces = new Set();
 
 function noteIface(name){
   if (!name || seenIfaces.has(name)) return;
   seenIfaces.add(name);
-  renderIfBar();
-}
-
-function renderIfBar(){
-  const bar = $('ifbar');
-  if (seenIfaces.size < 2 && !ifaceTab){ bar.style.display = 'none'; return; }
-  bar.style.display = '';
-  const names = [...seenIfaces].sort();
-  bar.innerHTML = [''].concat(names).map(n =>
-    '<button class="btn-sm' + (n === ifaceTab ? ' on' : '') + '" data-if="' + esc(n) +
-    '" aria-pressed="' + (n === ifaceTab) + '" title="' + esc(n || 'Every interface') + '">' +
-    esc(n ? shortIface(n) : 'All') + '</button>').join('');
-  bar.querySelectorAll('[data-if]').forEach(b => b.onclick = () => {
-    ifaceTab = b.dataset.if;
-    if (bufferMode) backToLive();
-    renderIfBar();
-    refilter();
-  });
+  renderIfaceOptions();
 }
 
 function rowVisible(rec){
@@ -2045,6 +2027,7 @@ function detailHtml(d){
 function loadDetail(key){
   const i = key.indexOf('|'), kind = key.slice(0, i), name = key.slice(i + 1);
   return api('/api/history/detail?kind=' + kind + '&days=' + histDays +
+             '&iface=' + encodeURIComponent(histIface) +
              '&name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
     if (!histOpen.has(key) || d.error) return;
     histDet[key] = d;
@@ -2097,6 +2080,21 @@ function tableView(rows, cols){
     '</table></details>';
 }
 
+/* History's own adapter filter, separate from the live one: totals for every
+   adapter by default, one adapter's history when picked. The list is every
+   adapter History has rows for, so one that isn't attached today (the VR
+   router on a day without VR) can still be looked at. */
+let histIface = '';
+function histIfaceSelect(d){
+  const names = (d.ifaces || []).slice();
+  if (d.iface && !names.includes(d.iface)) names.push(d.iface);
+  return '<select id="histIface" class="' + (d.iface ? 'on' : '') + '" aria-label="History adapter" ' +
+    'title="Show the history of one adapter. Usage from before 1.41 has no adapter and counts under All adapters only.">' +
+    '<option value="">All adapters</option>' + names.map(n =>
+      '<option value="' + esc(n) + '"' + (n === d.iface ? ' selected' : '') + '>' +
+      esc(n.slice(0, 40)) + '</option>').join('') + '</select>';
+}
+
 function renderHistory(d){
   if (!d.enabled){
     $('p-history').innerHTML = '<div class="empty">History is off.' +
@@ -2109,7 +2107,7 @@ function renderHistory(d){
   const tot = (rg.bytes_in || 0) + (rg.bytes_out || 0);
   const ex = d.exclude || {programs: [], hosts: []};
   const exN = ex.programs.length + ex.hosts.length;
-  const per = ' · last ' + d.days + ' days';
+  const per = ' · last ' + d.days + ' days' + (d.iface ? ' · ' + d.iface.slice(0, 40) : '');
   // Everything on the tab is for the chosen range; the all-time counters are
   // only how NetScope knows what is new, and no longer shown.
   const exp = daily.reduce((a, r) => a + (r.expected || 0), 0);
@@ -2121,7 +2119,8 @@ function renderHistory(d){
       '" data-days="'+n+'">'+n+'d</button>').join('') +
     '<span style="color:var(--faint);font:11px var(--mono);margin-left:6px">'+
     (s.since ? 'since '+esc(s.since) : 'no data yet')+'</span>' +
-    (exN ? '<a href="#" id="exJump">· '+exN+' not recorded</a>' : '') + '</div>';
+    (exN ? '<a href="#" id="exJump">· '+exN+' not recorded</a>' : '') +
+    '<span style="flex:1"></span>' + histIfaceSelect(d) + '</div>';
 
   if (s.reset_backup)
     h += '<div class="hint" id="histReset" style="margin:0 0 10px">History started over with 1.40. ' +
@@ -2137,26 +2136,25 @@ function renderHistory(d){
     '<div class="kpi"><div class="k">Programs</div><div class="v">'+(rg.programs || 0)+
       '</div><div class="s">'+(rg.hosts || 0)+' hosts</div></div>' +
     '<div class="kpi" id="kpiCov" title="How much of the range NetScope was capturing, from when coverage began. '+
-      'Hover a day in the chart for its own figure."><div class="k">Captured</div><div class="v">'+
+      'The strip under each day in the chart shows the same for that day: full and solid is the whole day, '+
+      'shorter means NetScope was off for part of it, hatched means an adapter with an address was not '+
+      'captured. Hover a day for its figures."><div class="k">Captured</div><div class="v">'+
       (exp ? Math.min(100, Math.round(ran / exp * 100)) + '%' : '—')+'</div><div class="s">'+
       (missed.length ? missed.length + ' adapter' + (missed.length === 1 ? '' : 's') + ' missed'
                      : exp ? 'of ' + esc(span(exp)) : 'not recorded yet')+'</div></div>' +
     '</div>';
 
-  const adapterLine = (d.adapters || []).length > 1 || missed.length || (d.adapters || []).some(x => x.ignored)
-    ? '<div class="adapters" id="histAdapters">' + d.adapters.map(x =>
-        '<span><b>' + esc(x.iface) + '</b> ' + [
-          x.captured ? 'captured ' + span(x.captured) : '',
-          x.missed ? 'missed ' + span(x.missed) : '',
-          x.ignored ? 'ignored ' + span(x.ignored) : ''].filter(Boolean).join(', ') + '</span>')
-        .join(' · ') + '</div>' : '';
+  // Only what wasn't captured: with every adapter captured all the time, a
+  // line per adapter saying so was noise.
+  const adapterLine = missed.length
+    ? '<div class="adapters" id="histAdapters">Not captured: ' + missed.map(x =>
+        '<span><b>' + esc(x.iface) + '</b> ' + esc(span(x.missed)) + '</span>').join(' · ') +
+      '</div>' : '';
 
   h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
        '<div class="chartwrap" id="cw-daily">' + dailyChart(daily) +
        '<div class="tip" id="tip-daily"></div></div>' +
-       '<div class="hint" style="margin:2px 0 0">The strip under each day is how much of it was ' +
-       'captured: full and solid is the whole day on every adapter, hatched means an adapter with an ' +
-       'address wasn\'t being captured.</div>' + adapterLine +
+       adapterLine +
        tableView(daily, [
          {h:'Day', f:r=>r.day},
          {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
@@ -2277,6 +2275,7 @@ function renderHistory(d){
 
   document.querySelectorAll('#p-history [data-days]').forEach(b =>
     b.onclick = () => { histDays = Number(b.dataset.days); refreshTab('history'); });
+  $('histIface').onchange = e => { histIface = e.target.value; refreshTab('history'); };
   $('p-history').querySelectorAll('[data-exdel]').forEach(b =>
     b.onclick = () => removeExclusion(b.dataset.exdel, b.dataset.pat));
   $('exAdd').onclick = () => addExclusion($('exKind').value, $('exPat').value);
@@ -3858,10 +3857,6 @@ function renderStatus(st){
             : 'capturing on <b>' + esc(st.iface || '?') + '</b>');
   else txt = 'stopped';
   if (st.filter) txt += ' · filter <b>' + esc(st.filter) + '</b>';
-  const ign = st.ignored_ifaces || [];
-  if (ign.length && !st.source)
-    txt += ' · <b id="ignNote" role="button" tabindex="0" title="Not captured: ' +
-           esc(ign.join(', ')) + '. Click to change.">' + ign.length + ' ignored</b>';
   if (!st.demo && !st.admin) txt += ' · <b style="color:#f0883e">not elevated</b>';
   // Losing packets invalidates every count on the page, so it is said here
   // rather than left to a number in the footer nobody is looking at.
@@ -3877,7 +3872,6 @@ function renderStatus(st){
         : 'dropped ' + cap.loss_pct + '% earlier') + '</b>';
   }
   $('statusText').innerHTML = txt;
-  syncIface(st);
   announceNewIfaces(st);
   $('toggle').textContent = st.running ? 'Stop' : 'Start';
   $('toggle').classList.toggle('on', !st.running);
@@ -4020,7 +4014,7 @@ function loadHistory(auto){
   if (auto && histInflight) return Promise.resolve();
   const seq = ++histSeq;
   histInflight++;
-  return api('/api/history?days='+histDays).then(r=>r.text()).then(t => {
+  return api('/api/history?days='+histDays+'&iface='+encodeURIComponent(histIface)).then(r=>r.text()).then(t => {
     if (seq !== histSeq) return;
     const key = t + JSON.stringify((lastStatus && lastStatus.autostart) || null);
     if (auto && (key === histSeen || document.querySelector('#p-history .tip.on') || histSelecting())) return;
@@ -4125,11 +4119,10 @@ function showTab(name){
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => showTab(t.dataset.p));
 
-$('apply').onclick = () => control({action:'restart', iface:$('iface').value, filter:$('bpf').value});
+$('apply').onclick = () => control({action:'restart', filter:$('bpf').value});
 $('toggle').onclick = () => {
   const starting = $('toggle').textContent === 'Start';
-  control(starting ? {action:'start', iface:$('iface').value, filter:$('bpf').value}
-                   : {action:'stop'});
+  control(starting ? {action:'start', filter:$('bpf').value} : {action:'stop'});
 };
 $('clear').onclick = () => {
   control({action:'clear'});
@@ -4199,30 +4192,37 @@ try{
   if (t) document.documentElement.dataset.theme = t;
 }catch(e){}
 
-let ifaceList = [], ignoredIfaces = [];
+/* The options are every adapter the OS lists plus any a packet has come
+   from (an imported file's, or one that has since gone away), so a filter
+   that is on can always be seen and switched off. */
+let ifaceList = [];
+function renderIfaceOptions(){
+  const sel = $('iface');
+  if (document.activeElement === sel) return;      // don't shut it under the pointer
+  const names = ifaceList.map(i => i.name);
+  const extra = [...seenIfaces].filter(n => !names.includes(n));
+  if (ifaceTab && !names.includes(ifaceTab) && !extra.includes(ifaceTab)) extra.push(ifaceTab);
+  sel.innerHTML = '<option value="">All adapters</option>' +
+    ifaceList.map(i => '<option value="'+esc(i.name)+'">'+esc((i.description||i.name).slice(0,44)) +
+      (i.ip ? '  ('+esc(i.ip)+')' : '') + '</option>').join('') +
+    extra.map(n => '<option value="'+esc(n)+'">'+esc(n.slice(0,44))+'</option>').join('');
+  sel.value = ifaceTab;
+  sel.classList.toggle('on', !!ifaceTab);
+}
 function loadInterfaces(){
   return api('/api/interfaces').then(r=>r.json()).then(d => {
-    const sel = $('iface');
     ifaceList = d.interfaces || [];
-    ignoredIfaces = d.ignored || [];
-    sel.innerHTML = '<option value="all">All active interfaces' +
-      (ignoredIfaces.length ? ' but ' + ignoredIfaces.length + ' ignored' : '') + '</option>' +
-      ifaceList.map(i =>
-        '<option value="'+esc(i.name)+'">'+esc((i.description||i.name).slice(0,44)) +
-        (i.ip ? '  ('+esc(i.ip)+')' : '') +
-        (ignoredIfaces.includes(i.name) ? ' — ignored' : '') + '</option>').join('') +
-      '<option disabled>──────────</option>' +
-      '<option value="__ignore">Ignore adapters…</option>';
-    sel.value = (d.spec === 'all') ? 'all'
-              : ((d.active && d.active.length === 1) ? d.active[0] : (d.current || 'all'));
-    sel.dataset.prev = sel.value;
+    renderIfaceOptions();
   }).catch(()=>{});
 }
+function setIfaceFilter(name){
+  ifaceTab = name || '';
+  if (bufferMode) backToLive();
+  renderIfaceOptions();
+  refilter();
+}
+$('iface').addEventListener('change', e => setIfaceFilter(e.target.value));
 
-/* Keep the selector honest. It used to be set once at page load, so switching
-   the capture interface from anywhere else left the dropdown showing the old
-   adapter — and pressing Apply would then move capture to that stale choice.
-   Never touched while the user has the control focused. */
 /* Adapters attached to a running capture are worth saying out loud: the
    capture silently covering more than it did a minute ago is good news, but
    only if you know it happened. Each is announced once. */
@@ -4235,76 +4235,6 @@ function announceNewIfaces(st){
     loadInterfaces();
   }
 }
-
-function syncIface(st){
-  const sel = $('iface');
-  if (document.activeElement === sel) return;
-  const want = st.multi ? 'all'
-             : ((st.ifaces && st.ifaces.length === 1) ? st.ifaces[0] : st.iface);
-  if (!want || sel.value === want) return;
-  if (Array.from(sel.options).some(o => o.value === want)) sel.value = sel.dataset.prev = want;
-  else loadInterfaces();
-}
-
-/* Ignoring an adapter keeps it out of "All active interfaces" for good,
-   including each time it reconnects: a VR headset's dedicated router moves
-   more than everything else together, fills the buffer and the History with
-   it, and costs capture time. The choice lives on the server (ignore_ifaces)
-   and the header says how many are ignored, so it is never out of sight.
-   Picking an ignored adapter by name still captures it. */
-function ifaceLabel(name){
-  const i = ifaceList.find(x => x.name === name);
-  if (!i) return name + ' (not attached now)';
-  const d = i.description && i.description !== i.name ? i.description : '';
-  return i.name + (d && !d.startsWith(i.name) ? ' · ' + d.slice(0, 40) : '') +
-         (i.ip ? '  (' + i.ip + ')' : '');
-}
-function setIgnored(names, msg){
-  return api('/api/control', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'ignore_ifaces', ignore: names})})
-    .then(r => r.json()).then(d => {
-      if (d.status) renderStatus(d.status);
-      if (d.error){ flash(d.error); return; }
-      flash(msg);
-      return loadInterfaces();
-    }).catch(() => flash('Could not change the ignored adapters.'));
-}
-function openIgnoreMenu(x, y){
-  const usable = ifaceList.filter(i => i.ip && !i.ip.startsWith('127.')).map(i => i.name);
-  const names = usable.concat(ignoredIfaces.filter(n => !usable.includes(n)));
-  const items = names.map(n => ignoredIfaces.includes(n)
-    ? ['Capture again: ' + ifaceLabel(n),
-       () => setIgnored(ignoredIfaces.filter(m => m !== n), 'capturing ' + n + ' again')]
-    : ['Ignore ' + ifaceLabel(n),
-       () => setIgnored(ignoredIfaces.concat([n]), 'ignoring ' + n)]);
-  if (!items.length) items.push(['No adapters with an address right now', () => {}]);
-  const all = $('iface').value === 'all';
-  showRowMenu(items, 'An ignored adapter is not captured under All active interfaces, ' +
-    'now or when it reconnects, and nothing from it reaches History. Picking it by name ' +
-    'in this list still captures it.' +
-    (all ? '' : ' Takes effect once you capture on All active interfaces.'),
-    x, y);
-}
-$('iface').addEventListener('focus', e => { e.target.dataset.prev = e.target.value; });
-$('iface').addEventListener('change', e => {
-  const sel = e.target;
-  if (sel.value !== '__ignore'){ sel.dataset.prev = sel.value; return; }
-  sel.value = sel.dataset.prev || 'all';
-  const r = sel.getBoundingClientRect();
-  sel.blur();
-  openIgnoreMenu(r.left, r.bottom + 2);
-});
-$('statusText').addEventListener('keydown', e => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.id === 'ignNote'){
-    e.preventDefault(); e.target.click(); }
-});
-$('statusText').addEventListener('click', e => {
-  const b = e.target.closest && e.target.closest('#ignNote');
-  if (!b) return;
-  e.stopPropagation();
-  const r = b.getBoundingClientRect();
-  openIgnoreMenu(r.left, r.bottom + 2);
-});
 
 loadInterfaces();
 

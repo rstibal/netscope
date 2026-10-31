@@ -322,29 +322,32 @@ the tab follows the 7/30/90-day choice and comes from the hourly rows (`usage`,
 `usage_pairs`). The `processes`/`hosts` byte counters are no longer shown; those
 tables exist only for first-seen ("is this new?"). By host used to read them
 and showed all time beside a 7-day chart. `coverage` records seconds per hour
-per adapter: captured, missed (has an address, not captured, not ignored) or
-ignored, plus `*`/`running`. It is fed from `coverage_now()` on the writer's
+per adapter: captured or missed (has an address, not captured), plus
+`*`/`running`. It is fed from `coverage_now()` on the writer's
 10 s beat. Without it, a day with the dropdown on one adapter is
 indistinguishable from a quiet day. Rob hit exactly that. Usage from before
 1.40 was erased once (`user_version` 2, the file copied to `.before-1.40`
 first) at Rob's choice. Unattributed traffic (`-`) gets `usage_pairs` rows
 now, so By host doesn't lose it.
 
-**Ignoring an adapter means not capturing it (1.39).** Asked for to keep a
-VR headset's dedicated router out of History; capturing it and only skipping
-History was offered and declined. Its traffic would still cost capture time and
-push everything else out of the ring buffer. `ignore_ifaces` (settings, by
-adapter name) is applied in `resolve_ifaces()` to "all"/default only, so
-the watcher never re-attaches it. Naming an ignored adapter still captures it.
-The status line's "N ignored" keeps it on screen, as with hidden packets.
-Ignoring every adapter that has an address is refused.
+**Every adapter is always captured; the header dropdown only filters the view
+(1.41).** The dropdown used to choose the capture adapter. Rob took it for a
+view filter and left it on one adapter for days, so the others went unrecorded.
+An "ignore this adapter" setting (1.39) was built for his VR router and
+removed in 1.41: he wants the VR days in History, just filterable. So the
+page never sends an adapter, `start`/`restart` reuse the engine's `--iface`
+spec, and the saved `iface` setting is not read. Don't add capture choice back
+to the page. The dropdown sets `ifaceTab`, which `rowVisible()` checks first,
+so the Timeline, Search buffer and Export follow it. It replaced the
+adapter tabs in the filter row: two controls for one filter. While it narrows,
+it is outlined and shows the adapter; a status-line note as well wrapped the
+header onto two lines.
 
-**Interface tabs narrow the table the way the filter does, and combine with
-it.** `rowVisible()` checks `ifaceTab` first, so the Timeline and "Search
-buffer" follow it too. The tabs sit in the filter row beside the box (since
-1.33.2; they were a strip above the table), on screen, so what is hidden is still
-visible. They appear once a second adapter has been seen and then stay, so they
-can't pop in and out and slide the filter box around.
+**History is per adapter (1.41).** `usage` and `usage_pairs` key on `iface`
+(rebuilt from 1.40 tables with `iface = ''`, which counts under All only).
+History's own adapter dropdown is separate from the live one and passes
+`iface` to every query; empty means all. Its list is `HistoryStore.ifaces()`:
+every adapter with usage or coverage, attached or not.
 
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.

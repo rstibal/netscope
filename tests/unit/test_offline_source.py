@@ -90,8 +90,8 @@ try:
     st = control(action="start", iface="eth0")
     check("Start after an import leaves offline mode",
           st["source"] is None and st["running"], str(st["source"]))
-    check("the chosen adapter goes to the App's settings, not the real file",
-          saved.get("iface") == "eth0", str(saved))
+    check("the page can't change which adapters are captured, or save one (1.41)",
+          "iface" not in saved, str(saved))
 
     post("/api/import?name=again.pcap", pcap, "application/octet-stream")
     st = control(action="restart", iface="eth0")

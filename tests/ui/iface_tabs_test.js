@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
 
-// The Table view gets a tab per adapter, and the Alerts pane stops redrawing
+// The header dropdown filters the view by adapter, and the Alerts pane stops redrawing
 // under the pointer (a new alert used to slide Mute under a click aimed at
 // "Why did this fire?").
 (async () => {
@@ -19,30 +19,16 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
       $('rows').appendChild(tr);
     }
   });
-  const bar = () => p.evaluate(() => ({shown: $('ifbar').style.display !== 'none',
-                                       labels: [...$('ifbar').children].map(x => x.textContent)}));
-  const bb = await bar();
-  check('the strip appears with two adapters', bb.shown && bb.labels[0] === 'All' && bb.labels.length >= 3, JSON.stringify(bb));
-
-  // The tabs sit in the filter row, right after Table/Timeline and before the box.
-  const lay = await p.evaluate(() => {
-    const r = id => $(id).getBoundingClientRect();
-    return {inRow: $('ifbar').parentElement.id, ifL: r('ifbar').left, viewR: r('vTime').right,
-            findL: r('find').left, ifR: r('ifbar').right, top: r('ifbar').top, findTop: r('find').top};
-  });
-  check('the tabs live in the filter row', lay.inRow === 'filterbar', lay.inRow);
-  check('...between the view switch and the filter box',
-        lay.ifL >= lay.viewR && lay.ifR <= lay.findL && Math.abs(lay.top - lay.findTop) < 12, JSON.stringify(lay));
-
-  // Neighbours overlap by a pixel; the hovered one must sit on top, or the
-  // next button covers the right edge of its hover outline.
-  await p.hover('#ifbar [data-if="Alpha NIC"]');
-  const edge = await p.evaluate(() => {
-    const b = document.querySelector('#ifbar [data-if="Alpha NIC"]'), r = b.getBoundingClientRect();
-    return document.elementFromPoint(r.right - 0.5, r.top + r.height / 2) === b;
-  });
-  check('a hovered tab keeps its whole outline', edge);
-  await p.mouse.move(5, 5);
+  // The header dropdown is the adapter filter (1.41): it lists them, and
+  // choosing one never touches the capture.
+  const opts = await p.$$eval('#iface option', o => o.map(x => [x.value, x.textContent]));
+  check('the dropdown offers All adapters and each adapter seen',
+        opts[0][0] === '' && /All adapters/.test(opts[0][1]) &&
+        opts.some(o => o[0] === 'Alpha NIC') && opts.some(o => o[0] === 'Beta NIC'), JSON.stringify(opts));
+  check('the old adapter tabs are gone', !(await p.$('#ifbar')));
+  const capturing = await p.evaluate(() => lastStatus.iface);
+  let posted = [];
+  p.on('request', r => { if (r.url().includes('/api/control')) posted.push(r.postData()); });
 
   // The clear button sits inside the box's right end, and the box is marked while a filter is on.
   await p.fill('#find', 'proto == TCP');
@@ -60,17 +46,25 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 
   const vis = () => p.evaluate(() => [...$('rows').children].filter(t => t.style.display !== 'none').length);
   const seqVis = s => p.evaluate(s => { const t = $('rows').querySelector('tr[data-seq="'+s+'"]'); return t.style.display !== 'none'; }, s);
-  await p.click('#ifbar [data-if="Beta NIC"]');
-  check('a tab shows only its adapter', await seqVis(900002) && await seqVis(900003) && !await seqVis(900001));
+  await p.selectOption('#iface', 'Beta NIC');
+  check('choosing an adapter shows only its packets', await seqVis(900002) && await seqVis(900003) && !await seqVis(900001));
   check('...and the count says so', /of/.test(await p.textContent('#fcount')));
+  check('...the dropdown is outlined while it narrows', await p.$eval('#iface', s => s.classList.contains('on')));
+  await p.waitForTimeout(1500);
+  check('...and the capture is not touched', posted.length === 0 &&
+        await p.evaluate(() => lastStatus.iface) === capturing, JSON.stringify(posted));
 
   // It combines with the filter box.
   await p.fill('#find', 'seq == 900003');
   check('...and combines with the filter box', await vis() === 1, String(await vis()));
   await p.fill('#find', '');
 
-  await p.click('#ifbar [data-if=""]');
-  check('All shows everything again', await seqVis(900001) && await seqVis(900002));
+  await p.selectOption('#iface', '');
+  check('All adapters shows everything again', await seqVis(900001) && await seqVis(900002));
+  check('...and the outline goes', await p.$eval('#iface', s => !s.classList.contains('on')));
+  await p.click('#apply');
+  await p.waitForTimeout(500);
+  check('Apply sends no adapter', posted.length === 1 && !/iface/.test(posted[0]), JSON.stringify(posted));
 
   // The Alerts pane waits while the pointer is over it.
   await p.click('.tab[data-p="alerts"]');

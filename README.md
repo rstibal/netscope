@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.40.0**
+**Version 1.41.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -175,24 +175,19 @@ left alone: attaching one you did not ask for would be wrong.
 **Capturing more than one adapter is the default.** NetScope captures every
 adapter that has an address, merging them into one packet list — picking a
 single adapter and hoping it is the busy one is how you end up watching an
-empty capture while the traffic goes past on the other NIC. Choose a specific
-adapter in the dropdown if you want one, and that choice is remembered for next
-launch. `--iface auto` reverts to just the primary adapter. The
-**Iface** column says where each packet was seen, and `iface` is a filter field
-(`iface == Wi-Fi`). If one adapter fails to open, the others still capture and
-the status line says which failed.
+empty capture while the traffic goes past on the other NIC. Only the command
+line narrows it: `--iface "Wi-Fi"`, `--iface "a,b"`, or `--iface auto` for just
+the primary adapter. The **Iface** column says where each packet was seen, and
+`iface` is a filter field (`iface == Wi-Fi`). If one adapter fails to open, the
+others still capture and the status line says which failed.
 
-**Ignoring an adapter.** Some adapters carry traffic you don't want watched,
-such as a dedicated router for a VR headset that streams far more than
-everything else together. **Ignore adapters…** at the bottom of the adapter
-dropdown lists each adapter that has an address. An ignored adapter is not
-captured under **All active interfaces**, now or when it reconnects. Nothing
-from it reaches the packet table, the Timeline or History, and it costs no
-capture time. The status line says how many are ignored (hover for their
-names; click to change it), and the dropdown marks them. Picking an ignored
-adapter by name in the dropdown still captures it. NetScope refuses to ignore
-every adapter that has an address. The list is kept in `settings.json` as
-`ignore_ifaces`, by adapter name, so renaming an adapter in Windows undoes it.
+**Showing one adapter.** The adapter dropdown in the header filters what you
+see; it never changes what is captured or recorded. Pick an adapter and the
+table, the Timeline, **Search buffer** and **Export** show only its packets.
+The dropdown stays outlined, and the count beside the filter box reads "N of
+M packets", until you set it back to **All adapters**. It combines with the filter box.
+Before 1.41 this dropdown chose the capture adapter, so leaving it on one
+adapter stopped the others being captured and recorded.
 
 **Choosing columns.** Every column is shown by default. **Columns** in the
 filter bar hides any of them except Info, which always stays because it takes
@@ -586,8 +581,8 @@ totals, the daily chart, **By program**, **By host** and the hosts first
 contacted in it. Nothing on the tab is "all time".
 
 **What was being watched.** History can only hold what was captured. If
-capture was stopped, NetScope wasn't running, or the adapter dropdown was on
-one adapter while others had traffic, that time is missing. It isn't
+capture was stopped, NetScope wasn't running, or an adapter failed to open,
+that time is missing. It isn't
 quiet. The **Captured** figure says how much of the period NetScope was
 capturing. Under each day of the chart, a strip shows the same for that day:
 - full and solid: the whole day on every adapter
@@ -595,9 +590,20 @@ capturing. Under each day of the chart, a strip shows the same for that day:
 - hatched: an adapter with an address wasn't being captured
 - no strip: before this was recorded (1.40)
 
-Hover a day for the exact time and which adapter was missed for how long. The
-line under the chart lists each adapter's captured, missed and ignored time.
-An ignored adapter (see *Ignoring an adapter*) is a choice, not a gap.
+Hover a day for the exact time and which adapter was missed for how long. When
+an adapter was missed in the period, a line under the chart names it and for how
+long; when nothing was, there is no line. Hover **Captured** for what the strip
+means.
+
+**One adapter's history.** History records every adapter separately, and
+the adapter dropdown at the top right of the tab shows one of them. By
+default it shows **All adapters**, with totals for everything. Pick one and
+every figure, chart, list and detail on the tab is for that adapter alone, so
+a router that only carries a VR headset shows exactly the days it was used.
+The list holds every adapter History has rows for, including ones that aren't
+attached right now. This filter is separate from the live one in the header.
+Usage recorded before 1.41 has no adapter, so it counts under **All adapters**
+only.
 
 The tab shows the totals, the daily chart, By program, By host and first
 contacts. **More**, folded at the bottom, holds the **busy hours** heatmap, how
@@ -966,9 +972,11 @@ something with administrator rights and a packet driver behind it.
 it's installed without the WinPcap compatibility layer. Reinstall from
 npcap.com with the default options.
 
-**Capture starts but no packets arrive** — you're probably on the wrong
-interface. Use the dropdown in the header, or run `NetScope.exe --list` to see
-what's available with IPs attached, then pick the one carrying your traffic.
+**Capture starts but no packets arrive** — if NetScope was started with
+`--iface`, it may be the wrong interface. Run `NetScope.exe --list` to see
+what's available with IPs attached, then start without `--iface` to capture
+them all. Check too that the adapter dropdown in the header is on **All
+adapters**.
 
 **Every process shows as `-`** — the app isn't elevated. Right-click →
 Run as administrator.
@@ -991,6 +999,19 @@ names.
 ---
 
 ## Version history
+
+**1.41.0** — **Every adapter, always; filter what you look at.**
+- **The header dropdown filters the view; it no longer chooses what is
+  captured.** NetScope captures and records every adapter all the time. Pick
+  one to see only its packets in the table, the Timeline, Search buffer and
+  Export. The dropdown is outlined while it narrows. The adapter tabs beside
+  the filter box are gone, since the dropdown does the same job.
+- **History by adapter.** Usage is recorded per adapter, and a dropdown on the
+  History tab shows one adapter's history, or all of them by default.
+- **Ignore adapters… is removed.** It stopped an adapter being captured at
+  all, which also lost its history.
+- The adapter saved by the old dropdown is no longer read at startup. Only
+  `--iface` narrows the capture.
 
 **1.40.0** — **History, simplified, and honest about gaps.**
 - **One period for the whole tab.** By host used to show all-time totals

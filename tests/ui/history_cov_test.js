@@ -6,7 +6,8 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 // strip has every case: before coverage, a full day, a part day, a day with an
 // adapter missed.
 const G = Math.pow(1024,3);
-function history(){
+let asked = [];
+function history(iface){
   const daily = [];
   for (let i = 0; i < 7; i++){
     const r = {day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:G, bytes_out:G/4, packets:10,
@@ -15,13 +16,13 @@ function history(){
     if (i === 5) r.missed = {'Wi-Fi': 21600};
     daily.push(r);
   }
-  return {enabled:true, days:7, daily, hosts:[{host:'a.example', bytes_in:G, bytes_out:1, packets:1, first_seen:1.8e9}],
+  return {enabled:true, days:7, iface: iface || '', ifaces:['VR', 'Ethernet', 'Wi-Fi'], daily, hosts:[{host:'a.example', bytes_in:G, bytes_out:1, packets:1, first_seen:1.8e9}],
           new_hosts:[], sessions:[{started:1.8e9, iface:'Ethernet', version:'1.40.0', packets:9}],
           processes:[{name:'chrome.exe', bytes_in:G, bytes_out:1, packets:1}],
           range:{bytes_in:3*G, bytes_out:G, packets:40, programs:3, hosts:7},
-          adapters:[{iface:'Ethernet', captured:5*86400, missed:0, ignored:0},
-                    {iface:'Wi-Fi', captured:0, missed:21600, ignored:0},
-                    {iface:'VR', captured:0, missed:0, ignored:5*86400}],
+          adapters:[{iface:'Ethernet', captured:5*86400, missed:0},
+                    {iface:'Wi-Fi', captured:0, missed:21600},
+                    {iface:'VR', captured:5*86400, missed:0}],
           alert_counts:{total:2, high:0, warn:2, info:0, newest:2},
           exclude:{programs:[],hosts:[]}, week_hours:{cells:Array.from({length:7},()=>Array.from({length:24},()=>[1,1])), counts:[1,1,1,1,1,1,1]},
           summary:{bytes_in:99*G, bytes_out:G, packets:1, processes:50, hosts:500, size:1024, retain_days:90,
@@ -38,7 +39,11 @@ function history(){
         live && (!live.enabled || (live.range && Array.isArray(live.adapters) && live.daily[0].expected !== undefined)),
         JSON.stringify(live && Object.keys(live)));
 
-  await p.route('**/api/history?*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(history())}));
+  await p.route('**/api/history?*', r => {
+    const ifc = new URL(r.request().url()).searchParams.get('iface');
+    asked.push(ifc);
+    r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(history(ifc))});
+  });
   await p.goto(process.argv[2]);
   await p.waitForSelector('#cw-daily svg', {timeout: 30000});
 
@@ -61,7 +66,10 @@ function history(){
   check('a part day has a shorter strip', t.fills[2].w < t.fills[0].w * 0.6, JSON.stringify(t.fills));
   check('a day with an adapter missed is hatched, the others solid',
         t.fills[3].hatch && t.fills.filter(f => f.hatch).length === 1, JSON.stringify(t.fills));
-  check('each adapter\'s coverage is listed', /Wi-Fi missed 6 h/.test(t.adapters) && /VR ignored 5 d/.test(t.adapters), t.adapters);
+  check('only adapters that were missed are listed', /Not captured: Wi-Fi 6 h/.test(t.adapters) && !/Ethernet|VR/.test(t.adapters), t.adapters);
+  check('the strip is explained on the Captured figure, not in the page',
+        await p.evaluate(() => /strip under each day/.test($('kpiCov').title) &&
+          ![...document.querySelectorAll('#p-history .hint')].some(h => /strip under each day/.test(h.textContent))));
   check('the reset is explained', t.reset);
   check('More is folded at first', t.moreOpen === false);
   check('busy hours, alerts and sessions are inside it',
@@ -84,6 +92,26 @@ function history(){
   await p.waitForTimeout(300);
   check('More stays open across a refresh', await p.evaluate(() => $('histMore').open));
   check('the VPN erase button is gone', !(await p.$('#histVpn')));
+
+  // History's own adapter filter: every adapter by default, one when picked.
+  const hopts = await p.$$eval('#histIface option', o => o.map(x => x.value));
+  check('History lists every adapter it has, after All adapters',
+        hopts.join() === ',VR,Ethernet,Wi-Fi', hopts.join());
+  check('...and asks for all of them by default', asked.every(a => a === ''), asked.join());
+  await p.selectOption('#histIface', 'VR');
+  await p.waitForFunction(() => document.querySelector('#p-history h4') &&
+    /· VR/.test(document.querySelector('#p-history h4').textContent));
+  check('picking one asks for that adapter', asked[asked.length - 1] === 'VR', asked.join());
+  check('...says so in each heading', await p.evaluate(() =>
+    ['Daily traffic', 'By program', 'By host'].every(n =>
+      [...document.querySelectorAll('#p-history h4')].some(h => h.textContent.startsWith(n) && /· VR/.test(h.textContent)))));
+  check('...keeps the choice across a refresh, outlined', await p.evaluate(async () => {
+    histSeen = ''; await loadHistory(true);
+    return $('histIface').value === 'VR' && $('histIface').classList.contains('on'); }));
+  check('...and is separate from the live filter', await p.$eval('#iface', s => s.value) === '');
+  await p.selectOption('#histIface', '');
+  await p.waitForFunction(() => $('histIface').value === '' && !$('histIface').classList.contains('on'));
+  check('All adapters goes back to the totals', asked[asked.length - 1] === '');
 
   check('no page errors', errs.length===0, errs.join(' | '));
   console.log('\nFAILED:', fails.length?fails:'none');

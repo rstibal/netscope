@@ -15,7 +15,8 @@ h = H.HistoryStore(path=os.path.join(tmp, "h.db"))
 
 def put(day, hour, bi, bo=0, proc="p.exe"):
     with h._db_lock:
-        h._db.execute("INSERT INTO usage VALUES (?,?,?,?,?,?) ON CONFLICT(day,hour,process) "
+        h._db.execute("INSERT INTO usage(day,hour,process,bytes_in,bytes_out,packets) "
+                      "VALUES (?,?,?,?,?,?) ON CONFLICT(day,hour,process,iface) "
                       "DO UPDATE SET bytes_in=bytes_in+excluded.bytes_in, "
                       "bytes_out=bytes_out+excluded.bytes_out",
                       (day.strftime("%Y-%m-%d"), hour, proc, bi, bo, 1))
