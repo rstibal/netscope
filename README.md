@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.36.0**
+**Version 1.37.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -660,7 +660,10 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
   every program on the machine would fire at once.
 - **First contact with a host** — off by default; on a busy machine it is very
   chatty.
-- **Bandwidth threshold** — a program crosses N MB in a session. Default 500.
+- **Bandwidth threshold** — a program moves more than N MB within an hour.
+  Default 500. It can fire again once the program has dropped back under it
+  (a repeat adds to the same alert's count). Until 1.37 it was N MB per
+  session, which from the logon task meant each program fired once, ever.
   A VPN client is not credited with the encrypted copy of what it tunnels;
   that traffic counts against the programs inside the tunnel.
 - **Credentials in the clear** — HTTP Basic auth, a password field posted over
@@ -942,6 +945,18 @@ names.
 ---
 
 ## Version history
+
+**1.37.0** — **Alerts say more of what they mean.**
+- **The bandwidth threshold is per hour.** It was per session, and a session
+  started by the logon task lasts days, so each program crossed it once and
+  never again. Now it counts the last hour; a program that drops back under
+  can fire again (into the same alert's count). Same setting, same 500 MB
+  default.
+- **FTP or POP3.** A cleartext USER/PASS alert used to say "FTP/POP3"; it now
+  names the one the port says.
+- **Host names, not bare addresses.** Cleartext, certificate, new-program and
+  port-scan alerts name the host when NetScope knows it, with the address in
+  brackets: `legacy-ftp.example.com (203.0.113.77)`.
 
 **1.36.0** — **End a connection without blocking it.** An open IPv4 TCP
 connection's Block menu now starts with *End this connection*, which has

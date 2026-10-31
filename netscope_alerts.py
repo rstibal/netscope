@@ -6,7 +6,7 @@ Two families:
 
 *Change* rules notice things that are new: a process using the network for the
 first time, a host you have never contacted before, a program crossing a
-bandwidth threshold.
+bandwidth threshold in an hour.
 
 *Insecure transport* rules notice things that should not be happening at all:
 credentials in the clear, protocols with no encryption, certificates that are
@@ -64,7 +64,8 @@ CLEARTEXT_PORTS = {
 }
 
 CRED_PATTERNS = [
-    # (regex, protocol label, what it caught)
+    # (regex, protocol label, what it caught). USER and PASS are both FTP's
+    # and POP3's; _cred_proto() names the one by port.
     (re.compile(rb"^USER\s+(\S+)", re.I | re.M), "FTP/POP3", "username"),
     (re.compile(rb"^PASS\s+(\S+)", re.I | re.M), "FTP/POP3", "password"),
     # IMAP commands carry a client tag ("a1 LOGIN rob hunter2"), so allow it.
@@ -90,8 +91,9 @@ RULE_WHY = {
                    "skipped until it can.",
     "new_host": "Fires the first time this machine contacts a remote host. Off "
                 "by default — on a busy machine it is very chatty.",
-    "threshold": "Fires when one program crosses the bandwidth threshold set "
-                 "below, counted per program since NetScope started. A VPN "
+    "threshold": "Fires when one program moves more than the bandwidth "
+                 "threshold set below within an hour. It can fire again "
+                 "once the program has dropped back under it. A VPN "
                  "client is not credited with the encrypted copy of the "
                  "traffic it tunnels; that counts against the programs "
                  "inside the tunnel.",
@@ -160,6 +162,30 @@ RULE_WHY = {
 
 def _now():
     return time.time()
+
+
+def _cred_proto(label, ports):
+    """FTP or POP3 for a USER/PASS line, from the port it crossed."""
+    if label != "FTP/POP3":
+        return label
+    if 21 in ports and 110 not in ports:
+        return "FTP"
+    if 110 in ports and 21 not in ports:
+        return "POP3"
+    return label
+
+
+def peer_label(rec):
+    """
+    The remote end as a person reads it: its name with the address in
+    brackets when one is known, else the address. Alert keys stay on the
+    address, so a name learned later doesn't make a second alert.
+    """
+    ip = (rec or {}).get("remote") or ""
+    name = (rec or {}).get("rhost") or ""
+    if name and ip and name != ip:
+        return "%s (%s)" % (name, ip)
+    return name or ip
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +391,11 @@ class AlertEngine:
         self.dns_by_iface = {}
         self._dns_read = 0.0
         self.process_bytes = {}
+        # Per program, the last hour by the minute: [total, deque[[minute, bytes]]].
+        # The threshold is per hour, not per session: from the logon task a
+        # session lasts days, and a per-session count fired once per program
+        # ever and then never again.
+        self._hourly = {}
         self._threshold_fired = set()
         self._scan_inbound = {}     # remote peer -> deque[(ts, dport)]
         self._scan_outbound = {}    # process -> deque[(ts, (peer, dport))]
@@ -628,6 +659,7 @@ class AlertEngine:
         self.seen_processes.clear()
         self.seen_hosts.clear()
         self.process_bytes.clear()
+        self._hourly.clear()
         self._threshold_fired.clear()
         self._scan_inbound.clear()
         self._scan_outbound.clear()
@@ -742,7 +774,7 @@ class AlertEngine:
                                    "Program started using the network",
                                    f"{proc} used the network for the first "
                                    f"time this session "
-                                   f"({rec.get('remote','')})", rec)
+                                   f"({peer_label(rec)})", rec)
                 elif not self.history.known_process(proc):
                     self.history.note_process(proc)
                     if not self.baselining:     # baseline: record, stay quiet
@@ -750,7 +782,7 @@ class AlertEngine:
                                    "New program on the network",
                                    f"{proc} has never used the network on "
                                    f"this machine before (now talking to "
-                                   f"{rec.get('rhost') or rec.get('remote','')})",
+                                   f"{peer_label(rec)})",
                                    rec)
                 # A program the history already knows is silent: a note for
                 # each one after every restart only buried the warnings.
@@ -760,18 +792,21 @@ class AlertEngine:
             # The VPN client is credited with the encrypted outer copy of
             # everything tunnelled, so it always crossed the threshold. The
             # inner packets are counted against the programs that sent them.
-            total = self.process_bytes.get(proc, 0)
-            if not rec.get("tunnel_outer"):
-                total += size
-            self.process_bytes[proc] = total
+            counted = 0 if rec.get("tunnel_outer") else size
+            self.process_bytes[proc] = self.process_bytes.get(proc, 0) + counted
+            hour = self._add_hourly(proc, counted, rec.get("ts") or _now())
             if self.rules["threshold"]:
                 limit = self.threshold_mb * 1024 * 1024
-                if total > limit and proc not in self._threshold_fired:
+                if hour > limit and proc not in self._threshold_fired:
                     self._threshold_fired.add(proc)
                     self._fire(("threshold", proc), WARN, "threshold",
                                "Bandwidth threshold crossed",
                                f"{proc} has moved over {self.threshold_mb} MB "
-                               f"this session", rec)
+                               f"in the last hour", rec)
+                elif hour <= limit:
+                    # Back under: the next crossing is news again, and folds
+                    # into the same alert's count if that is still listed.
+                    self._threshold_fired.discard(proc)
 
         if (self.rules["new_host"] and rec.get("dir") == "out"
                 and not is_group_ip(rec.get("dst"))):
@@ -796,11 +831,37 @@ class AlertEngine:
             elif host:
                 self.seen_hosts.add(host)
 
+    def _add_hourly(self, proc, size, now):
+        """Add to a program's last hour; return what it has moved in it."""
+        minute = int(now // 60)
+        ent = self._hourly.get(proc)
+        if ent is None:
+            if len(self._hourly) > 2000:
+                # Programs quiet for an hour have nothing left to count.
+                for k in [k for k, v in self._hourly.items()
+                          if not v[1] or v[1][-1][0] <= minute - 60]:
+                    del self._hourly[k]
+            ent = self._hourly[proc] = [0, deque()]
+        q = ent[1]
+        if q and q[-1][0] == minute:
+            q[-1][1] += size
+        else:
+            q.append([minute, size])
+        ent[0] += size
+        while q and q[0][0] <= minute - 60:
+            ent[0] -= q.popleft()[1]
+        return ent[0]
+
+    def hourly_bytes(self, proc):
+        ent = self._hourly.get(proc)
+        return ent[0] if ent else 0
+
     def _transport_rules(self, rec, payload):
         sport, dport = rec.get("sport"), rec.get("dport")
         ports = {p for p in (sport, dport) if p}
         proc = rec.get("process", "-")
         peer = rec.get("remote", "")
+        shown = peer_label(rec)
 
         # 1. Protocols with no encryption at all.
         if self.rules["cleartext_proto"]:
@@ -808,7 +869,7 @@ class AlertEngine:
                 name = CLEARTEXT_PORTS[port]
                 self._fire(("cleartext", name, peer), WARN, "cleartext_proto",
                            f"Unencrypted {name}",
-                           f"{proc} is talking {name} to {peer} in the clear — "
+                           f"{proc} is talking {name} to {shown} in the clear — "
                            f"anything sent over it is readable on the wire", rec)
 
         if not self.rules["cleartext_creds"]:
@@ -827,7 +888,7 @@ class AlertEngine:
             self._fire(("basic_auth", user, peer), HIGH, "cleartext_creds",
                        "Password sent in the clear",
                        f"{proc} sent HTTP Basic credentials for '{user}' to "
-                       f"{peer} over unencrypted HTTP", rec)
+                       f"{shown} over unencrypted HTTP", rec)
 
         # 3. A login form posted over plain HTTP.
         if 80 in ports and head[:5] in (b"POST ", b"PUT /"):
@@ -836,7 +897,7 @@ class AlertEngine:
                 field = pm.group(2).decode("latin-1", "replace")
                 self._fire(("form_pw", peer), HIGH, "cleartext_creds",
                            "Password field posted over HTTP",
-                           f"{proc} posted a '{field}' field to {peer} without "
+                           f"{proc} posted a '{field}' field to {shown} without "
                            f"TLS — the value is visible on the wire", rec)
 
         # 4. Mail and file-transfer logins.
@@ -844,18 +905,19 @@ class AlertEngine:
             for pattern, proto, what in CRED_PATTERNS:
                 cm = pattern.search(head)
                 if cm:
+                    proto = _cred_proto(proto, ports)
                     self._fire(("mailcred", proto, what, peer), HIGH,
                                "cleartext_creds",
                                f"Unencrypted {proto} {what}",
-                               f"{proc} sent {proto} {what} to {peer} in "
+                               f"{proc} sent {proto} {what} to {shown} in "
                                f"plaintext", rec)
                     break
 
         # 5. Certificate problems, where the certificate is visible at all.
         if self.rules["cert_problems"] and X509_OK and 443 in ports:
-            self._cert_rule(rec, payload, peer, proc)
+            self._cert_rule(rec, payload, peer, proc, shown)
 
-    def _cert_rule(self, rec, payload, peer, proc):
+    def _cert_rule(self, rec, payload, peer, proc, shown=None):
         """
         Inspect a server certificate.
 
@@ -863,6 +925,7 @@ class AlertEngine:
         message, so on a modern connection there is nothing here to look at.
         Also only sees certificates small enough to land in a single segment.
         """
+        shown = shown or peer
         if len(payload) < 20 or payload[0] != 0x16:
             return
         if payload[5] != 0x0B:                    # handshake type 11: Certificate
@@ -890,24 +953,24 @@ class AlertEngine:
         if days < 0:
             self._fire(("cert_expired", peer), HIGH, "cert_problems",
                        "Expired certificate",
-                       f"{peer} presented a certificate that expired "
+                       f"{shown} presented a certificate that expired "
                        f"{abs(days)} days ago ({subject[:80]})", rec)
         elif days < 14:
             self._fire(("cert_expiring", peer), WARN, "cert_problems",
                        "Certificate expiring soon",
-                       f"{peer} has a certificate expiring in {days} days "
+                       f"{shown} has a certificate expiring in {days} days "
                        f"({subject[:80]})", rec)
         if issuer == subject:
             self._fire(("cert_selfsigned", peer), WARN, "cert_problems",
                        "Self-signed certificate",
-                       f"{peer} presented a self-signed certificate "
+                       f"{shown} presented a self-signed certificate "
                        f"({subject[:80]})", rec)
         try:
             algo = cert.signature_hash_algorithm.name
             if algo in ("md5", "sha1"):
                 self._fire(("cert_weak", peer), WARN, "cert_problems",
                            "Weak certificate signature",
-                           f"{peer} uses a {algo.upper()}-signed certificate", rec)
+                           f"{shown} uses a {algo.upper()}-signed certificate", rec)
         except Exception:
             pass
 
@@ -1026,7 +1089,7 @@ class AlertEngine:
             if len(distinct) >= SCAN_PORT_THRESHOLD:
                 self._fire(("port_scan_in", peer), HIGH, "port_scan",
                            f"Possible port scan from {peer}",
-                           f"{peer} has touched {len(distinct)} distinct "
+                           f"{peer_label(rec) or peer} has touched {len(distinct)} distinct "
                            f"ports on this machine in the last "
                            f"{int(SCAN_WINDOW_SECS)}s", rec)
                 win.clear()

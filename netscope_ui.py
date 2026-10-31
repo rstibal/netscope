@@ -2347,7 +2347,7 @@ function wireDailyHover(rows){
 const RULE_LABELS = {
   new_process:     'A program uses the network for the first time',
   new_host:        'First contact with a host (chatty — off by default)',
-  threshold:       'A program crosses a bandwidth threshold',
+  threshold:       'A program moves a lot in an hour',
   cleartext_creds: 'Credentials sent in the clear',
   cleartext_proto: 'Unencrypted protocols (FTP, Telnet, POP3, IMAP)',
   cert_problems:   'Expired, self-signed or weakly signed certificates',
@@ -2517,7 +2517,7 @@ function renderAlerts(d){
            (draftOr(k, d.rules[k]) ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
     }
     h += '<label>Threshold <input type="number" id="thrMb" min="1" value="'+
-         esc(String(draftOr('thr', d.threshold_mb)))+'"> MB per program</label>';
+         esc(String(draftOr('thr', d.threshold_mb)))+'"> MB per program per hour</label>';
     h += '<label><input type="checkbox" id="toasts"'+(draftOr('toasts', d.toasts) ? ' checked' : '')+
          (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
          (d.toasts_supported ? '' : ' (Windows only)')+'</label>';
