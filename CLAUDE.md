@@ -207,7 +207,11 @@ processes are skipped (and kept out of history) until the name resolves.
 `TunnelFilter` recognises the encrypted outer copy by a VPN port or a VPN
 client's process, then remembers that packet's remote address for an hour
 (`SERVER_FOR`, at most `MAX_SERVERS`). Anything else between a non-tunnel
-adapter and that address, while a tunnel is active, is a copy too. Without
+adapter and that address, while a tunnel is active, is a copy too. Only a
+public unicast address is learnt, and from a process match only over UDP off
+`CLIENT_SIDE_PORTS` (1.42.1): learning from every client packet taught the
+router (the client's DNS) and CDNs (its API calls), hiding everyone's traffic
+to them. Without
 this, a copy the client doesn't own (WireGuard sends from the kernel as
 System) was counted twice, and per-adapter History made it visible as a big
 System flow on Wi-Fi.

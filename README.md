@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.42.0**
+**Version 1.42.1**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -987,6 +987,20 @@ names.
 ---
 
 ## Version history
+
+**1.42.1** — **Fixes from a review of 1.39–1.42.**
+- With a VPN up, traffic to your router could vanish from History for an
+  hour. 1.41.2 remembered every address the VPN client talked to as a VPN
+  server, so one DNS query from the client to the router hid everything
+  else's traffic to it on Wi-Fi. Servers are now learnt only from what looks
+  like the tunnel itself: a VPN port, or the client's UDP to a public address
+  on a port that isn't DNS, time or web.
+- Picking an adapter in the header dropdown outlines it at once, not only after
+  you click elsewhere.
+- An open program or host on the History tab no longer shows another
+  adapter's or period's figures right after you switch.
+- Upgrading a pre-1.41 history database is one transaction: if it fails part
+  way, nothing is lost and the next start tries again.
 
 **1.42.0** — **History no longer tracks how long NetScope ran.**
 - The **Captured** figure, the strip under each day of the chart, and the

@@ -68,8 +68,29 @@ check("a server is forgotten an hour after its last packet",
 h = TN.TunnelFilter(describe=lambda n: "WinTUN" if n == "T" else "Intel")
 for i in range(TN.MAX_SERVERS + 10):
     h.skip(rec2("T", "x", "10.0.0.1"), now=i)
-    h.skip(rec2("E", "openvpn.exe", f"203.0.113.{i}"), now=i)
+    h.skip(rec2("E", "openvpn.exe", f"45.10.0.{i}", port=1194), now=i)
 check("remembered servers are capped", len(h._servers) == TN.MAX_SERVERS, len(h._servers))
+
+# ---- ...but only from what looks like the tunnel itself ---------------------
+k = TN.TunnelFilter(describe=lambda n: "WinTUN" if n == "T" else "Intel")
+k.skip(rec2("T", "chrome.exe", "140.82.112.3"), now=1)
+check("the VPN client's own DNS query to the router is still skipped",
+      k.skip(rec2("W", "pia-service.exe", "192.168.1.1", port=53), now=2))
+check("...but the router is not learnt, so other traffic to it is kept",
+      not k.skip(rec2("W", "svchost.exe", "192.168.1.1", port=53), now=3)
+      and not k.skip(rec2("W", "System", "192.168.1.1", port=445), now=3))
+k.skip({**rec2("W", "pia-service.exe", "104.16.0.1"), "transport": "tcp"}, now=4)
+check("an API call to a CDN teaches nothing either",
+      not k.skip({**rec2("W", "chrome.exe", "104.16.0.1"), "transport": "tcp"}, now=5))
+k.skip(rec2("W", "openvpn.exe", "255.255.255.255", port=40000), now=6)
+k.skip(rec2("W", "openvpn.exe", "10.8.0.1", port=1194), now=6)
+check("nor does a broadcast or a private address, even on a VPN port",
+      not k.skip(rec2("W", "System", "255.255.255.255", port=40000), now=7)
+      and not k.skip(rec2("W", "System", "10.8.0.1", port=40000), now=7))
+k.skip(rec2("W", "wireguard.exe", "185.65.134.1", port=40000), now=8)
+check("a VPN client's UDP to a public address on an unlisted port is the tunnel",
+      k.skip(rec2("W", "System", "185.65.134.1", port=40000), now=9))
+check("a MAC address is never a server", not TN._server_like("aa:bb:cc:dd:ee:ff"))
 
 off = TN.TunnelFilter(describe=lambda n: "WinTUN", enabled=False)
 off.skip(rec("PIA"), now=1)

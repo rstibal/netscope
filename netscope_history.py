@@ -262,6 +262,17 @@ def host_matches(pattern, host):
     return "*" not in pattern and "?" not in pattern and host.endswith("." + pattern)
 
 
+def schema_statements():
+    """
+    SCHEMA's CREATE statements one by one, without its PRAGMAs (which can't
+    run inside a transaction) or comments (one has a semicolon in it), so a
+    migration can rebuild tables in the same transaction as the rest.
+    """
+    body = "\n".join(l for l in SCHEMA.splitlines() if not l.strip().startswith("--"))
+    return [x.strip() for x in body.split(";")
+            if x.strip() and not x.strip().upper().startswith("PRAGMA")]
+
+
 class HistoryStore:
     def __init__(self, path=None, retain_days=DEFAULT_RETAIN_DAYS,
                  alert_retain_days=DEFAULT_ALERT_RETAIN_DAYS, enabled=True):
@@ -358,16 +369,32 @@ class HistoryStore:
             return
         had = self._db.execute("SELECT EXISTS(SELECT 1 FROM usage) "
                                "OR EXISTS(SELECT 1 FROM sessions)").fetchone()[0]
+        backup = None
+        if v < 2 and had and not self.in_memory:
+            backup = self.path + ".before-1.40"
+            if not os.path.exists(backup):
+                dst = sqlite3.connect(backup)
+                try:
+                    self._db.backup(dst)
+                finally:
+                    dst.close()
+        # Every step below in one transaction: executescript() commits as it
+        # goes, so a failure between renaming the old tables and copying them
+        # left new, empty ones beside them. The next open saw the new shape,
+        # never copied, and the old usage was stranded in usage_old for good.
+        self._db.commit()
+        self._db.execute("BEGIN")
+        try:
+            self._migrate_steps(v, had)
+            self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        self.reset_backup = backup
+
+    def _migrate_steps(self, v, had):
         if v < 2 and had:
-            if not self.in_memory:
-                backup = self.path + ".before-1.40"
-                if not os.path.exists(backup):
-                    dst = sqlite3.connect(backup)
-                    try:
-                        self._db.backup(dst)
-                    finally:
-                        dst.close()
-                self.reset_backup = backup
             for t in ("usage", "usage_pairs", "sessions"):
                 self._db.execute(f"DELETE FROM {t}")
             for t in ("processes", "hosts"):
@@ -379,7 +406,8 @@ class HistoryStore:
         if "iface" not in cols:
             for t in ("usage", "usage_pairs"):
                 self._db.execute(f"ALTER TABLE {t} RENAME TO {t}_old")
-            self._db.executescript(SCHEMA)
+            for stmt in schema_statements():
+                self._db.execute(stmt)
             self._db.execute(
                 "INSERT INTO usage(day,hour,process,iface,bytes_in,bytes_out,packets) "
                 "SELECT day,hour,process,'',bytes_in,bytes_out,packets FROM usage_old")
@@ -389,12 +417,11 @@ class HistoryStore:
                 "FROM usage_pairs_old")
             for t in ("usage", "usage_pairs"):
                 self._db.execute(f"DROP TABLE {t}_old")
-            self._db.executescript(SCHEMA)      # the indexes went with the old tables
+            for stmt in schema_statements():    # the indexes went with the old tables
+                self._db.execute(stmt)
         # To 4: the record of how long NetScope ran (1.40-1.41) goes.
         self._db.execute("DROP TABLE IF EXISTS coverage")
         self._db.execute("DROP TABLE IF EXISTS meta")
-        self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        self._db.commit()
 
     def start(self, iface=None, version=None):
         if not self.enabled:
@@ -872,14 +899,6 @@ class HistoryStore:
             "ORDER BY day", [wanted[0]] + a)}
         return [dict(rows.get(d) or {"day": d, "bytes_in": 0, "bytes_out": 0, "packets": 0})
                 for d in wanted]
-
-    def hourly(self, day=None):
-        day = day or datetime.now().strftime("%Y-%m-%d")
-        rows = {r["hour"]: r for r in self._q(
-            "SELECT hour, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, "
-            "SUM(packets) AS packets FROM usage WHERE day = ? GROUP BY hour", (day,))}
-        return [rows.get(h, {"hour": h, "bytes_in": 0, "bytes_out": 0, "packets": 0})
-                for h in range(24)]
 
     def week_hours(self, days=30, iface=""):
         """

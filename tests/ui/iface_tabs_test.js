@@ -46,10 +46,13 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 
   const vis = () => p.evaluate(() => [...$('rows').children].filter(t => t.style.display !== 'none').length);
   const seqVis = s => p.evaluate(s => { const t = $('rows').querySelector('tr[data-seq="'+s+'"]'); return t.style.display !== 'none'; }, s);
+  // Picked the way a person does: the select keeps focus afterwards.
+  await p.focus('#iface');
   await p.selectOption('#iface', 'Beta NIC');
   check('choosing an adapter shows only its packets', await seqVis(900002) && await seqVis(900003) && !await seqVis(900001));
   check('...and the count says so', /of/.test(await p.textContent('#fcount')));
-  check('...the dropdown is outlined while it narrows', await p.$eval('#iface', s => s.classList.contains('on')));
+  check('...the dropdown is outlined while it narrows, even still focused',
+        await p.$eval('#iface', s => s.classList.contains('on') && document.activeElement === s));
   await p.waitForTimeout(1500);
   check('...and the capture is not touched', posted.length === 0 &&
         await p.evaluate(() => lastStatus.iface) === capturing, JSON.stringify(posted));
@@ -59,6 +62,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('...and combines with the filter box', await vis() === 1, String(await vis()));
   await p.fill('#find', '');
 
+  await p.focus('#iface');
   await p.selectOption('#iface', '');
   check('All adapters shows everything again', await seqVis(900001) && await seqVis(900002));
   check('...and the outline goes', await p.$eval('#iface', s => !s.classList.contains('on')));

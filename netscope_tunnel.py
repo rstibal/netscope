@@ -17,6 +17,7 @@ on the physical adapter is real usage and is kept.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 import time
 
@@ -42,6 +43,20 @@ ACTIVE_FOR = 60.0
 # packet, and at most this many are kept (a client that hops servers).
 SERVER_FOR = 3600.0
 MAX_SERVERS = 64
+# What a VPN client does besides carrying the tunnel: name lookups, time, its
+# own API and update checks. Its packets on these ports are still skipped (the
+# client owns them), but they teach no server: the address is the router or a
+# CDN shared with everything else.
+CLIENT_SIDE_PORTS = {53, 67, 68, 80, 123, 443, 853, 5353}
+
+
+def _server_like(addr):
+    """A public unicast IP: the only kind of address a VPN server is learnt from."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False                # a MAC address, or a name
+    return ip.is_global and not ip.is_multicast
 
 
 def is_tunnel(name, description="", extra=()):
@@ -93,9 +108,16 @@ class TunnelFilter:
         out = rec.get("dir") == "out"
         port = rec.get("dport") if out else rec.get("sport")
         remote = rec.get("remote") or (rec.get("dst") if out else rec.get("src"))
-        if (rec.get("transport") in ("tcp", "udp") and port in VPN_PORTS) \
-                or VPN_PROCESS.search(rec.get("process") or ""):
-            if remote:
+        by_port = rec.get("transport") in ("tcp", "udp") and port in VPN_PORTS
+        by_proc = bool(VPN_PROCESS.search(rec.get("process") or ""))
+        if by_port or by_proc:
+            # Learn the server only from what looks like the tunnel itself. A
+            # VPN client's DNS query to the router taught the router as a
+            # "server", and everything else's traffic to it on Wi-Fi vanished
+            # from History for an hour.
+            if remote and _server_like(remote) and (
+                    by_port or (rec.get("transport") == "udp"
+                                and port not in CLIENT_SIDE_PORTS)):
                 self._learn(remote, now)
             self.skipped += 1
             return True

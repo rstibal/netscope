@@ -1840,9 +1840,8 @@ function capPath(x, y, w, h, r){
        + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
 }
 
-
 function dailyChart(rows){
-  const W = 560, H = 174, PADL = 46, PADR = 8, PADT = 12, PADB = 28;
+  const W = 560, H = 168, PADL = 46, PADR = 8, PADT = 12, PADB = 22;
   const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
   const max = niceMax(Math.max(1, ...rows.map(r => r.bytes_in + r.bytes_out)));
   const band = plotW / rows.length;
@@ -1992,12 +1991,18 @@ function detailHtml(d){
   }
   return h || '<div class="note">Nothing recorded in this period.</div>';
 }
+/* A detail is for one period and adapter. Changing either drops what was
+   fetched, so an open detail says Loading rather than showing the old
+   adapter's figures under the new heading, and an answer to the old question
+   that arrives late is ignored. */
+function forgetDetails(){ for (const k in histDet) delete histDet[k]; }
 function loadDetail(key){
   const i = key.indexOf('|'), kind = key.slice(0, i), name = key.slice(i + 1);
+  const asked = histDays + '|' + histIface;
   return api('/api/history/detail?kind=' + kind + '&days=' + histDays +
              '&iface=' + encodeURIComponent(histIface) +
              '&name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
-    if (!histOpen.has(key) || d.error) return;
+    if (!histOpen.has(key) || d.error || asked !== histDays + '|' + histIface) return;
     histDet[key] = d;
     const el = [...document.querySelectorAll('#p-history .hdet')].find(x => x.dataset.for === key);
     if (el) el.innerHTML = detailHtml(d);
@@ -2221,8 +2226,8 @@ function renderHistory(d){
   $('p-history').innerHTML = h;
 
   document.querySelectorAll('#p-history [data-days]').forEach(b =>
-    b.onclick = () => { histDays = Number(b.dataset.days); refreshTab('history'); });
-  $('histIface').onchange = e => { histIface = e.target.value; refreshTab('history'); };
+    b.onclick = () => { histDays = Number(b.dataset.days); forgetDetails(); refreshTab('history'); });
+  $('histIface').onchange = e => { histIface = e.target.value; forgetDetails(); refreshTab('history'); };
   $('p-history').querySelectorAll('[data-exdel]').forEach(b =>
     b.onclick = () => removeExclusion(b.dataset.exdel, b.dataset.pat));
   $('exAdd').onclick = () => addExclusion($('exKind').value, $('exPat').value);
@@ -4142,6 +4147,9 @@ try{
 let ifaceList = [];
 function renderIfaceOptions(){
   const sel = $('iface');
+  // The outline follows the choice at once: after a pick the select still
+  // has focus, and waiting for it to lose focus left a filter on unmarked.
+  sel.classList.toggle('on', !!ifaceTab);
   if (document.activeElement === sel) return;      // don't shut it under the pointer
   const names = ifaceList.map(i => i.name);
   const extra = [...seenIfaces].filter(n => !names.includes(n));
@@ -4151,7 +4159,6 @@ function renderIfaceOptions(){
       (i.ip ? '  ('+esc(i.ip)+')' : '') + '</option>').join('') +
     extra.map(n => '<option value="'+esc(n)+'">'+esc(n.slice(0,44))+'</option>').join('');
   sel.value = ifaceTab;
-  sel.classList.toggle('on', !!ifaceTab);
 }
 function loadInterfaces(){
   return api('/api/interfaces').then(r=>r.json()).then(d => {

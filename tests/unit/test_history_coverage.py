@@ -93,6 +93,25 @@ check("...counted under every adapter, but no single one",
 check("...and the version is current", q(h, "PRAGMA user_version") == [(H.SCHEMA_VERSION,)])
 h.stop()
 
+# -- a migration that fails part-way changes nothing ----------------------------------
+path = old_db(2)
+raw = sqlite3.connect(path)
+raw.execute("CREATE TABLE usage_pairs_old (x)")      # the second rename will fail
+raw.commit(); raw.close()
+h = H.HistoryStore(path=path)
+check("a failed migration is reported", not h.enabled or h.error, h.error)
+h.stop()
+raw = sqlite3.connect(path)
+check("...and rolled back: the old usage is where it was, version unchanged",
+      raw.execute("SELECT process, bytes_in FROM usage").fetchall() == [("chrome.exe", 500)]
+      and "iface" not in {r[1] for r in raw.execute("PRAGMA table_info(usage)")}
+      and raw.execute("PRAGMA user_version").fetchone()[0] == 2)
+raw.execute("DROP TABLE usage_pairs_old"); raw.commit(); raw.close()
+h = H.HistoryStore(path=path)
+check("...so the next open migrates it in full",
+      q(h, "SELECT process, iface, bytes_in FROM usage") == [("chrome.exe", "", 500)], h.error)
+h.stop()
+
 fresh = H.HistoryStore(path=os.path.join(tempfile.mkdtemp(prefix="ns-cov-"), "h.db"))
 check("a new database needs no reset and no copy",
       fresh.reset_backup is None and q(fresh, "PRAGMA user_version") == [(H.SCHEMA_VERSION,)])
