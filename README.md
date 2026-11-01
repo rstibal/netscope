@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.41.2**
+**Version 1.42.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -580,13 +580,8 @@ figure on the tab is for that period, read from the same hourly rows: the
 totals, the daily chart, **By program**, **By host** and the hosts first
 contacted in it. Nothing on the tab is "all time".
 
-**What was being watched.** History can only hold what was captured. If
-capture was stopped or NetScope wasn't running, that time is missing, not
-quiet. The **Captured** figure says how much of the period NetScope was
-capturing. Under each day of the chart, a strip shows the same for that day:
-a full strip is the whole day, a shorter one a day NetScope was off for part
-of, and no strip means before this was recorded (1.40). Hover a day for the
-exact time, and **Captured** for what the strip means.
+History only holds what was captured: time when NetScope was stopped or
+the computer was off is simply not in it.
 
 **One adapter's history.** History records every adapter separately, and
 the adapter dropdown at the top right of the tab shows one of them. By
@@ -992,6 +987,14 @@ names.
 ---
 
 ## Version history
+
+**1.42.0** — **History no longer tracks how long NetScope ran.**
+- The **Captured** figure, the strip under each day of the chart, and the
+  "captured" line in the day's tooltip are gone. On a computer that is shut
+  down often, or with NetScope turned off now and then, it could never read
+  100% and told you nothing you didn't know.
+- The record behind it is removed from the history database on first start.
+  Usage is untouched.
 
 **1.41.2** — **VPN copies caught more reliably; no more "missed" adapters.**
 - A VPN's encrypted copy of traffic was only recognised by a few VPN ports or

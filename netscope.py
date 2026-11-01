@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.41.2"
+VERSION = "1.42.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3654,17 +3654,6 @@ def _saved_paths(history, name):
     return {p for p in history.known_paths(name) if os.path.isfile(p)}
 
 
-def coverage_now(engine, app):
-    """
-    Whether History's coverage should count this moment: True while live
-    traffic is being captured, False when stopped or looking at an imported
-    file. Which adapters is not asked: every one is always captured, and
-    tracking "missed" adapters only produced false alarms (a VPN adapter in
-    the seconds before capture attached to it).
-    """
-    return bool(engine.running and not getattr(app, "source", None))
-
-
 def make_blocker(resolver, demo=False, store=None, history=None):
     """
     Demo mode gets a firewall of its own, in memory: it fabricates traffic, so
@@ -4084,7 +4073,6 @@ def main(argv=None):
         print(f"  Log:       {logfile}")
     print("\n  Press Ctrl+C to stop.\n")
 
-    history.coverage_source = lambda: coverage_now(engine, Handler.app)
     history.start(iface=getattr(engine, "iface", None), version=VERSION)
 
     if not args.no_browser and not args.tray:

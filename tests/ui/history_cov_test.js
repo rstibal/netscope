@@ -1,18 +1,15 @@
 const { chromium } = require('playwright');
 const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
 
-// History since 1.40: one range for every figure, a coverage strip under the
-// daily chart, the extras folded under More. The data is answered here so the
-// strip has every case: before coverage, a full day, a part day.
+// History since 1.40: one range for every figure, the extras folded under
+// More, a filter per adapter. Since 1.42 nothing says how long NetScope ran:
+// no Captured figure, no strip under the days.
 const G = Math.pow(1024,3);
 let asked = [];
 function history(iface){
   const daily = [];
   for (let i = 0; i < 7; i++){
-    const r = {day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:G, bytes_out:G/4, packets:10,
-               expected: i < 2 ? 0 : 86400, ran: i < 2 ? 0 : 86400};
-    if (i === 4) r.ran = 43200;
-    daily.push(r);
+    daily.push({day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:G, bytes_out:G/4, packets:10});
   }
   return {enabled:true, days:7, iface: iface || '', ifaces:['VR', 'Ethernet', 'Wi-Fi'], daily, hosts:[{host:'a.example', bytes_in:G, bytes_out:1, packets:1, first_seen:1.8e9}],
           new_hosts:[], sessions:[{started:1.8e9, iface:'Ethernet', version:'1.40.0', packets:9}],
@@ -31,7 +28,7 @@ function history(iface){
   const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
   const live = await (await fetch(process.argv[2].replace(/\/\?/, '/api/history?days=7&'))).json().catch(()=>null);
   check('the server answers with the range and the adapter list',
-        live && (!live.enabled || (live.range && Array.isArray(live.ifaces) && live.daily[0].expected !== undefined)),
+        live && (!live.enabled || (live.range && Array.isArray(live.ifaces) && live.daily[0].expected === undefined)),
         JSON.stringify(live && Object.keys(live)));
 
   await p.route('**/api/history?*', r => {
@@ -45,38 +42,30 @@ function history(iface){
   const t = await p.evaluate(() => ({
     kpi: [...document.querySelectorAll('#p-history .kpi')].map(k => k.textContent),
     heads: [...document.querySelectorAll('#p-history h4')].map(h => h.textContent),
-    tracks: document.querySelectorAll('#cw-daily .cvtrack').length,
-    fills: [...document.querySelectorAll('#cw-daily .cvfill')].map(r => +r.getAttribute('width')),
+    strips: document.querySelectorAll('#cw-daily .cvtrack, #cw-daily .cvfill').length,
     adapters: !!$('histAdapters'),
-    hatch: !!document.querySelector('#cvhatch'),
+    text: $('p-history').textContent,
     reset: !!$('histReset'),
     moreOpen: $('histMore') && $('histMore').open,
   }));
   check('totals are the range\'s, not all time', t.kpi[0].includes('4.0 GB'), t.kpi[0]);
   check('...and so is the program count', /Programs3/.test(t.kpi[3]) && /7 hosts/.test(t.kpi[3]), t.kpi[3]);
-  check('a Captured figure covers the days with a record', /Captured90%of 5d/.test(t.kpi[4]), t.kpi[4]);
+  check('four figures: no Captured', t.kpi.length === 4 && !t.kpi.some(k => /Captured/.test(k)), t.kpi.join(' | '));
   check('By host follows the range', t.heads.includes('By host · last 7 days'), t.heads.join(' | '));
   check('nothing on the tab says all time', !t.heads.some(h => /all time/.test(h)));
-  check('no strip before coverage began, one for each day after', t.tracks === 5, t.tracks);
-  check('a part day has a shorter strip', t.fills[2] < t.fills[0] * 0.6, JSON.stringify(t.fills));
-  check('no adapter is ever marked missed: no hatching, no adapter line', !t.hatch && !t.adapters);
-  check('the strip is explained on the Captured figure, not in the page',
-        await p.evaluate(() => /strip under each day/.test($('kpiCov').title) &&
-          ![...document.querySelectorAll('#p-history .hint')].some(h => /strip under each day/.test(h.textContent))));
+  check('no strip under the days, no adapter line', t.strips === 0 && !t.adapters, t.strips);
+  check('nothing on the tab mentions capture time', !/Captured|of 1d/.test(t.text));
   check('the reset is explained', t.reset);
   check('More is folded at first', t.moreOpen === false);
   check('busy hours, alerts and sessions are inside it',
         await p.evaluate(() => ['cw-week', 'alertsJump'].every(id => $('histMore').contains($(id)))));
 
-  // Hover the part day: the tooltip says how long NetScope was capturing.
+  // A day's tooltip: what moved, nothing about how long NetScope ran.
   const box = await p.$eval('#cw-daily .hitrect[data-i="4"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
   await p.mouse.move(box[0], box[1]);
   const tip = await p.$eval('#tip-daily', x => x.textContent);
-  check('the day\'s tooltip says how much was captured', /captured12h of 1d/.test(tip), tip);
-  check('...and nothing about adapters', !/not captured/.test(tip), tip);
-  const box0 = await p.$eval('#cw-daily .hitrect[data-i="0"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
-  await p.mouse.move(box0[0], box0[1]);
-  check('a day before coverage says so', /not recorded \(before 1\.40\)/.test(await p.$eval('#tip-daily', x => x.textContent)));
+  check('the day\'s tooltip has the traffic', /received/.test(tip) && /packets10/.test(tip), tip);
+  check('...and no captured line', !/captured/i.test(tip), tip);
   await p.mouse.move(5, 5);
 
   // Opened, More stays open across the tab's own refresh.

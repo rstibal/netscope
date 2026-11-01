@@ -1,10 +1,10 @@
 """
-History since 1.40/1.41: how long NetScope was capturing is recorded per
-hour, every figure follows the chosen range, usage is kept per adapter so History can
-show one, and usage from before 1.40 (with no record of what was captured)
-is reset once, after copying the file.
+History since 1.40/1.41/1.42: every figure follows the chosen range, usage
+is kept per adapter so History can show one, usage from before 1.40 (with no
+record of what was captured) is reset once, after copying the file, and the
+1.40-1.41 record of how long NetScope ran is gone.
 """
-import os, sqlite3, sys, tempfile, time, types
+import os, sqlite3, sys, tempfile, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", ".."))
 import netscope_history as H
@@ -97,27 +97,29 @@ fresh = H.HistoryStore(path=os.path.join(tempfile.mkdtemp(prefix="ns-cov-"), "h.
 check("a new database needs no reset and no copy",
       fresh.reset_backup is None and q(fresh, "PRAGMA user_version") == [(H.SCHEMA_VERSION,)])
 
-# -- coverage ------------------------------------------------------------------------
+# -- from 1.41 to 1.42: the coverage record goes, usage stays ------------------------
+path = os.path.join(tempfile.mkdtemp(prefix="ns-cov-"), "history.db")
+h = H.HistoryStore(path=path)
+h.record(pkt("chrome.exe", "a.example")); h.flush(); h.stop()
+old = sqlite3.connect(path)
+old.executescript("""
+CREATE TABLE coverage (day TEXT, hour INTEGER, iface TEXT, state TEXT, seconds REAL,
+    PRIMARY KEY (day, hour, iface, state));
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+INSERT INTO coverage VALUES ('2026-10-30', 9, '*', 'running', 3600);
+INSERT INTO meta VALUES ('coverage_start', '1.8e9');
+PRAGMA user_version=3;""")
+old.commit(); old.close()
+h = H.HistoryStore(path=path)
+tables = {r[0] for r in q(h, "SELECT name FROM sqlite_master WHERE type='table'")}
+check("a 1.41 database loses its coverage tables",
+      not ({"coverage", "meta"} & tables) and q(h, "PRAGMA user_version") == [(H.SCHEMA_VERSION,)], tables)
+check("...and keeps its usage", h.range_totals(7)["bytes_out"] == 100 and h.reset_backup is None)
+check("a day carries only what moved", set(h.daily(7)[-1]) == {"day", "bytes_in", "bytes_out", "packets"},
+      h.daily(7)[-1])
+h.stop()
+
 h = fresh
-state = {"src": True}
-h.coverage_source = lambda: state["src"]
-t0 = time.time() - 30
-h.tick_coverage(now=t0)                     # the first tick only starts the clock
-h.tick_coverage(now=t0 + 10)
-h.tick_coverage(now=t0 + 10 + 3600)         # woke from sleep: capped, not an hour
-state["src"] = False                        # capture stopped
-h.tick_coverage(now=t0 + 10 + 3610)
-h.flush()
-check("running time is recorded, a long gap counting at most one tick",
-      q(h, "SELECT SUM(seconds) FROM coverage WHERE iface='*'") == [(10 + H.MAX_TICK,)])
-check("...nothing is credited while capture is stopped, and no adapter rows",
-      q(h, "SELECT COUNT(*) FROM coverage WHERE iface<>'*'") == [(0,)])
-today = h.daily(7)[-1]
-check("the day says how long NetScope ran",
-      today["ran"] > 0 and today["expected"] >= today["ran"] and "missed" not in today, today)
-check("days before coverage began expect nothing", h.daily(7)[0]["expected"] == 0, h.daily(7)[0])
-check("running time is the same whichever adapter is shown",
-      h.daily(7, "Wi-Fi")[-1]["ran"] == today["ran"])
 
 # -- one range for everything -------------------------------------------------------
 old_ts = time.time() - 40 * 86400
@@ -161,17 +163,6 @@ check("first contacts on one adapter are hosts it carried",
       or sorted(r["host"] for r in h.new_hosts(7, iface="VR")) == ["10.0.0.5", "new.example"],
       h.new_hosts(7, iface="VR"))
 check("...and none from an adapter that carried nothing", h.new_hosts(7, iface="Wi-Fi") == [])
-
-# -- what the app feeds it ------------------------------------------------------------
-sys.argv = [sys.argv[0]]
-import netscope as N
-eng = types.SimpleNamespace(running=True, ifaces=["Ethernet"])
-app = types.SimpleNamespace(source=None)
-check("live capture counts", N.coverage_now(eng, app) is True)
-app.source = "saved.pcap"
-check("an imported file does not", N.coverage_now(eng, app) is False)
-app.source = None; eng.running = False
-check("nor does a stopped capture", N.coverage_now(eng, app) is False)
 
 print(); print("FAILED:", fails or "none")
 sys.exit(1 if fails else 0)

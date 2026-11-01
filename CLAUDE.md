@@ -326,17 +326,18 @@ whole pane (not just a card) pauses the automatic redraw, since the shift
 happens while aiming; user actions still refresh at once. UI tests that wait
 for an automatic refresh must move the pointer off the pane first.
 
-**History is one period and says what it didn't see (1.40).** Every figure on
+**History is one period (1.40).** Every figure on
 the tab follows the 7/30/90-day choice and comes from the hourly rows (`usage`,
 `usage_pairs`). The `processes`/`hosts` byte counters are no longer shown; those
 tables exist only for first-seen ("is this new?"). By host used to read them
-and showed all time beside a 7-day chart. `coverage` records seconds per hour
-NetScope was capturing live (`*`/`running`), fed from `coverage_now()` on the
-writer's 10 s beat, so a day it was off isn't read as a quiet day. 1.40
-also tracked per-adapter captured/missed time. Once every adapter was always
-captured (1.41), "missed" only ever fired for a VPN adapter in the seconds
-before the watcher attached to it, so 1.41.2 dropped it. Don't bring it back
-unless the page can narrow capture again. Usage from before
+and showed all time beside a 7-day chart.
+
+**History doesn't say how long NetScope ran (1.42).** 1.40-1.41 recorded
+capture time (`coverage`, per adapter, then running-only) and showed a
+Captured percentage and a strip under each day. Rob shuts the machine down
+often and stops NetScope at times, so it never read 100% and told him
+nothing; 1.42 dropped it and the tables (`user_version` 4). Don't bring it
+back. Usage from before
 1.40 was erased once (`user_version` 2, the file copied to `.before-1.40`
 first) at Rob's choice. Unattributed traffic (`-`) gets `usage_pairs` rows
 now, so By host doesn't lose it.
@@ -358,7 +359,7 @@ header onto two lines.
 (rebuilt from 1.40 tables with `iface = ''`, which counts under All only).
 History's own adapter dropdown is separate from the live one and passes
 `iface` to every query; empty means all. Its list is `HistoryStore.ifaces()`:
-every adapter with usage or coverage, attached or not.
+every adapter with usage, attached or not.
 
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.

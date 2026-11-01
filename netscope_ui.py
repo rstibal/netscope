@@ -611,8 +611,6 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .dayrange button{padding:3px 10px;font:600 11px var(--sans)}
 .dayrange button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .dayrange a{color:var(--faint);font:11px var(--mono)}
-.cvtrack{fill:var(--faint);opacity:.35}
-.cvfill{fill:var(--dim)}
 #p-history details.more>summary{cursor:pointer;list-style:none}
 #p-history details.more>summary::-webkit-details-marker{display:none}
 #p-history details.more>summary h4{display:inline}
@@ -1842,20 +1840,6 @@ function capPath(x, y, w, h, r){
        + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
 }
 
-/* "6h 20m", "45m", "2d 3h": how long something was or wasn't watched. Each
-   number keeps its unit, since "6 h 20 m" in the monospace tooltip read as
-   letter-spaced text. */
-function span(secs){
-  secs = Math.round(Number(secs) || 0);
-  if (secs < 60) return secs ? '<1m' : '0m';
-  const d = Math.floor(secs / 86400), h = Math.floor(secs % 86400 / 3600),
-        m = Math.floor(secs % 3600 / 60);
-  return d ? d + 'd' + (h ? ' ' + h + 'h' : '') : h ? h + 'h' + (m ? ' ' + m + 'm' : '') : m + 'm';
-}
-function coverageText(r){
-  if (!r.expected) return 'not recorded (before 1.40)';
-  return span(r.ran) + ' of ' + span(r.expected);
-}
 
 function dailyChart(rows){
   const W = 560, H = 174, PADL = 46, PADR = 8, PADT = 12, PADB = 28;
@@ -1876,19 +1860,6 @@ function dailyChart(rows){
   let peak = 0;
   rows.forEach((r,i) => { if (r.bytes_in + r.bytes_out >
                               rows[peak].bytes_in + rows[peak].bytes_out) peak = i; });
-
-  // Under each column, how much of the day NetScope was capturing: a full
-  // strip is a day fully watched, a short one a day it was off for part of.
-  // No strip: before this was recorded. A low column over a short strip is
-  // a day nobody was watching, not a quiet one.
-  let cov = '';
-  rows.forEach((r, i) => {
-    if (!r.expected) return;
-    const x = PADL + band * i + (band - bw) / 2, yy = PADT + plotH + 3;
-    const f = Math.max(0, Math.min(1, r.ran / r.expected));
-    cov += `<rect class="cvtrack" x="${x}" y="${yy}" width="${bw}" height="4" rx="1"/>`;
-    if (f > 0) cov += `<rect class="cvfill" x="${x}" y="${yy}" width="${Math.max(1, bw * f)}" height="4" rx="1"/>`;
-  });
 
   let bars = '', hits = '';
   rows.forEach((r, i) => {
@@ -1932,7 +1903,7 @@ function dailyChart(rows){
   });
 
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily traffic">`
-       + g + cov + bars + xl + hits + '</svg>';
+       + g + bars + xl + hits + '</svg>';
 }
 
 // One program that streams VR can be ten times everything else, and on a
@@ -2107,8 +2078,6 @@ function renderHistory(d){
   const per = ' · last ' + d.days + ' days' + (d.iface ? ' · ' + d.iface.slice(0, 40) : '');
   // Everything on the tab is for the chosen range; the all-time counters are
   // only how NetScope knows what is new, and no longer shown.
-  const exp = daily.reduce((a, r) => a + (r.expected || 0), 0);
-  const ran = daily.reduce((a, r) => a + Math.min(r.ran || 0, r.expected || 0), 0);
 
   let h = '<div class="dayrange">' +
     [7,30,90].map(n => '<button class="btn-sm'+(n===histDays?' on':'')+
@@ -2131,12 +2100,6 @@ function renderHistory(d){
     '<div class="kpi"><div class="k">▲ Sent</div><div class="v">'+esc(hb(rg.bytes_out))+'</div></div>' +
     '<div class="kpi"><div class="k">Programs</div><div class="v">'+(rg.programs || 0)+
       '</div><div class="s">'+(rg.hosts || 0)+' hosts</div></div>' +
-    '<div class="kpi" id="kpiCov" title="How much of the range NetScope was capturing, from when coverage began. '+
-      'The strip under each day in the chart shows the same for that day: a full strip is the whole day, '+
-      'a shorter one means NetScope was off for part of it. Hover a day for its figures."><div class="k">'+
-      'Captured</div><div class="v">'+
-      (exp ? Math.min(100, Math.round(ran / exp * 100)) + '%' : '—')+'</div><div class="s">'+
-      (exp ? 'of ' + esc(span(exp)) : 'not recorded yet')+'</div></div>' +
     '</div>';
 
   h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
@@ -2146,8 +2109,7 @@ function renderHistory(d){
          {h:'Day', f:r=>r.day},
          {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
          {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)},
-         {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()},
-         {h:'Captured', f:r=>coverageText(r)}]) +
+         {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) +
        '</div>';
 
   if (d.processes.length){
@@ -2378,8 +2340,7 @@ function wireDailyHover(rows){
       tip.innerHTML = '<div class="th">'+esc(r.day)+'</div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-in)"></span>▼ received</span><b>'+esc(hb(r.bytes_in))+'</b></div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-out)"></span>▲ sent</span><b>'+esc(hb(r.bytes_out))+'</b></div>'+
-        '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>'+
-        '<div class="tr"><span>captured</span><b>'+esc(coverageText(r))+'</b></div>';
+        '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>';
       tip.classList.add('on');
       const box = wrap.getBoundingClientRect();
       const x = (ev.clientX !== undefined ? ev.clientX - box.left : box.width / 2);

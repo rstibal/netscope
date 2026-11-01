@@ -44,11 +44,10 @@ OTHER_HOSTS = "(other)"
 MAX_PENDING_ALERTS = 5000
 # The database layout. 2 (1.40.0) added coverage and reset the usage recorded
 # before it, which had no record of which adapters were being captured. 3
-# (1.41.0) put the adapter in the usage keys, so History can show one.
-SCHEMA_VERSION = 3
-# Coverage counts at most this much per tick, so a machine waking from sleep
-# doesn't credit the hours it was asleep to whatever it was capturing.
-MAX_TICK = FLUSH_INTERVAL + 5.0
+# (1.41.0) put the adapter in the usage keys, so History can show one. 4
+# (1.42.0) dropped coverage again: on a machine that is often shut down,
+# how much of the day NetScope ran was never going to read 100%.
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -82,27 +81,6 @@ CREATE TABLE IF NOT EXISTS usage_pairs (
 );
 CREATE INDEX IF NOT EXISTS usage_pairs_host ON usage_pairs(host);
 CREATE INDEX IF NOT EXISTS usage_pairs_day ON usage_pairs(day);
-
--- Seconds per hour NetScope was capturing live, as iface '*', state
--- 'running'. Usage alone can't tell a quiet hour from one nobody was
--- watching. 1.40-1.41 also kept per-adapter 'captured'/'missed' rows; they
--- are no longer written or read (every adapter is always captured).
-CREATE TABLE IF NOT EXISTS coverage (
-    day     TEXT    NOT NULL,
-    hour    INTEGER NOT NULL,
-    iface   TEXT    NOT NULL,
-    state   TEXT    NOT NULL,
-    seconds REAL    NOT NULL DEFAULT 0,
-    PRIMARY KEY (day, hour, iface, state)
-);
-CREATE INDEX IF NOT EXISTS coverage_day ON coverage(day);
-
--- Odds and ends that are one value each: coverage_start, the moment coverage
--- was first recorded, so the first day isn't measured from the top of its hour.
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT
-);
 
 CREATE TABLE IF NOT EXISTS processes (
     name       TEXT PRIMARY KEY,
@@ -305,12 +283,6 @@ class HistoryStore:
         self._hosts = {}        # host -> [first, last, in, out, packets]
         self._pending_alerts = []
         self._pending_leases = []
-        self._cov = {}          # (day, hour, iface, state) -> seconds
-        self._cov_last = None
-        self._cov_first = None  # when this run's first credited tick began
-        # Returns True while something live is being captured. Set by the
-        # app; None records nothing.
-        self.coverage_source = None
         # Where the pre-1.40 database was copied before its usage was reset,
         # for this run only, so the History tab can say so once.
         self.reset_backup = None
@@ -396,7 +368,7 @@ class HistoryStore:
                     finally:
                         dst.close()
                 self.reset_backup = backup
-            for t in ("usage", "usage_pairs", "sessions", "coverage", "meta"):
+            for t in ("usage", "usage_pairs", "sessions"):
                 self._db.execute(f"DELETE FROM {t}")
             for t in ("processes", "hosts"):
                 self._db.execute(f"UPDATE {t} SET bytes_in=0, bytes_out=0, packets=0")
@@ -418,6 +390,9 @@ class HistoryStore:
             for t in ("usage", "usage_pairs"):
                 self._db.execute(f"DROP TABLE {t}_old")
             self._db.executescript(SCHEMA)      # the indexes went with the old tables
+        # To 4: the record of how long NetScope ran (1.40-1.41) goes.
+        self._db.execute("DROP TABLE IF EXISTS coverage")
+        self._db.execute("DROP TABLE IF EXISTS meta")
         self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self._db.commit()
 
@@ -442,7 +417,6 @@ class HistoryStore:
         if not self.enabled:
             return
         try:
-            self.tick_coverage()
             self.flush()
             with self._db_lock:
                 if self.session_id:
@@ -455,42 +429,14 @@ class HistoryStore:
 
     def _loop(self):
         last_prune = time.time()
-        self._cov_last = time.time()
         while not self._stop.wait(FLUSH_INTERVAL):
             try:
-                self.tick_coverage()
                 self.flush()
                 if time.time() - last_prune > PRUNE_INTERVAL:
                     self.prune()
                     last_prune = time.time()
             except Exception:
                 pass
-
-    def tick_coverage(self, now=None):
-        """
-        Credit the time since the last tick, if NetScope is capturing live.
-        Runs on the writer's beat (every FLUSH_INTERVAL), so a stop or start
-        is placed to within ten seconds.
-        """
-        if not self.enabled:
-            return
-        now = time.time() if now is None else now
-        last, self._cov_last = self._cov_last, now
-        if last is None or now <= last:
-            return
-        secs = min(now - last, MAX_TICK)
-        if self._cov_first is None:
-            self._cov_first = now - secs
-        try:
-            got = self.coverage_source() if self.coverage_source else None
-        except Exception:
-            got = None
-        if not got:
-            return
-        day, hour = _day_hour(now)
-        with self._lock:
-            k = (day, hour, "*", "running")
-            self._cov[k] = self._cov.get(k, 0.0) + secs
 
     # -- ingest (hot path — keep this cheap) --------------------------------
 
@@ -767,12 +713,12 @@ class HistoryStore:
         if not self.enabled or self._db is None:
             return
         with self._lock:
-            acc, procs, hosts, alerts, leases, pairs, cov = (
+            acc, procs, hosts, alerts, leases, pairs = (
                 self._acc, self._procs, self._hosts, self._pending_alerts,
-                self._pending_leases, self._pairs, self._cov)
+                self._pending_leases, self._pairs)
             (self._acc, self._procs, self._hosts, self._pending_alerts,
-             self._pending_leases, self._pairs, self._cov) = {}, {}, {}, [], [], {}, {}
-        if not (acc or procs or hosts or alerts or leases or pairs or cov):
+             self._pending_leases, self._pairs) = {}, {}, {}, [], [], {}
+        if not (acc or procs or hosts or alerts or leases or pairs):
             return
         try:
             with self._db_lock:
@@ -826,16 +772,6 @@ class HistoryStore:
                         "lease_secs=excluded.lease_secs, "
                         "last_seen=excluded.last_seen", leases)
 
-                if cov:
-                    self._db.execute(
-                        "INSERT OR IGNORE INTO meta(key, value) VALUES ('coverage_start', ?)",
-                        (str(self._cov_first or time.time()),))
-                    self._db.executemany(
-                        "INSERT INTO coverage(day,hour,iface,state,seconds) "
-                        "VALUES (?,?,?,?,?) ON CONFLICT(day,hour,iface,state) "
-                        "DO UPDATE SET seconds=seconds+excluded.seconds",
-                        [(d, h, i, st, v) for (d, h, i, st), v in cov.items()])
-
                 if self.session_id:
                     self._db.execute(
                         "UPDATE sessions SET packets=packets+? WHERE id=?",
@@ -855,12 +791,10 @@ class HistoryStore:
                     self._db.rollback()
             except Exception:
                 pass
-            self._requeue(acc, procs, hosts, alerts, leases, pairs, cov)
+            self._requeue(acc, procs, hosts, alerts, leases, pairs)
 
-    def _requeue(self, acc, procs, hosts, alerts, leases, pairs=(), cov=()):
+    def _requeue(self, acc, procs, hosts, alerts, leases, pairs=()):
         with self._lock:
-            for k, v in dict(cov).items():
-                self._cov[k] = self._cov.get(k, 0.0) + v
             for k, v in dict(pairs).items():
                 slot = self._pairs.setdefault(k, [0, 0, 0])
                 for i in range(3):
@@ -897,7 +831,6 @@ class HistoryStore:
             with self._db_lock:
                 self._db.execute("DELETE FROM usage WHERE day < ?", (cutoff_day,))
                 self._db.execute("DELETE FROM usage_pairs WHERE day < ?", (cutoff_day,))
-                self._db.execute("DELETE FROM coverage WHERE day < ?", (cutoff_day,))
                 self._db.execute("DELETE FROM alerts WHERE ts < ?", (cutoff_ts,))
                 self._db.execute("DELETE FROM sessions WHERE started < ?",
                                  (time.time() - self.retain_days * 86400,))
@@ -929,52 +862,16 @@ class HistoryStore:
         """(" AND col = ?", [iface]) for one adapter; nothing for all of them."""
         return (f" AND {col} = ?", [iface]) if iface else ("", [])
 
-    def coverage_since(self):
-        """When coverage was first recorded, as a datetime, or None."""
-        r = self._q("SELECT value FROM meta WHERE key = 'coverage_start'")
-        try:
-            return datetime.fromtimestamp(float(r[0]["value"])) if r else None
-        except (TypeError, ValueError):
-            return None
-
     def daily(self, days=30, iface=""):
-        """
-        Per-day totals, zero-filled so the chart has no missing columns, with
-        how long NetScope was capturing: `ran` seconds out of `expected` (the
-        day so far, from when coverage began; 0 before it began). The same
-        for every adapter: it says whether anyone was watching, not what an
-        adapter carried.
-        """
+        """Per-day totals, zero-filled so the chart has no missing columns."""
         wanted = self._range_days(days)
         w, a = self._on(iface)
         rows = {r["day"]: r for r in self._q(
             "SELECT day, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, "
             "SUM(packets) AS packets FROM usage WHERE day >= ?" + w + " GROUP BY day "
             "ORDER BY day", [wanted[0]] + a)}
-        ran = {r["day"]: r["s"] for r in self._q(
-            "SELECT day, SUM(seconds) AS s FROM coverage WHERE day >= ? "
-            "AND iface = '*' AND state = 'running' GROUP BY day", (wanted[0],))}
-        # Seconds already counted but not yet flushed belong in today's figure,
-        # or a fresh run reads as a third missing.
-        with self._lock:
-            for (d, _h, i, st), v in self._cov.items():
-                if (i, st) == ("*", "running"):
-                    ran[d] = ran.get(d, 0) + v
-        since = self.coverage_since() or (
-            datetime.fromtimestamp(self._cov_first) if self._cov_first else None)
-        now = datetime.now()
-        today = now.strftime("%Y-%m-%d")
-        out = []
-        for d in wanted:
-            row = dict(rows.get(d) or {"day": d, "bytes_in": 0, "bytes_out": 0, "packets": 0})
-            day0 = datetime.strptime(d, "%Y-%m-%d")
-            start = max(day0, since) if since else day0
-            end = now if d == today else day0 + timedelta(days=1)
-            row["expected"] = (0 if not since or d < since.strftime("%Y-%m-%d")
-                               else max(0, round((end - start).total_seconds())))
-            row["ran"] = round(min(ran.get(d, 0), row["expected"] or ran.get(d, 0)))
-            out.append(row)
-        return out
+        return [dict(rows.get(d) or {"day": d, "bytes_in": 0, "bytes_out": 0, "packets": 0})
+                for d in wanted]
 
     def hourly(self, day=None):
         day = day or datetime.now().strftime("%Y-%m-%d")
@@ -1243,12 +1140,11 @@ class HistoryStore:
             return
         with self._lock:
             (self._acc, self._procs, self._hosts, self._pending_alerts,
-             self._pending_leases, self._pairs, self._cov) = {}, {}, {}, [], [], {}, {}
+             self._pending_leases, self._pairs) = {}, {}, {}, [], [], {}
         try:
             with self._db_lock:
                 for t in ("usage", "usage_pairs", "processes", "hosts", "alerts",
-                          "dhcp_leases", "sessions", "checkins", "program_paths",
-                          "coverage", "meta"):
+                          "dhcp_leases", "sessions", "checkins", "program_paths"):
                     self._db.execute(f"DELETE FROM {t}")
                 self._db.commit()
                 self._db.execute("VACUUM")
@@ -1257,6 +1153,5 @@ class HistoryStore:
             self._known_checkins.clear()
             self._checkin_since = None
             self.session_id = None
-            self._cov_first = None
         except Exception:
             pass
