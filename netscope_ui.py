@@ -613,8 +613,6 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .dayrange a{color:var(--faint);font:11px var(--mono)}
 .cvtrack{fill:var(--faint);opacity:.35}
 .cvfill{fill:var(--dim)}
-#p-history .adapters{font:11px var(--mono);color:var(--dim);margin:4px 0 2px;line-height:1.6}
-#p-history .adapters b{color:var(--fg);font-weight:600}
 #p-history details.more>summary{cursor:pointer;list-style:none}
 #p-history details.more>summary::-webkit-details-marker{display:none}
 #p-history details.more>summary h4{display:inline}
@@ -1879,20 +1877,17 @@ function dailyChart(rows){
   rows.forEach((r,i) => { if (r.bytes_in + r.bytes_out >
                               rows[peak].bytes_in + rows[peak].bytes_out) peak = i; });
 
-  // Under each column, how much of the day was captured: a full solid strip
-  // is a day fully watched, a short one a day NetScope was off for part of,
-  // hatched one where an adapter with an address wasn't being captured. No
-  // strip: before coverage was recorded. Shape, not hue, carries it.
-  let cov = '<defs><pattern id="cvhatch" width="4" height="4" patternUnits="userSpaceOnUse" ' +
-            'patternTransform="rotate(45)"><rect width="2" height="4" fill="var(--dim)"/></pattern></defs>';
+  // Under each column, how much of the day NetScope was capturing: a full
+  // strip is a day fully watched, a short one a day it was off for part of.
+  // No strip: before this was recorded. A low column over a short strip is
+  // a day nobody was watching, not a quiet one.
+  let cov = '';
   rows.forEach((r, i) => {
     if (!r.expected) return;
     const x = PADL + band * i + (band - bw) / 2, yy = PADT + plotH + 3;
     const f = Math.max(0, Math.min(1, r.ran / r.expected));
-    const miss = r.missed && Object.keys(r.missed).length;
     cov += `<rect class="cvtrack" x="${x}" y="${yy}" width="${bw}" height="4" rx="1"/>`;
-    if (f > 0) cov += `<rect class="cvfill" x="${x}" y="${yy}" width="${Math.max(1, bw * f)}" height="4" rx="1"` +
-                      (miss ? ' style="fill:url(#cvhatch)"' : '') + '/>';
+    if (f > 0) cov += `<rect class="cvfill" x="${x}" y="${yy}" width="${Math.max(1, bw * f)}" height="4" rx="1"/>`;
   });
 
   let bars = '', hits = '';
@@ -2114,7 +2109,6 @@ function renderHistory(d){
   // only how NetScope knows what is new, and no longer shown.
   const exp = daily.reduce((a, r) => a + (r.expected || 0), 0);
   const ran = daily.reduce((a, r) => a + Math.min(r.ran || 0, r.expected || 0), 0);
-  const missed = (d.adapters || []).filter(x => x.missed > 0);
 
   let h = '<div class="dayrange">' +
     [7,30,90].map(n => '<button class="btn-sm'+(n===histDays?' on':'')+
@@ -2138,33 +2132,22 @@ function renderHistory(d){
     '<div class="kpi"><div class="k">Programs</div><div class="v">'+(rg.programs || 0)+
       '</div><div class="s">'+(rg.hosts || 0)+' hosts</div></div>' +
     '<div class="kpi" id="kpiCov" title="How much of the range NetScope was capturing, from when coverage began. '+
-      'The strip under each day in the chart shows the same for that day: full and solid is the whole day, '+
-      'shorter means NetScope was off for part of it, hatched means an adapter with an address was not '+
-      'captured. Hover a day for its figures."><div class="k">Captured</div><div class="v">'+
+      'The strip under each day in the chart shows the same for that day: a full strip is the whole day, '+
+      'a shorter one means NetScope was off for part of it. Hover a day for its figures."><div class="k">'+
+      'Captured</div><div class="v">'+
       (exp ? Math.min(100, Math.round(ran / exp * 100)) + '%' : '—')+'</div><div class="s">'+
-      (missed.length ? missed.length + ' adapter' + (missed.length === 1 ? '' : 's') + ' missed'
-                     : exp ? 'of ' + esc(span(exp)) : 'not recorded yet')+'</div></div>' +
+      (exp ? 'of ' + esc(span(exp)) : 'not recorded yet')+'</div></div>' +
     '</div>';
-
-  // Only what wasn't captured: with every adapter captured all the time, a
-  // line per adapter saying so was noise.
-  const adapterLine = missed.length
-    ? '<div class="adapters" id="histAdapters">Not captured: ' + missed.map(x =>
-        '<span><b>' + esc(x.iface) + '</b> ' + esc(span(x.missed)) + '</span>').join(' · ') +
-      '</div>' : '';
 
   h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
        '<div class="chartwrap" id="cw-daily">' + dailyChart(daily) +
        '<div class="tip" id="tip-daily"></div></div>' +
-       adapterLine +
        tableView(daily, [
          {h:'Day', f:r=>r.day},
          {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
          {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)},
          {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()},
-         {h:'Captured', f:r=>coverageText(r)},
-         {h:'Not captured', f:r=>Object.entries(r.missed || {}).map(([n, sec]) =>
-            n + ' ' + span(sec)).join(', ') || '—'}]) +
+         {h:'Captured', f:r=>coverageText(r)}]) +
        '</div>';
 
   if (d.processes.length){
@@ -2396,9 +2379,7 @@ function wireDailyHover(rows){
         '<div class="tr"><span><span class="sw" style="background:var(--series-in)"></span>▼ received</span><b>'+esc(hb(r.bytes_in))+'</b></div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-out)"></span>▲ sent</span><b>'+esc(hb(r.bytes_out))+'</b></div>'+
         '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>'+
-        '<div class="tr"><span>captured</span><b>'+esc(coverageText(r))+'</b></div>'+
-        Object.entries(r.missed || {}).map(([n, sec]) =>
-          '<div class="tr"><span>'+esc(n)+' not captured</span><b>'+esc(span(sec))+'</b></div>').join('');
+        '<div class="tr"><span>captured</span><b>'+esc(coverageText(r))+'</b></div>';
       tip.classList.add('on');
       const box = wrap.getBoundingClientRect();
       const x = (ev.clientX !== undefined ? ev.clientX - box.left : box.width / 2);

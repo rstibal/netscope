@@ -1,6 +1,6 @@
 """
-History since 1.40/1.41: what was being captured is recorded per hour, every
-figure follows the chosen range, usage is kept per adapter so History can
+History since 1.40/1.41: how long NetScope was capturing is recorded per
+hour, every figure follows the chosen range, usage is kept per adapter so History can
 show one, and usage from before 1.40 (with no record of what was captured)
 is reset once, after copying the file.
 """
@@ -99,29 +99,25 @@ check("a new database needs no reset and no copy",
 
 # -- coverage ------------------------------------------------------------------------
 h = fresh
-state = {"src": (["Ethernet", "VR"], ["Wi-Fi"])}
+state = {"src": True}
 h.coverage_source = lambda: state["src"]
 t0 = time.time() - 30
 h.tick_coverage(now=t0)                     # the first tick only starts the clock
 h.tick_coverage(now=t0 + 10)
 h.tick_coverage(now=t0 + 10 + 3600)         # woke from sleep: capped, not an hour
-state["src"] = None                         # capture stopped
+state["src"] = False                        # capture stopped
 h.tick_coverage(now=t0 + 10 + 3610)
 h.flush()
-ad = {a["iface"]: a for a in h.adapters(7)}
-check("captured and missed adapters are each recorded",
-      ad.get("Ethernet", {}).get("captured") and ad.get("Wi-Fi", {}).get("missed"), ad)
-check("a long gap counts at most one tick",
-      ad["Ethernet"]["captured"] == round(10 + H.MAX_TICK), ad["Ethernet"])
-check("nothing is credited while capture is stopped",
+check("running time is recorded, a long gap counting at most one tick",
       q(h, "SELECT SUM(seconds) FROM coverage WHERE iface='*'") == [(10 + H.MAX_TICK,)])
+check("...nothing is credited while capture is stopped, and no adapter rows",
+      q(h, "SELECT COUNT(*) FROM coverage WHERE iface<>'*'") == [(0,)])
 today = h.daily(7)[-1]
-check("the day says how long it ran, and which adapter was missed",
-      today["ran"] > 0 and "Wi-Fi" in today["missed"] and today["expected"] >= today["ran"], today)
+check("the day says how long NetScope ran",
+      today["ran"] > 0 and today["expected"] >= today["ran"] and "missed" not in today, today)
 check("days before coverage began expect nothing", h.daily(7)[0]["expected"] == 0, h.daily(7)[0])
-one = h.daily(7, "Wi-Fi")[-1]
-check("for one adapter, the day is that adapter's coverage",
-      one["ran"] == 0 and list(one["missed"]) == ["Wi-Fi"], one)
+check("running time is the same whichever adapter is shown",
+      h.daily(7, "Wi-Fi")[-1]["ran"] == today["ran"])
 
 # -- one range for everything -------------------------------------------------------
 old_ts = time.time() - 40 * 86400
@@ -145,8 +141,8 @@ for _ in range(3):
     h.record(pkt("vrserver.exe", "10.0.0.5", 50000, iface="VR"))
 h.record(pkt("new.exe", "new.example", 100, iface="VR"))
 h.flush()
-check("every adapter is listed, busiest first",
-      h.ifaces()[:2] == ["VR", "Ethernet"] and "Wi-Fi" in h.ifaces(), h.ifaces())
+check("every adapter with usage is listed, busiest first",
+      h.ifaces() == ["VR", "Ethernet"], h.ifaces())
 check("All adapters adds them up",
       h.range_totals(7)["bytes_out"] == 500 + 150000 + 100, h.range_totals(7))
 check("one adapter's totals are its own",
@@ -169,18 +165,13 @@ check("...and none from an adapter that carried nothing", h.new_hosts(7, iface="
 # -- what the app feeds it ------------------------------------------------------------
 sys.argv = [sys.argv[0]]
 import netscope as N
-eng = types.SimpleNamespace(
-    running=True, ifaces=["Ethernet"],
-    interfaces=lambda refresh=True: [
-        {"name": "Ethernet", "ip": "192.168.1.2"}, {"name": "Wi-Fi", "ip": "192.168.1.3"},
-        {"name": "Bluetooth", "ip": ""}, {"name": "Loopback", "ip": "127.0.0.1"}])
+eng = types.SimpleNamespace(running=True, ifaces=["Ethernet"])
 app = types.SimpleNamespace(source=None)
-check("live capture reports captured and missed",
-      N.coverage_now(eng, app) == (["Ethernet"], ["Wi-Fi"]), N.coverage_now(eng, app))
+check("live capture counts", N.coverage_now(eng, app) is True)
 app.source = "saved.pcap"
-check("an imported file is not coverage", N.coverage_now(eng, app) is None)
+check("an imported file does not", N.coverage_now(eng, app) is False)
 app.source = None; eng.running = False
-check("nor is a stopped capture", N.coverage_now(eng, app) is None)
+check("nor does a stopped capture", N.coverage_now(eng, app) is False)
 
 print(); print("FAILED:", fails or "none")
 sys.exit(1 if fails else 0)

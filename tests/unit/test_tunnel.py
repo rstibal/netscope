@@ -43,6 +43,34 @@ check("when the tunnel goes quiet, the outer copy is counted again",
       not f.skip(outer, now=101 + TN.ACTIVE_FOR + 5))
 check("skips are counted", f.skipped == 3, f.skipped)
 
+# ---- a VPN server, once recognised, catches copies nothing else would --------
+def rec2(iface, process, remote, port=443, out=True):
+    return {"iface": iface, "process": process, "remote": remote, "transport": "udp",
+            "dport": port if out else 50000, "sport": 50000 if out else port,
+            "dir": "out" if out else "in"}
+g = TN.TunnelFilter(describe=lambda n: {"PIA": "PIA OpenVPN WinTUN Adapter"}.get(n, "Intel Wi-Fi"))
+g.skip(rec2("PIA", "chrome.exe", "140.82.112.3"), now=10)
+kernel = rec2("Wi-Fi", "System", "212.102.40.1", port=40000)
+check("a copy owned by nothing VPN-like, on an unlisted port, is kept at first",
+      not g.skip(kernel, now=11))
+check("PIA's ports are recognised", g.skip(rec2("Wi-Fi", "-", "212.102.40.1", port=1198), now=12))
+check("...which teaches the server, so the System copy is skipped after",
+      g.skip(kernel, now=13))
+check("...in both directions", g.skip(rec2("Wi-Fi", "System", "212.102.40.1", port=40000, out=False), now=13))
+check("other traffic on the physical adapter is still kept",
+      not g.skip(rec2("Wi-Fi", "System", "8.8.8.8", port=53), now=13))
+check("...and traffic to the server on the tunnel adapter is never a copy",
+      not g.skip(rec2("PIA", "chrome.exe", "212.102.40.1"), now=14))
+later = 14 + TN.SERVER_FOR + 100
+g.skip(rec2("PIA", "chrome.exe", "140.82.112.3"), now=later)     # the tunnel is still up
+check("a server is forgotten an hour after its last packet",
+      not g.skip(kernel, now=later + 1))
+h = TN.TunnelFilter(describe=lambda n: "WinTUN" if n == "T" else "Intel")
+for i in range(TN.MAX_SERVERS + 10):
+    h.skip(rec2("T", "x", "10.0.0.1"), now=i)
+    h.skip(rec2("E", "openvpn.exe", f"203.0.113.{i}"), now=i)
+check("remembered servers are capped", len(h._servers) == TN.MAX_SERVERS, len(h._servers))
+
 off = TN.TunnelFilter(describe=lambda n: "WinTUN", enabled=False)
 off.skip(rec("PIA"), now=1)
 check("disabled: nothing is ever skipped", not off.skip(outer, now=2))

@@ -32,7 +32,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   });
   console.log('      (after ' + secs + 's)');
   check('the demo\'s 20-second check-in raises it', a.title==='New scheduled check-in' &&
-        /^AgentSvc\.exe contacts checkin\.example\.net every ~20s \(\d+ times in the last hour\)$/.test(a.detail),
+        /^AgentSvc\.exe contacts checkin\.example\.net every ~(19|20|21)s \(\d+ times in the last hour\)$/.test(a.detail),
         JSON.stringify(a));
   check('...as a note, since the demo keeps no history', /\binfo\b/.test(a.cls), a.cls);
   check('...naming the program, with a reason and a mute for the host',

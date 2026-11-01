@@ -203,6 +203,15 @@ program after each restart and buried the warnings. It survives only with
 history off, where the session is all there is to go on. Unnamed `pid N`
 processes are skipped (and kept out of history) until the name resolves.
 
+**A VPN server, once recognised, marks every copy to it (1.41.2).**
+`TunnelFilter` recognises the encrypted outer copy by a VPN port or a VPN
+client's process, then remembers that packet's remote address for an hour
+(`SERVER_FOR`, at most `MAX_SERVERS`). Anything else between a non-tunnel
+adapter and that address, while a tunnel is active, is a copy too. Without
+this, a copy the client doesn't own (WireGuard sends from the kernel as
+System) was counted twice, and per-adapter History made it visible as a big
+System flow on Wi-Fi.
+
 **Reporting leaves out what isn't what it looks like (1.33.5).** The VPN's
 encrypted outer copy (`rec["tunnel_outer"]`, set by `TunnelFilter.skip()` in
 `_on_packet`) is out of the live totals, Programs and Hosts, as it is out of
@@ -322,10 +331,12 @@ the tab follows the 7/30/90-day choice and comes from the hourly rows (`usage`,
 `usage_pairs`). The `processes`/`hosts` byte counters are no longer shown; those
 tables exist only for first-seen ("is this new?"). By host used to read them
 and showed all time beside a 7-day chart. `coverage` records seconds per hour
-per adapter: captured or missed (has an address, not captured), plus
-`*`/`running`. It is fed from `coverage_now()` on the writer's
-10 s beat. Without it, a day with the dropdown on one adapter is
-indistinguishable from a quiet day. Rob hit exactly that. Usage from before
+NetScope was capturing live (`*`/`running`), fed from `coverage_now()` on the
+writer's 10 s beat, so a day it was off isn't read as a quiet day. 1.40
+also tracked per-adapter captured/missed time. Once every adapter was always
+captured (1.41), "missed" only ever fired for a VPN adapter in the seconds
+before the watcher attached to it, so 1.41.2 dropped it. Don't bring it back
+unless the page can narrow capture again. Usage from before
 1.40 was erased once (`user_version` 2, the file copied to `.before-1.40`
 first) at Rob's choice. Unattributed traffic (`-`) gets `usage_pairs` rows
 now, so By host doesn't lose it.

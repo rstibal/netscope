@@ -3,26 +3,21 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 
 // History since 1.40: one range for every figure, a coverage strip under the
 // daily chart, the extras folded under More. The data is answered here so the
-// strip has every case: before coverage, a full day, a part day, a day with an
-// adapter missed.
+// strip has every case: before coverage, a full day, a part day.
 const G = Math.pow(1024,3);
 let asked = [];
 function history(iface){
   const daily = [];
   for (let i = 0; i < 7; i++){
     const r = {day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:G, bytes_out:G/4, packets:10,
-               expected: i < 2 ? 0 : 86400, ran: i < 2 ? 0 : 86400, missed:{}};
+               expected: i < 2 ? 0 : 86400, ran: i < 2 ? 0 : 86400};
     if (i === 4) r.ran = 43200;
-    if (i === 5) r.missed = {'Wi-Fi': 21600};
     daily.push(r);
   }
   return {enabled:true, days:7, iface: iface || '', ifaces:['VR', 'Ethernet', 'Wi-Fi'], daily, hosts:[{host:'a.example', bytes_in:G, bytes_out:1, packets:1, first_seen:1.8e9}],
           new_hosts:[], sessions:[{started:1.8e9, iface:'Ethernet', version:'1.40.0', packets:9}],
           processes:[{name:'chrome.exe', bytes_in:G, bytes_out:1, packets:1}],
           range:{bytes_in:3*G, bytes_out:G, packets:40, programs:3, hosts:7},
-          adapters:[{iface:'Ethernet', captured:5*86400, missed:0},
-                    {iface:'Wi-Fi', captured:0, missed:21600},
-                    {iface:'VR', captured:5*86400, missed:0}],
           alert_counts:{total:2, high:0, warn:2, info:0, newest:2},
           exclude:{programs:[],hosts:[]}, week_hours:{cells:Array.from({length:7},()=>Array.from({length:24},()=>[1,1])), counts:[1,1,1,1,1,1,1]},
           summary:{bytes_in:99*G, bytes_out:G, packets:1, processes:50, hosts:500, size:1024, retain_days:90,
@@ -35,8 +30,8 @@ function history(iface){
   const p = await b.newPage({ viewport:{width:1680,height:900} });
   const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
   const live = await (await fetch(process.argv[2].replace(/\/\?/, '/api/history?days=7&'))).json().catch(()=>null);
-  check('the server answers with the range and the adapters',
-        live && (!live.enabled || (live.range && Array.isArray(live.adapters) && live.daily[0].expected !== undefined)),
+  check('the server answers with the range and the adapter list',
+        live && (!live.enabled || (live.range && Array.isArray(live.ifaces) && live.daily[0].expected !== undefined)),
         JSON.stringify(live && Object.keys(live)));
 
   await p.route('**/api/history?*', r => {
@@ -51,22 +46,20 @@ function history(iface){
     kpi: [...document.querySelectorAll('#p-history .kpi')].map(k => k.textContent),
     heads: [...document.querySelectorAll('#p-history h4')].map(h => h.textContent),
     tracks: document.querySelectorAll('#cw-daily .cvtrack').length,
-    fills: [...document.querySelectorAll('#cw-daily .cvfill')].map(r => ({w: +r.getAttribute('width'),
-             hatch: /cvhatch/.test(r.getAttribute('style') || '')})),
-    adapters: ($('histAdapters') || {}).textContent || '',
+    fills: [...document.querySelectorAll('#cw-daily .cvfill')].map(r => +r.getAttribute('width')),
+    adapters: !!$('histAdapters'),
+    hatch: !!document.querySelector('#cvhatch'),
     reset: !!$('histReset'),
     moreOpen: $('histMore') && $('histMore').open,
   }));
   check('totals are the range\'s, not all time', t.kpi[0].includes('4.0 GB'), t.kpi[0]);
   check('...and so is the program count', /Programs3/.test(t.kpi[3]) && /7 hosts/.test(t.kpi[3]), t.kpi[3]);
-  check('a Captured figure covers the days with a record', /Captured\d+%/.test(t.kpi[4]) && /1 adapter missed/.test(t.kpi[4]), t.kpi[4]);
+  check('a Captured figure covers the days with a record', /Captured90%of 5d/.test(t.kpi[4]), t.kpi[4]);
   check('By host follows the range', t.heads.includes('By host · last 7 days'), t.heads.join(' | '));
   check('nothing on the tab says all time', !t.heads.some(h => /all time/.test(h)));
   check('no strip before coverage began, one for each day after', t.tracks === 5, t.tracks);
-  check('a part day has a shorter strip', t.fills[2].w < t.fills[0].w * 0.6, JSON.stringify(t.fills));
-  check('a day with an adapter missed is hatched, the others solid',
-        t.fills[3].hatch && t.fills.filter(f => f.hatch).length === 1, JSON.stringify(t.fills));
-  check('only adapters that were missed are listed', /Not captured: Wi-Fi 6h/.test(t.adapters) && !/Ethernet|VR/.test(t.adapters), t.adapters);
+  check('a part day has a shorter strip', t.fills[2] < t.fills[0] * 0.6, JSON.stringify(t.fills));
+  check('no adapter is ever marked missed: no hatching, no adapter line', !t.hatch && !t.adapters);
   check('the strip is explained on the Captured figure, not in the page',
         await p.evaluate(() => /strip under each day/.test($('kpiCov').title) &&
           ![...document.querySelectorAll('#p-history .hint')].some(h => /strip under each day/.test(h.textContent))));
@@ -75,12 +68,12 @@ function history(iface){
   check('busy hours, alerts and sessions are inside it',
         await p.evaluate(() => ['cw-week', 'alertsJump'].every(id => $('histMore').contains($(id)))));
 
-  // Hover the hatched day: the tooltip says how long and what was missed.
-  const box = await p.$eval('#cw-daily .hitrect[data-i="5"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
+  // Hover the part day: the tooltip says how long NetScope was capturing.
+  const box = await p.$eval('#cw-daily .hitrect[data-i="4"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
   await p.mouse.move(box[0], box[1]);
   const tip = await p.$eval('#tip-daily', x => x.textContent);
-  check('the day\'s tooltip says how much was captured', /captured1d of 1d/.test(tip), tip);
-  check('...and which adapter was not, for how long', /Wi-Fi not captured6h/.test(tip), tip);
+  check('the day\'s tooltip says how much was captured', /captured12h of 1d/.test(tip), tip);
+  check('...and nothing about adapters', !/not captured/.test(tip), tip);
   const box0 = await p.$eval('#cw-daily .hitrect[data-i="0"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
   await p.mouse.move(box0[0], box0[1]);
   check('a day before coverage says so', /not recorded \(before 1\.40\)/.test(await p.$eval('#tip-daily', x => x.textContent)));

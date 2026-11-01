@@ -83,10 +83,10 @@ CREATE TABLE IF NOT EXISTS usage_pairs (
 CREATE INDEX IF NOT EXISTS usage_pairs_host ON usage_pairs(host);
 CREATE INDEX IF NOT EXISTS usage_pairs_day ON usage_pairs(day);
 
--- What was being captured, per hour: seconds each adapter spent captured or
--- missed (it had an address but capture wasn't on it), and under iface '*'
--- state 'running', seconds NetScope was capturing at all. Usage alone can't tell a quiet hour from
--- one nobody was watching.
+-- Seconds per hour NetScope was capturing live, as iface '*', state
+-- 'running'. Usage alone can't tell a quiet hour from one nobody was
+-- watching. 1.40-1.41 also kept per-adapter 'captured'/'missed' rows; they
+-- are no longer written or read (every adapter is always captured).
 CREATE TABLE IF NOT EXISTS coverage (
     day     TEXT    NOT NULL,
     hour    INTEGER NOT NULL,
@@ -308,8 +308,8 @@ class HistoryStore:
         self._cov = {}          # (day, hour, iface, state) -> seconds
         self._cov_last = None
         self._cov_first = None  # when this run's first credited tick began
-        # Returns (captured, missed) adapter names, or None while
-        # nothing live is being captured. Set by the app; None records nothing.
+        # Returns True while something live is being captured. Set by the
+        # app; None records nothing.
         self.coverage_source = None
         # Where the pre-1.40 database was copied before its usage was reset,
         # for this run only, so the History tab can say so once.
@@ -468,9 +468,9 @@ class HistoryStore:
 
     def tick_coverage(self, now=None):
         """
-        Credit the time since the last tick to what is being captured now.
-        Runs on the writer's beat (every FLUSH_INTERVAL), so a change of
-        adapter is placed to within ten seconds.
+        Credit the time since the last tick, if NetScope is capturing live.
+        Runs on the writer's beat (every FLUSH_INTERVAL), so a stop or start
+        is placed to within ten seconds.
         """
         if not self.enabled:
             return
@@ -487,14 +487,10 @@ class HistoryStore:
             got = None
         if not got:
             return
-        captured, missed = got[0], got[1]
         day, hour = _day_hour(now)
         with self._lock:
-            for iface, state in ([("*", "running")] +
-                                 [(n, "captured") for n in captured] +
-                                 [(n, "missed") for n in missed]):
-                k = (day, hour, iface, state)
-                self._cov[k] = self._cov.get(k, 0.0) + secs
+            k = (day, hour, "*", "running")
+            self._cov[k] = self._cov.get(k, 0.0) + secs
 
     # -- ingest (hot path — keep this cheap) --------------------------------
 
@@ -944,11 +940,10 @@ class HistoryStore:
     def daily(self, days=30, iface=""):
         """
         Per-day totals, zero-filled so the chart has no missing columns, with
-        what was being watched: `ran` seconds NetScope was capturing, out of
-        `expected` (the day so far, from when coverage began), and `missed`
-        {adapter: seconds} for adapters that had an address and weren't
-        captured. `expected` is 0 for days before coverage began. For one
-        adapter, `ran` is the time that adapter was captured.
+        how long NetScope was capturing: `ran` seconds out of `expected` (the
+        day so far, from when coverage began; 0 before it began). The same
+        for every adapter: it says whether anyone was watching, not what an
+        adapter carried.
         """
         wanted = self._range_days(days)
         w, a = self._on(iface)
@@ -956,22 +951,15 @@ class HistoryStore:
             "SELECT day, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, "
             "SUM(packets) AS packets FROM usage WHERE day >= ?" + w + " GROUP BY day "
             "ORDER BY day", [wanted[0]] + a)}
-        ran, missed = {}, {}
-        ran_state = ("captured", iface) if iface else ("running", "*")
-
-        def add(d, i, st, v):
-            if (st, i) == ran_state:
-                ran[d] = ran.get(d, 0) + v
-            elif st == "missed" and (not iface or i == iface):
-                missed.setdefault(d, {})[i] = round(missed.get(d, {}).get(i, 0) + v)
-        for r in self._q("SELECT day, iface, state, SUM(seconds) AS s FROM coverage "
-                         "WHERE day >= ? GROUP BY day, iface, state", (wanted[0],)):
-            add(r["day"], r["iface"], r["state"], r["s"])
+        ran = {r["day"]: r["s"] for r in self._q(
+            "SELECT day, SUM(seconds) AS s FROM coverage WHERE day >= ? "
+            "AND iface = '*' AND state = 'running' GROUP BY day", (wanted[0],))}
         # Seconds already counted but not yet flushed belong in today's figure,
-        # or a fresh run reads as a third missed.
+        # or a fresh run reads as a third missing.
         with self._lock:
             for (d, _h, i, st), v in self._cov.items():
-                add(d, i, st, v)
+                if (i, st) == ("*", "running"):
+                    ran[d] = ran.get(d, 0) + v
         since = self.coverage_since() or (
             datetime.fromtimestamp(self._cov_first) if self._cov_first else None)
         now = datetime.now()
@@ -985,7 +973,6 @@ class HistoryStore:
             row["expected"] = (0 if not since or d < since.strftime("%Y-%m-%d")
                                else max(0, round((end - start).total_seconds())))
             row["ran"] = round(min(ran.get(d, 0), row["expected"] or ran.get(d, 0)))
-            row["missed"] = missed.get(d, {})
             out.append(row)
         return out
 
@@ -1129,12 +1116,10 @@ class HistoryStore:
             " ORDER BY h.first_seen DESC LIMIT ?", [since_day] + a + [since, limit])
 
     def ifaces(self):
-        """Every adapter History has usage or coverage for, busiest first."""
+        """Every adapter History has usage for, busiest first."""
         rows = self._q(
-            "SELECT iface, SUM(n) AS n FROM ("
             "SELECT iface, SUM(bytes_in+bytes_out) AS n FROM usage WHERE iface <> '' "
-            "GROUP BY iface UNION ALL SELECT iface, 0 FROM coverage "
-            "WHERE iface <> '*' GROUP BY iface) GROUP BY iface ORDER BY n DESC, iface")
+            "GROUP BY iface ORDER BY n DESC, iface")
         return [r["iface"] for r in rows]
 
     def range_totals(self, days=30, iface=""):
@@ -1216,20 +1201,6 @@ class HistoryStore:
         return self._q(
             "SELECT id, started, ended, iface, packets, version FROM sessions "
             "ORDER BY started DESC LIMIT ?", (limit,))
-
-    def adapters(self, days=30, iface=""):
-        """Per adapter over the range: seconds captured and missed."""
-        since = self._range_days(days)[0]
-        w, a = self._on(iface)
-        out = {}
-        for r in self._q("SELECT iface, state, SUM(seconds) AS s FROM coverage "
-                         "WHERE day >= ? AND iface <> '*'" + w +
-                         " AND state IN ('captured', 'missed') GROUP BY iface, state",
-                         [since] + a):
-            out.setdefault(r["iface"], {"captured": 0, "missed": 0})[
-                r["state"]] = round(r["s"])
-        return [dict(iface=k, **v) for k, v in
-                sorted(out.items(), key=lambda kv: -kv[1]["captured"])]
 
     def summary(self):
         if not self.enabled:

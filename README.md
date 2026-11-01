@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.41.1**
+**Version 1.41.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -581,19 +581,12 @@ totals, the daily chart, **By program**, **By host** and the hosts first
 contacted in it. Nothing on the tab is "all time".
 
 **What was being watched.** History can only hold what was captured. If
-capture was stopped, NetScope wasn't running, or an adapter failed to open,
-that time is missing. It isn't
+capture was stopped or NetScope wasn't running, that time is missing, not
 quiet. The **Captured** figure says how much of the period NetScope was
 capturing. Under each day of the chart, a strip shows the same for that day:
-- full and solid: the whole day on every adapter
-- shorter: NetScope was off for part of the day
-- hatched: an adapter with an address wasn't being captured
-- no strip: before this was recorded (1.40)
-
-Hover a day for the exact time and which adapter was missed for how long. When
-an adapter was missed in the period, a line under the chart names it and for how
-long; when nothing was, there is no line. Hover **Captured** for what the strip
-means.
+a full strip is the whole day, a shorter one a day NetScope was off for part
+of, and no strip means before this was recorded (1.40). Hover a day for the
+exact time, and **Captured** for what the strip means.
 
 **One adapter's history.** History records every adapter separately, and
 the adapter dropdown at the top right of the tab shows one of them. By
@@ -999,6 +992,18 @@ names.
 ---
 
 ## Version history
+
+**1.41.2** — **VPN copies caught more reliably; no more "missed" adapters.**
+- A VPN's encrypted copy of traffic was only recognised by a few VPN ports or
+  by the VPN client owning it. A copy sent by the kernel (WireGuard shows as
+  System) or on another port was counted twice. Once a copy has been
+  recognised, NetScope remembers the VPN server's address, and anything else
+  between the physical adapter and that server counts as a copy too.
+  Private Internet Access's ports (1197, 1198, 1337) are recognised as well.
+- History no longer marks adapters as missed. Since every adapter is always
+  captured, it only caught a VPN adapter in the seconds before capture
+  attached to it, which hatched that day for nothing. The strip under each day
+  now just shows how long NetScope was running.
 
 **1.41.1** — Durations on the History tab read "1h 7m", not "1 h 7 m", which
 looked letter-spaced in the chart's tooltip.

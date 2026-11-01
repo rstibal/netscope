@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.41.1"
+VERSION = "1.41.2"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3056,7 +3056,6 @@ class Handler(BaseHTTPRequestHandler):
                 "summary": h.summary(),
                 "range": h.range_totals(days, iface),
                 "daily": h.daily(days, iface),
-                "adapters": h.adapters(days, iface),
                 "ifaces": h.ifaces(),
                 "week_hours": h.week_hours(days, iface),
                 "processes": h.by_process(days, 15, iface),
@@ -3657,17 +3656,13 @@ def _saved_paths(history, name):
 
 def coverage_now(engine, app):
     """
-    What History's coverage records right now: (captured, missed) adapter
-    names, or None when nothing live is being captured (stopped, or looking
-    at an imported file). Missed counts only adapters that have an address:
-    one that failed to open, or not asked for on the command line.
+    Whether History's coverage should count this moment: True while live
+    traffic is being captured, False when stopped or looking at an imported
+    file. Which adapters is not asked: every one is always captured, and
+    tracking "missed" adapters only produced false alarms (a VPN adapter in
+    the seconds before capture attached to it).
     """
-    if not engine.running or getattr(app, "source", None):
-        return None
-    captured = [n for n in (getattr(engine, "ifaces", None) or []) if n]
-    usable = [i["name"] for i in engine.interfaces()
-              if i.get("ip") and not i["ip"].startswith("127.")]
-    return captured, [n for n in usable if n not in captured]
+    return bool(engine.running and not getattr(app, "source", None))
 
 
 def make_blocker(resolver, demo=False, store=None, history=None):
