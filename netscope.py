@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.42.1"
+VERSION = "1.42.2"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3839,7 +3839,7 @@ def main(argv=None):
         if ok:
             print("  Start on login: registered as a scheduled task")
             print(f"    Runs:  {detail}")
-            print("    It starts 20 seconds after logon, with administrator "
+            print("    It starts as soon as you log on, with administrator "
                   "rights and no UAC prompt,")
             print("    and has no execution time limit so it keeps running "
                   "indefinitely.")

@@ -186,7 +186,10 @@ def disable_autostart():
 # HighestAvailable is the supported route: it launches with a full token and no
 # prompt. The task is written from XML rather than schtasks flags so the
 # execution time limit can be removed (the flag form defaults to killing the
-# task after 72 hours) and the battery rules disabled.
+# task after 72 hours) and the battery rules disabled. It starts at logon with
+# no delay (1.42.2; it was 20 s, for the network and Npcap to come up). An
+# adapter that comes up later is picked up anyway, since adapters are
+# re-enumerated, so waiting only lost the first seconds of traffic.
 # ---------------------------------------------------------------------------
 
 TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
@@ -200,7 +203,6 @@ TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
     <LogonTrigger>
       <Enabled>true</Enabled>
       <UserId>{user}</UserId>
-      <Delay>PT20S</Delay>
     </LogonTrigger>
   </Triggers>
   <Principals>

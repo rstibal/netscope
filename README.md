@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.42.1**
+**Version 1.42.2**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -558,8 +558,10 @@ prompt, which is the only arrangement that actually works unattended.
 The task is written from XML rather than `schtasks` flags so two defaults can be
 corrected: the execution time limit is removed (the flag form kills the task
 after 72 hours) and the battery rules are disabled, so it keeps running on a
-laptop. It fires 20 seconds after logon, giving the network stack and Npcap time
-to come up.
+laptop. It fires as soon as you log on. An adapter that isn't up yet (Wi-Fi
+still associating, a VPN connecting) is picked up when it appears. Before
+1.42.2 it waited 20 seconds; a task installed then keeps that delay until you
+run `--install-task` again.
 
 `--autostart-registry` still writes the old Run-key entry, and
 `--remove-autostart-registry` removes it. That path only makes sense for a build
@@ -987,6 +989,12 @@ names.
 ---
 
 ## Version history
+
+**1.42.2** — **Starts at logon without waiting.** The logon task used to wait
+20 seconds before starting NetScope, for the network and Npcap to come up.
+Adapters that appear later are picked up anyway, so the wait only lost the
+first seconds of traffic. Run `--install-task` again (as administrator) to
+update a task installed before.
 
 **1.42.1** — **Fixes from a review of 1.39–1.42.**
 - With a VPN up, traffic to your router could vanish from History for an
