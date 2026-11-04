@@ -273,7 +273,9 @@ box. A hide list kept somewhere else is invisible once set. In a monitor, that
 is exactly where the traffic that mattered goes unseen, and malware named
 `svchost.exe` benefits from a "hide svchost" rule. What is hidden should always
 be on screen. History exclusions are the one persistent list, and the History
-tab shows their count for the same reason.
+tab shows their count for the same reason: on the folded More line (since
+1.42.3, at Rob's request it is no longer beside the range buttons), never only
+inside it.
 
 **The Timeline's data is aggregated on the server, not from what the page
 polls.** `/api/state` hands the page at most 600 packets per poll, and the

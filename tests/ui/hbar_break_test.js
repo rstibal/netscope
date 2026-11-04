@@ -44,7 +44,7 @@ let current = history([proc('vrstreamer.exe',231), proc('chrome.exe',25), proc('
   check('the rest keep their proportions to each other',
         Math.abs(third.pct/second.pct - 8/25) < 0.03 && Math.abs(small.pct/second.pct - 1/25) < 0.02,
         JSON.stringify([second.pct, third.pct, small.pct]));
-  check('a one-line note explains the cut', g.note);
+  check('no note under the chart: the break and the tooltip say it', !g.note);
 
   // Without an outlier nothing changes.
   current = history([proc('a.exe',20), proc('b.exe',12), proc('c.exe',6)]);

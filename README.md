@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.42.2**
+**Version 1.42.3**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -597,8 +597,8 @@ only.
 
 The tab shows the totals, the daily chart, By program, By host and first
 contacts. **More**, folded at the bottom, holds the **busy hours** heatmap, how
-many alerts were logged (the alerts themselves are on the Alerts tab) and
-recent sessions. Every chart has a table view underneath it, so no value is
+many alerts were logged (the alerts themselves are on the Alerts tab), recent
+sessions, **Not recorded**, **Storage** and **Start with Windows**. Every chart has a table view underneath it, so no value is
 only reachable by hovering. While it's showing it refreshes itself every 10
 seconds, holding off while you have text in it selected.
 
@@ -640,9 +640,10 @@ thread flushes to disk every ten seconds. If the database can't be opened,
 NetScope says so at startup and keeps capturing without it.
 
 **Keeping something out of history.** The **Not recorded** section of the
-History tab lists programs and hosts that history leaves out. You can add them
-there, or from a packet's right-click menu. The count shows at the top of the
-tab, so you can't forget an entry is there. Capture, the live tabs and alerts
+History tab, under **More**, lists programs and hosts that history leaves out.
+You can add them there, or from a packet's right-click menu. The count shows on
+More's own line even while it is folded, so you can't forget an entry is
+there. Capture, the live tabs and alerts
 still see the traffic. Only what is written to disk changes:
 
 - **An excluded program** keeps only its name and when it was first and last
@@ -989,6 +990,13 @@ names.
 ---
 
 ## Version history
+
+**1.42.3** — **A shorter History tab.** Not recorded, Storage and Start with
+Windows are folded under **More** with the busy hours, alerts and sessions.
+The count of what isn't recorded moved from beside the 7d/30d/90d buttons to
+More's own line, which shows even while it is folded. The line under a chart
+with a cut bar is gone: the cut itself, and its tooltip, say the bar is not to
+scale.
 
 **1.42.2** — **Starts at logon without waiting.** The logon task used to wait
 20 seconds before starting NetScope, for the network and Npcap to come up.

@@ -59,6 +59,12 @@ function history(iface){
   check('More is folded at first', t.moreOpen === false);
   check('busy hours, alerts and sessions are inside it',
         await p.evaluate(() => ['cw-week', 'alertsJump'].every(id => $('histMore').contains($(id)))));
+  check('...and so is everything from Not recorded down',
+        await p.evaluate(() => ['histEx', 'histFlush', 'histWipe'].every(id => $('histMore').contains($(id))) &&
+          [...$('histMore').querySelectorAll('h4')].some(h => h.textContent === 'Start with Windows') &&
+          $('histMore').closest('.sec') === $('p-history').lastElementChild));
+  check('nothing beside the range buttons but the date and the adapter',
+        await p.evaluate(() => !$('exJump') && /^7d30d90dsince /.test(document.querySelector('#p-history .dayrange').textContent)));
 
   // A day's tooltip: what moved, nothing about how long NetScope ran.
   const box = await p.$eval('#cw-daily .hitrect[data-i="4"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });

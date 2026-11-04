@@ -2033,12 +2033,6 @@ $('p-history').addEventListener('keydown', e => {
   if (bar && e.target === bar){ e.preventDefault(); toggleDetail(bar); }
 });
 
-function hbarNote(rows){
-  return hbarScale(rows).cut
-    ? '<div class="hint" style="margin:-2px 0 6px">The longest bar is cut short so the others stay '+
-      'readable. Its figure is the real total.</div>' : '';
-}
-
 function legend(){
   return '<div class="legend">' +
     '<span><i style="background:var(--series-in)"></i>▼ received</span>' +
@@ -2089,7 +2083,6 @@ function renderHistory(d){
       '" data-days="'+n+'">'+n+'d</button>').join('') +
     '<span style="color:var(--faint);font:11px var(--mono);margin-left:6px">'+
     (s.since ? 'since '+esc(s.since) : 'no data yet')+'</span>' +
-    (exN ? '<a href="#" id="exJump">· '+exN+' not recorded</a>' : '') +
     '<span style="flex:1"></span>' + histIfaceSelect(d) + '</div>';
 
   if (s.reset_backup)
@@ -2119,7 +2112,7 @@ function renderHistory(d){
 
   if (d.processes.length){
     h += '<div class="sec"><h4>By program'+per+'</h4>' +
-         hbarNote(d.processes) + hbars(d.processes, 'name') +
+         hbars(d.processes, 'name') +
          tableView(d.processes, [
            {h:'Program', f:r=>r.name},
            {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
@@ -2128,7 +2121,7 @@ function renderHistory(d){
   }
 
   if (d.hosts.length){
-    h += '<div class="sec"><h4>By host'+per+'</h4>' + hbarNote(d.hosts) + hbars(d.hosts, 'host') +
+    h += '<div class="sec"><h4>By host'+per+'</h4>' + hbars(d.hosts, 'host') +
          tableView(d.hosts, [
            {h:'Host', f:r=>r.host},
            {h:'First seen', f:r=>r.first_seen ? new Date(r.first_seen*1000).toLocaleDateString() : '—'},
@@ -2172,13 +2165,10 @@ function renderHistory(d){
       {h:'Version', f:r=>r.version||'—'},
       {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) + '</div>';
   }
-  if (more)
-    h += '<div class="sec"><details class="more" id="histMore"><summary><h4>More</h4>' +
-         '<span class="hint">busy hours, alerts, sessions</span></summary>' + more + '</details></div>';
-
-  // Said on the tab itself, count and all, so an exclusion added months ago
-  // can't quietly go on hiding things from someone who has forgotten it.
-  h += '<div class="sec" id="histEx"><h4>Not recorded' + (exN ? ' · ' + exN : '') + '</h4>' +
+  // Said on the tab, count and all (in More's own line too, so it shows while
+  // folded), so an exclusion added months ago can't quietly go on hiding
+  // things from someone who has forgotten it.
+  more += '<div class="sec" id="histEx"><h4>Not recorded' + (exN ? ' · ' + exN : '') + '</h4>' +
     '<div class="io">Left out of history. Capture, the live tabs and alerts still see them. ' +
     'A program keeps only its name and when it was first and last seen, so a ' +
     'new one is still noticed; a host is not written at all. A plain host name ' +
@@ -2195,7 +2185,7 @@ function renderHistory(d){
     (histExMsg ? '<div class="io" role="status" id="exMsg">' + esc(histExMsg) + '</div>' : '') +
     '</div>';
 
-  h += '<div class="sec"><h4>Storage</h4><div class="row"><span>File</span>'+
+  more += '<div class="sec"><h4>Storage</h4><div class="row"><span>File</span>'+
        '<span>'+esc(s.path)+'</span></div>'+
        '<div class="row"><span>Size</span><span>'+esc(hb(s.size))+' · usage kept '+
        s.retain_days+' days, alerts '+s.alert_retain_days+'</span></div>'+
@@ -2204,24 +2194,29 @@ function renderHistory(d){
        '</div>';
 
   const as = (lastStatus && lastStatus.autostart) || {};
-  h += '<div class="sec"><h4>Start with Windows</h4>';
+  more += '<div class="sec"><h4>Start with Windows</h4>';
   if (!as.supported){
-    h += '<div class="io">Windows only.</div>';
+    more += '<div class="io">Windows only.</div>';
   } else if (as.exists){
-    h += '<div class="row"><span>Status</span><span style="color:var(--in)">'+
+    more += '<div class="row"><span>Status</span><span style="color:var(--in)">'+
          'registered as a scheduled task</span></div>';
-    if (as.command) h += '<div class="row"><span>Runs</span><span>'+esc(as.command)+'</span></div>';
-    if (as.run_as)  h += '<div class="row"><span>As</span><span>'+esc(as.run_as)+'</span></div>';
-    if (as.last_run) h += '<div class="row"><span>Last run</span><span>'+esc(as.last_run)+'</span></div>';
-    h += '<div class="io" style="margin-top:6px">Remove it with '+
+    if (as.command) more += '<div class="row"><span>Runs</span><span>'+esc(as.command)+'</span></div>';
+    if (as.run_as)  more += '<div class="row"><span>As</span><span>'+esc(as.run_as)+'</span></div>';
+    if (as.last_run) more += '<div class="row"><span>Last run</span><span>'+esc(as.last_run)+'</span></div>';
+    more += '<div class="io" style="margin-top:6px">Remove it with '+
          '<code class="k">NetScope.exe --remove-task</code>.</div>';
   } else {
-    h += '<div class="io">Not set up. From an <b>elevated</b> Command Prompt:<br>'+
+    more += '<div class="io">Not set up. From an <b>elevated</b> Command Prompt:<br>'+
          '<code class="k">NetScope.exe --install-task</code><br><br>'+
          'This registers a logon task that runs with administrator rights and '+
          'no UAC prompt. The Run key cannot do that for an elevated program.</div>';
   }
-  h += '</div>';
+  more += '</div>';
+
+  h += '<div class="sec"><details class="more" id="histMore"><summary><h4>More</h4>' +
+       '<span class="hint">busy hours, alerts, sessions, ' +
+       (exN ? '<b id="exCount">' + exN + ' not recorded</b>' : 'not recorded') +
+       ', storage, start with Windows</span></summary>' + more + '</details></div>';
 
   $('p-history').innerHTML = h;
 
@@ -2232,8 +2227,6 @@ function renderHistory(d){
     b.onclick = () => removeExclusion(b.dataset.exdel, b.dataset.pat));
   $('exAdd').onclick = () => addExclusion($('exKind').value, $('exPat').value);
   $('exPat').onkeydown = e => { if (e.key === 'Enter') $('exAdd').click(); };
-  const ej = $('exJump');
-  if (ej) ej.onclick = e => { e.preventDefault(); $('histEx').scrollIntoView({block: 'start'}); $('exPat').focus({preventScroll: true}); };
   const fl = $('histFlush');
   if (fl) fl.onclick = () => control({action:'history_flush'})
     .then(() => refreshTab('history'));
@@ -2509,7 +2502,7 @@ $('p-alerts').addEventListener('click', e => {
   let tries = 0;
   const go = () => {
     const b = $('histWipe');
-    if (b){ b.scrollIntoView({block: 'center'}); b.focus({preventScroll: true}); }
+    if (b){ $('histMore').open = true; b.scrollIntoView({block: 'center'}); b.focus({preventScroll: true}); }
     else if (++tries < 40) setTimeout(go, 100);
   };
   go();

@@ -117,14 +117,18 @@ function payload(exclude){
   // ---------------- the History section ----------------
   await p.evaluate(()=>setPaused(false));
   await p.click('.tab[data-p="history"]');
-  await p.waitForSelector('#histEx');
+  await p.waitForSelector('#histEx', {state: 'attached'});
   const sec = await p.evaluate(()=>({h: document.querySelector('#histEx h4').textContent,
     rows: [...document.querySelectorAll('#histEx .exrow')].map(r=>r.textContent),
-    jump: (document.getElementById('exJump')||{}).textContent}));
+    folded: !$('histMore').open && $('histMore').contains($('histEx')),
+    count: (document.getElementById('exCount')||{}).textContent,
+    jump: !!document.getElementById('exJump')}));
   check('History lists what is not recorded, with a count',
         sec.h==='Not recorded · 1' && sec.rows.length===1 && sec.rows[0].startsWith(rec.rhost.toLowerCase()),
         JSON.stringify(sec));
-  check('...and says so at the top of the tab', sec.jump==='· 1 not recorded', sec.jump);
+  check('...folded under More, whose line still shows the count',
+        sec.folded && sec.count==='1 not recorded' && !sec.jump, JSON.stringify(sec));
+  await p.click('#histMore > summary');
 
   // Add from the form, accepting the erase.
   await p.selectOption('#exKind', 'program');
