@@ -606,9 +606,9 @@ open it underneath: its 24 hours, and the programs and hosts that made it.
 Click it again, or **Close**, to shut it. Each bar in **By program** and **By
 host** has a small line beside its total: its traffic per day across the
 period, so a program used a little every day looks flat and one big download
-shows as a spike. Hover it for the busiest day. **More**, folded at the bottom, holds the **busy hours** heatmap, how
-many alerts were logged (the alerts themselves are on the Alerts tab), recent
-sessions, **Not recorded**, **Storage** and **Start with Windows**. Every chart has a table view underneath it, so no value is
+shows as a spike. Hover it for the busiest day. **More**, folded at the bottom, holds how
+many alerts were logged (the alerts themselves are on the Alerts tab),
+**Not recorded**, **Storage** and **Start with Windows**. Every chart has a table view underneath it, so no value is
 only reachable by hovering. While it's showing it refreshes itself every 10
 seconds, holding off while you have text in it selected.
 
@@ -633,17 +633,6 @@ from before the upgrade has no host detail, only its hours. A scan that
 contacts more than 20,000 distinct hosts in a single flush is folded into one
 `(other)` row, and the program's total stays exact. Open details stay open
 across the tab's refreshes.
-
-**Busy hours** is a grid of weekday against hour of day, in local time. Each
-square is the average traffic for that hour on that weekday, over the same
-7, 30 or 90 days as the rest of the tab, counted only from the first day
-history has. Darker is busier, on a log scale covering three orders of
-magnitude below the busiest hour, so quiet hours are still told apart from
-each other and from an hour with nothing at all (drawn grey). It shows what
-a normal week looks like on this machine, which makes traffic at an hour
-that is usually quiet easy to spot. Hover a
-square for the exact figures and how many days they average; the table view
-underneath lists every hour.
 
 Writes never touch the capture path: packets accumulate in memory and a writer
 thread flushes to disk every ten seconds. If the database can't be opened,
@@ -1000,6 +989,14 @@ names.
 ---
 
 ## Version history
+
+**1.44.0** — **History's More is shorter.** The **Busy hours** heatmap and
+**Recent sessions** are gone; neither told you anything worth acting on. More
+now holds the alert count, Not recorded, Storage and Start with Windows.
+NetScope still notes when it starts and stops in its database; the
+tab just doesn't list them. Also: on a clicked day's hour chart,
+the busiest hour's figure no longer runs into the axis labels when that hour
+is the first or last of the day.
 
 **1.43.0** — **More ways to see the data.**
 - **History: a trend beside every program and host.** Each bar in By program

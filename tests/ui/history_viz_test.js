@@ -21,7 +21,7 @@ function history(){
           summary:{since:'2026-10-25', path:'C:\\history.db', size:1, retain_days:90, alert_retain_days:30}};
 }
 function dayData(day){
-  return {day, iface:'', hours:Array.from({length:24}, (_, h) => ({hour:h, bytes_in: h === 9 ? 5*K : 0, bytes_out: h === 9 ? K : 0})),
+  return {day, iface:'', hours:Array.from({length:24}, (_, h) => ({hour:h, bytes_in: h === 0 ? 5*K : 0, bytes_out: h === 0 ? K : 0})),
           programs:[{name:'burst.exe', bytes_in:5*K, bytes_out:K, packets:3}],
           hosts:[{host:'b.example', bytes_in:5*K, bytes_out:K, packets:3}]};
 }
@@ -78,6 +78,18 @@ function dayData(day){
   check('...and opens it under the chart, its column marked',
         day.under && day.picked && day.sel.join() === '3', JSON.stringify(day));
   check('...with its 24 hours, total and day named', day.cols === 24 && /Oct 28/.test(day.head) && /6\.0 KB/.test(day.head), day.head);
+  // The peak is at 00:00, the first column: its label must not run into the
+  // axis labels beside it (it did, on a real midnight-heavy day).
+  const clash = await p.evaluate(() => {
+    const ts = [...document.querySelectorAll('#cw-hours text')].map(t => t.getBoundingClientRect());
+    const out = [];
+    ts.forEach((a, i) => ts.forEach((b, j) => {
+      if (i < j && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5)
+        out.push([i, j]);
+    }));
+    return out;
+  });
+  check('...whose labels do not overlap', clash.length === 0, JSON.stringify(clash));
   check('...and the programs and hosts that made it', day.progs.join() === 'burst.exe,b.example', day.progs.join());
   check('...which are plain bars, not more drill-downs',
         await p.evaluate(() => !document.querySelector('#histDay .hbar[data-k]')));

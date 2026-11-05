@@ -900,36 +900,6 @@ class HistoryStore:
         return [dict(rows.get(d) or {"day": d, "bytes_in": 0, "bytes_out": 0, "packets": 0})
                 for d in wanted]
 
-    def week_hours(self, days=30, iface=""):
-        """
-        Average traffic per hour of each weekday, local time, Monday first:
-        {"cells": 7 rows of 24 [bytes_in, bytes_out], "counts": how many of
-        each weekday went into the average}.
-
-        An average per day, not a sum: over 30 days some weekdays occur five
-        times and others four, and a sum would make those look busier. Only
-        days from the first one recorded count, so a database a week old
-        isn't averaged over a month of days it never saw.
-        """
-        wanted = self._range_days(days)
-        first = self._q("SELECT MIN(day) AS d FROM usage")
-        since = max(wanted[0], (first[0]["d"] if first and first[0]["d"] else wanted[-1]))
-        counts = [0] * 7
-        for d in wanted:
-            if d >= since:
-                counts[datetime.strptime(d, "%Y-%m-%d").weekday()] += 1
-        cells = [[[0, 0] for _ in range(24)] for _ in range(7)]
-        w, a = self._on(iface)
-        for r in self._q(
-                "SELECT CAST(strftime('%w', day) AS INTEGER) AS wd, hour, "
-                "SUM(bytes_in) AS bi, SUM(bytes_out) AS bo FROM usage "
-                "WHERE day >= ?" + w + " GROUP BY wd, hour", [since] + a):
-            wd = (r["wd"] + 6) % 7          # SQLite counts from Sunday
-            n = counts[wd] or 1
-            if 0 <= r["hour"] < 24:
-                cells[wd][r["hour"]] = [round(r["bi"] / n), round(r["bo"] / n)]
-        return {"cells": cells, "counts": counts}
-
     def by_process(self, days=30, limit=15, iface=""):
         since = self._range_days(days)[0]
         w, a = self._on(iface)
@@ -1164,11 +1134,6 @@ class HistoryStore:
         return self._q(
             "SELECT mac, ip, hostname, server, lease_secs, first_seen, last_seen "
             "FROM dhcp_leases ORDER BY last_seen DESC LIMIT ?", (limit,))
-
-    def sessions(self, limit=20):
-        return self._q(
-            "SELECT id, started, ended, iface, packets, version FROM sessions "
-            "ORDER BY started DESC LIMIT ?", (limit,))
 
     def summary(self):
         if not self.enabled:

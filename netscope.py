@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.43.0"
+VERSION = "1.44.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -3097,12 +3097,10 @@ class Handler(BaseHTTPRequestHandler):
                 "range": h.range_totals(days, iface),
                 "daily": h.daily(days, iface),
                 "ifaces": h.ifaces(),
-                "week_hours": h.week_hours(days, iface),
                 "processes": h.by_process(days, 15, iface),
                 "hosts": h.by_host(days, 15, iface),
                 "new_hosts": h.new_hosts(days, 20, iface),
                 "alert_counts": h.alert_counts(days),
-                "sessions": h.sessions(10),
                 "exclude": ex,
                 "days": days,
                 "iface": iface,

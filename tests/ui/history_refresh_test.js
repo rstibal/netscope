@@ -44,10 +44,10 @@ function payload(){
   // --- New data shows up by itself, keeping the reader's place.
   await p.evaluate(()=>{
     const pane = document.getElementById('p-history');
-    // Sessions are under More (1.40): open both, as a reader would.
+    // Open More and By program's table view, as a reader would.
     $('histMore').open = true;
     const s = [...pane.querySelectorAll('.sec')].find(x=>{
-      const h = x.querySelector('h4'); return h && h.textContent==='Recent sessions'; });
+      const h = x.querySelector('h4'); return h && /^By program/.test(h.textContent); });
     s.querySelector('details').open = true;
     pane.scrollTop = 300;
   });
@@ -62,7 +62,7 @@ function payload(){
     return {open, top: pane.scrollTop};
   });
   check('an opened Table view stays open across the refresh',
-        kept.open.join()==='More,Recent sessions', JSON.stringify(kept.open));
+        kept.open.join()==='By program · last 30 days,More', JSON.stringify(kept.open));
   check('...and the scroll position is kept', before>0 && kept.top===before, before+' -> '+kept.top);
 
   // --- Nothing changed: the pane is not rebuilt at all.

@@ -57,8 +57,10 @@ function history(iface){
   check('nothing on the tab mentions capture time', !/Captured|of 1d/.test(t.text));
   check('the reset is explained', t.reset);
   check('More is folded at first', t.moreOpen === false);
-  check('busy hours, alerts and sessions are inside it',
-        await p.evaluate(() => ['cw-week', 'alertsJump'].every(id => $('histMore').contains($(id)))));
+  check('the alert count is inside it; busy hours and sessions are gone (1.44)',
+        await p.evaluate(() => $('histMore').contains($('alertsJump')) && !$('cw-week') &&
+          ![...$('p-history').querySelectorAll('h4')].some(h => /Busy hours|Recent sessions/.test(h.textContent)) &&
+          /^More\s*alerts, /.test($('histMore').querySelector('summary').textContent)));
   check('...and so is everything from Not recorded down',
         await p.evaluate(() => ['histEx', 'histFlush', 'histWipe'].every(id => $('histMore').contains($(id))) &&
           [...$('histMore').querySelectorAll('h4')].some(h => h.textContent === 'Start with Windows') &&
