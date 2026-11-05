@@ -577,7 +577,7 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .tip .tr b{color:var(--fg);font-weight:600}
 .tip .sw{display:inline-block;width:10px;height:2px;vertical-align:3px;
   margin-right:5px}
-.hbar{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;
+.hbar{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;
   padding:3px 0;font:11.5px var(--mono)}
 .hbar .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .hbar .track{grid-column:1/-1;height:9px;background:var(--panel2);border-radius:2px;
@@ -596,6 +596,27 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .hdet{margin:2px 0 8px 12px;padding:6px 0 2px 10px;border-left:2px solid var(--panel2);
   font:11px var(--mono);color:var(--dim)}
 .hdet[hidden]{display:none}
+/* A row's trend across the period, beside its total: one ink, since it is
+   one series (received plus sent). */
+.trend{display:block;width:64px;height:14px;overflow:visible}
+.trend path.a{fill:var(--dim);opacity:.22}
+.trend path.l{fill:none;stroke:var(--dim);stroke-width:1.2;vector-effect:non-scaling-stroke}
+#cw-daily.picked .colgroup:not(.sel){opacity:.4}
+.dayx{margin:4px 0 10px;padding:8px 10px;border:1px solid var(--line);border-radius:4px;
+  background:var(--panel)}
+.dayx .dayhead{display:flex;align-items:center;gap:8px;font:11.5px var(--mono);color:var(--dim)}
+.dayx .dayhead b{color:var(--fg)}
+.dayx .dayhead button{margin-left:auto}
+.dayx h5{margin:8px 0 3px;font:600 10.5px var(--sans);text-transform:uppercase;
+  letter-spacing:.04em;color:var(--faint)}
+.dayx .note{color:var(--faint);font:11px var(--mono);margin:3px 0}
+/* Talkers: one row per adapter, received drawn up from the middle line and
+   sent down, on the row's own scale. */
+.adl .t{padding:5px 0 3px}
+.adl .t .rate{color:var(--dim);flex:0 0 auto}
+.adl svg{display:block;width:100%;height:34px;margin-top:3px}
+.adl svg .mid{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+.adl .io{color:var(--faint);font-size:10.5px}
 .hdet h5{margin:6px 0 3px;font:600 10.5px var(--sans);text-transform:uppercase;
   letter-spacing:.04em;color:var(--faint)}
 .hdet h5:first-child{margin-top:0}
@@ -1840,8 +1861,10 @@ function capPath(x, y, w, h, r){
        + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
 }
 
-function dailyChart(rows){
-  const W = 560, H = 168, PADL = 46, PADR = 8, PADT = 12, PADB = 22;
+function dailyChart(rows, opt){
+  opt = opt || {};
+  const label = opt.label || (r => r.day.slice(5));
+  const W = 560, H = opt.height || 168, PADL = 46, PADR = 8, PADT = 12, PADB = 22;
   const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
   const max = niceMax(Math.max(1, ...rows.map(r => r.bytes_in + r.bytes_out)));
   const band = plotW / rows.length;
@@ -1882,7 +1905,7 @@ function dailyChart(rows){
         seg += d;
       }
     }
-    bars += `<g class="colgroup" data-i="${i}">${seg}</g>`;
+    bars += `<g class="colgroup${opt.sel === i ? ' sel' : ''}" data-i="${i}">${seg}</g>`;
     hits += `<rect class="hitrect" data-i="${i}" x="${PADL + band*i}" y="${PADT}" `
           + `width="${band}" height="${plotH}"/>`;
     if (i === peak && tot > 0){
@@ -1892,16 +1915,16 @@ function dailyChart(rows){
   });
 
   // Only a handful of x labels, else they collide.
-  const every = Math.max(1, Math.ceil(rows.length / 6));
+  const every = opt.every || Math.max(1, Math.ceil(rows.length / 6));
   let xl = '';
   rows.forEach((r, i) => {
-    if (i % every === 0 || i === rows.length - 1){
+    if (i % every === 0 || (!opt.every && i === rows.length - 1)){
       xl += `<text class="axlbl" x="${PADL + band*i + band/2}" y="${H-7}" `
-          + `text-anchor="middle">${esc(r.day.slice(5))}</text>`;
+          + `text-anchor="middle">${esc(label(r))}</text>`;
     }
   });
 
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily traffic">`
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opt.aria || 'Daily traffic')}">`
        + g + bars + xl + hits + '</svg>';
 }
 
@@ -1918,8 +1941,29 @@ function hbarScale(rows){
   return {max: Math.max(1, tots[0] || 1), cut: 0};
 }
 
+/* A row's bytes per day across the History period, from the server's
+   `trend`. A total alone can't say whether 40 GB was every day or one
+   download; the line beside it can. */
+function trendSVG(vals, days){
+  if (!vals || vals.length < 2) return '';
+  const W = 64, H = 14, max = Math.max(1, ...vals), n = vals.length;
+  const pts = vals.map((v, i) => [(i / (n - 1)) * W, H - 1 - (v / max) * (H - 2)]);
+  const line = 'M' + pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L');
+  let peak = 0;
+  vals.forEach((v, i) => { if (v > vals[peak]) peak = i; });
+  const when = days && days[peak] ? ' on ' + days[peak] : '';
+  const active = vals.filter(v => v > 0).length;
+  return '<svg class="trend" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" ' +
+    'aria-label="Per day: busiest ' + esc(hb(vals[peak])) + esc(when) + '">' +
+    '<title>Per day over the period: busiest ' + esc(hb(vals[peak])) + esc(when) + ', active ' +
+    active + ' of ' + n + ' days</title>' +
+    '<path class="a" d="' + line + ' L' + W + ',' + H + ' L0,' + H + ' Z"/>' +
+    '<path class="l" d="' + line + '"/></svg>';
+}
+
 function hbars(rows, keyName, sub){
   const sc = hbarScale(rows);
+  const days = histData && histData.daily ? histData.daily.map(d => d.day) : null;
   return rows.map(r => {
     const tot = r.bytes_in + r.bytes_out;
     const broken = sc.cut && tot === sc.cut && tot > sc.max;
@@ -1932,6 +1976,7 @@ function hbars(rows, keyName, sub){
     return '<div class="hbar"' + (kind && !sub ? ' data-k="'+kind+'" data-n="'+esc(r[keyName])+
         '" tabindex="0" role="button" aria-expanded="'+histOpen.has(key)+'"' : '') + '>' +
       '<span class="nm" title="'+esc(r[keyName])+'">'+esc(r[keyName])+'</span>' +
+      '<span>'+trendSVG(r.trend, days)+'</span>' +
       '<span style="color:var(--dim)">'+esc(hb(tot))+'</span>' +
       '<span class="track"'+(broken ? ' title="Shortened to fit: this bar is not to scale. '+
         esc(hb(tot))+' in total."' : '')+'>' +
@@ -1995,7 +2040,7 @@ function detailHtml(d){
    fetched, so an open detail says Loading rather than showing the old
    adapter's figures under the new heading, and an answer to the old question
    that arrives late is ignored. */
-function forgetDetails(){ for (const k in histDet) delete histDet[k]; }
+function forgetDetails(){ for (const k in histDet) delete histDet[k]; histDayData = null; }
 function loadDetail(key){
   const i = key.indexOf('|'), kind = key.slice(0, i), name = key.slice(i + 1);
   const asked = histDays + '|' + histIface;
@@ -2045,6 +2090,63 @@ function tableView(rows, cols){
     '</tr>' + rows.map(r => '<tr>' + cols.map(c =>
       '<td'+(c.n?' class="n"':'')+'>'+esc(c.f(r))+'</td>').join('') + '</tr>').join('') +
     '</table></details>';
+}
+
+/* Click a day of the daily chart (or Enter on it) to open it below: its
+   24 hours, and the programs and hosts that made it. The open day stays open
+   across the tab's refreshes and is re-fetched with them, for the adapter
+   and period chosen. */
+let histDayOpen = '', histDayData = null;
+function dayPanel(){
+  if (!histDayOpen) return '';
+  const d = histDayData;
+  let h = '<div class="dayx" id="histDay"><div class="dayhead"><b>' +
+    esc(new Date(histDayOpen + 'T12:00').toLocaleDateString([], {weekday: 'short', month: 'short', day: 'numeric'})) +
+    '</b>';
+  if (d && d.day === histDayOpen){
+    const tot = d.hours.reduce((a, r) => a + r.bytes_in + r.bytes_out, 0);
+    h += '<span>' + esc(hb(tot)) + (d.iface ? ' · ' + esc(d.iface.slice(0, 40)) : '') + '</span>';
+  }
+  h += '<button class="btn-sm" id="dayClose">Close</button></div>';
+  if (!d || d.day !== histDayOpen) return h + '<div class="note">Loading…</div></div>';
+  if (!d.hours.some(r => r.bytes_in + r.bytes_out)) return h + '<div class="note">Nothing recorded on this day.</div></div>';
+  h += '<div class="chartwrap" id="cw-hours">' + dailyChart(d.hours, {height: 120, every: 6,
+         label: r => String(r.hour).padStart(2, '0') + ':00', aria: 'Traffic by hour'}) + '</div>';
+  if (d.programs.length) h += '<h5>Programs</h5>' + hbars(d.programs, 'name', true);
+  if (d.hosts.length) h += '<h5>Hosts</h5>' + hbars(d.hosts, 'host', true);
+  return h + '</div>';
+}
+function loadDay(){
+  const day = histDayOpen, asked = histIface;
+  if (!day) return Promise.resolve();
+  return api('/api/history/day?day=' + day + '&iface=' + encodeURIComponent(histIface))
+    .then(r => r.json()).then(d => {
+      if (d.error || day !== histDayOpen || asked !== histIface) return;
+      histDayData = d;
+      const el = $('histDay');
+      if (el){ el.outerHTML = dayPanel(); wireDayPanel(); }
+    }).catch(() => {});
+}
+function wireDayPanel(){
+  const c = $('dayClose');
+  if (c) c.onclick = () => openDay('');
+}
+function openDay(day){
+  histDayOpen = (day === histDayOpen) ? '' : day;
+  histDayData = null;
+  const wrap = $('cw-daily');
+  if (wrap){
+    wrap.classList.toggle('picked', !!histDayOpen);
+    wrap.querySelectorAll('.colgroup').forEach(g =>
+      g.classList.toggle('sel', !!histDayOpen && histData.daily[+g.dataset.i].day === histDayOpen));
+  }
+  const old = $('histDay');
+  if (old) old.remove();
+  if (histDayOpen && wrap){
+    wrap.insertAdjacentHTML('afterend', dayPanel());
+    wireDayPanel();
+    loadDay();
+  }
 }
 
 /* History's own adapter filter, separate from the live one: totals for every
@@ -2100,9 +2202,14 @@ function renderHistory(d){
       '</div><div class="s">'+(rg.hosts || 0)+' hosts</div></div>' +
     '</div>';
 
+  // A day that has left the range (7d chosen after opening a day 20 days
+  // back) closes.
+  const selDay = daily.findIndex(r => r.day === histDayOpen);
+  if (selDay < 0){ histDayOpen = ''; histDayData = null; }
   h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
-       '<div class="chartwrap" id="cw-daily">' + dailyChart(daily) +
-       '<div class="tip" id="tip-daily"></div></div>' +
+       '<div class="chartwrap' + (histDayOpen ? ' picked' : '') + '" id="cw-daily">' +
+       dailyChart(daily, {sel: selDay}) +
+       '<div class="tip" id="tip-daily"></div></div>' + dayPanel() +
        tableView(daily, [
          {h:'Day', f:r=>r.day},
          {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
@@ -2236,6 +2343,7 @@ function renderHistory(d){
       control({action:'history_wipe'}).then(() => { alertLog = null; refreshTab('history'); });
   };
   wireDailyHover(daily);
+  wireDayPanel();
   if (d.week_hours) wireWeekHours(d.week_hours);
 }
 
@@ -2338,7 +2446,9 @@ function wireDailyHover(rows){
       tip.innerHTML = '<div class="th">'+esc(r.day)+'</div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-in)"></span>▼ received</span><b>'+esc(hb(r.bytes_in))+'</b></div>'+
         '<div class="tr"><span><span class="sw" style="background:var(--series-out)"></span>▲ sent</span><b>'+esc(hb(r.bytes_out))+'</b></div>'+
-        '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>';
+        '<div class="tr"><span>packets</span><b>'+Number(r.packets).toLocaleString()+'</b></div>'+
+        '<div class="tr"><span>' + (r.day === histDayOpen ? 'click to close' : 'click for its hours, programs, hosts') +
+        '</span></div>';
       tip.classList.add('on');
       const box = wrap.getBoundingClientRect();
       const x = (ev.clientX !== undefined ? ev.clientX - box.left : box.width / 2);
@@ -2354,7 +2464,13 @@ function wireDailyHover(rows){
     hit.addEventListener('pointerleave', hide);
     hit.addEventListener('focus', show);
     hit.addEventListener('blur', hide);
+    hit.addEventListener('click', () => { hide(); openDay(r.day); });
+    hit.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openDay(r.day); }
+    });
     hit.setAttribute('tabindex', '0');
+    hit.setAttribute('role', 'button');
+    hit.setAttribute('aria-label', r.day + ': ' + hb(r.bytes_in + r.bytes_out));
   });
 }
 
@@ -3276,7 +3392,55 @@ function wireConnFilter(){
   });
 }
 
+/* Throughput per adapter over the last five minutes, from the server's
+   per-second counts (the page only sees a sample of packets). Now that every
+   adapter is always captured, this says which one is busy: the VR router
+   streaming, or traffic moving to Wi-Fi when the VPN drops. One row each,
+   received up from the middle line and sent down, each on its own scale. */
+let adapterData = null, adapterAt = 0;
+function loadAdapters(){
+  if (Date.now() - adapterAt < 1800) return;
+  adapterAt = Date.now();
+  api('/api/adapters').then(r => r.json()).then(d => {
+    adapterData = d;
+    const el = $('talkAd');
+    if (el) el.innerHTML = adapterSec();
+  }).catch(() => {});
+}
+function adapterSec(){
+  const d = adapterData;
+  let h = '<h4>By adapter · last ' + Math.round(((d && d.window) || 300) / 60) + ' min</h4>';
+  if (!d || !d.adapters.length) return h + '<div class="empty" style="padding:6px 0">No traffic yet.</div>';
+  const W = 300, H = 34, MID = H / 2, start = d.now - d.window;
+  return h + '<div class="tlist adl">' + d.adapters.map(a => {
+    const byS = new Map(a.series.map(x => [x[0], x]));
+    let peak = 1, copy = 0, all = 0, rin = 0, rout = 0;
+    a.series.forEach(x => { peak = Math.max(peak, x[1], x[2]); copy += x[3]; all += x[1] + x[2]; });
+    for (let s = d.now - 4; s <= d.now; s++){ const x = byS.get(s); if (x){ rin += x[1]; rout += x[2]; } }
+    let up = 'M0,' + MID, dn = 'M0,' + MID;
+    for (let s = start + 1; s <= d.now; s++){
+      const x = byS.get(s), px = ((s - start) / d.window * W).toFixed(1);
+      up += ' L' + px + ',' + (MID - (x ? x[1] / peak * (MID - 1) : 0)).toFixed(1);
+      dn += ' L' + px + ',' + (MID + (x ? x[2] / peak * (MID - 1) : 0)).toFixed(1);
+    }
+    up += ' L' + W + ',' + MID + ' Z'; dn += ' L' + W + ',' + MID + ' Z';
+    return '<div class="t"><div class="top"><span class="nm" title="' + esc(a.name) + '">' +
+      esc(a.name || '(unknown adapter)') + '</span><span class="rate">▼' + esc(hb(rin / 5)) + '/s · ▲' +
+      esc(hb(rout / 5)) + '/s</span></div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="' +
+      esc(a.name) + ', peak ' + esc(hb(peak)) + ' per second">' +
+      '<title>' + esc(a.name) + ': peak ' + esc(hb(peak)) + '/s in the last ' +
+      Math.round(d.window / 60) + ' min. Received up, sent down.</title>' +
+      '<path d="' + up + '" fill="var(--series-in)"/><path d="' + dn + '" fill="var(--series-out)"/>' +
+      '<line class="mid" x1="0" y1="' + MID + '" x2="' + W + '" y2="' + MID + '"/></svg>' +
+      '<div class="io">peak ' + esc(hb(peak)) + '/s' +
+      (copy ? ' · ' + Math.round(copy / Math.max(1, all) * 100) + '% is the VPN’s encrypted copy' : '') +
+      '</div></div>';
+  }).join('') + '</div>';
+}
+
 function renderTalkers(s){
+  loadAdapters();
   if (!s || !s.processes.length){ $('p-talkers').innerHTML = '<div class="empty">No traffic yet.</div>'; return; }
   const max = a => Math.max(1, ...a.map(x => x.in + x.out));
   const list = (items, key) => {
@@ -3294,6 +3458,7 @@ function renderTalkers(s){
     }).join('') + '</div>';
   };
   $('p-talkers').innerHTML =
+    '<div class="sec" id="talkAd">' + adapterSec() + '</div>' +
     '<div class="sec"><h4>By process</h4>'  + list(s.processes, 'name') + '</div>' +
     '<div class="sec"><h4>By remote host</h4>' + list(s.hosts, 'host') + '</div>';
 }
@@ -3993,6 +4158,7 @@ function redrawHistory(d){
     [x.id, x.value, x.selectionStart, x.selectionEnd]);
   renderHistory(d);
   histOpen.forEach(loadDetail);
+  loadDay();
   pane.querySelectorAll('details').forEach(x => { if (open.has(histSecName(x))) x.open = true; });
   for (const [id, v, a, b] of typed){
     const x = $(id);

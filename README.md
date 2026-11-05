@@ -1,6 +1,6 @@
 # NetScope
 
-**Version 1.42.3**
+**Version 1.43.0**
 
 A live packet monitor for Windows with a browser dashboard. It captures every
 frame going in and out of your machine and shows you which process sent it,
@@ -354,6 +354,11 @@ page. In demo mode blocks are pretend and never reach the real firewall.
 
 **The Talkers tab** ranks processes and remote hosts by total bytes moved, with
 the in/out split for each — this is the "what is eating my bandwidth" view.
+At the top, **By adapter** shows the last five minutes on each adapter:
+received drawn up from a middle line and sent down, each adapter on its own
+scale, with its rate over the last five seconds and its peak. Everything on
+that adapter's wire counts, so with a VPN up, Wi-Fi includes the tunnel's
+encrypted copy, and the row says what share of it that was.
 
 ### The timeline
 
@@ -596,7 +601,12 @@ Usage recorded before 1.41 has no adapter, so it counts under **All adapters**
 only.
 
 The tab shows the totals, the daily chart, By program, By host and first
-contacts. **More**, folded at the bottom, holds the **busy hours** heatmap, how
+contacts. **Click a day** in the daily chart (or focus it and press Enter) to
+open it underneath: its 24 hours, and the programs and hosts that made it.
+Click it again, or **Close**, to shut it. Each bar in **By program** and **By
+host** has a small line beside its total: its traffic per day across the
+period, so a program used a little every day looks flat and one big download
+shows as a spike. Hover it for the busiest day. **More**, folded at the bottom, holds the **busy hours** heatmap, how
 many alerts were logged (the alerts themselves are on the Alerts tab), recent
 sessions, **Not recorded**, **Storage** and **Start with Windows**. Every chart has a table view underneath it, so no value is
 only reachable by hovering. While it's showing it refreshes itself every 10
@@ -990,6 +1000,17 @@ names.
 ---
 
 ## Version history
+
+**1.43.0** — **More ways to see the data.**
+- **History: a trend beside every program and host.** Each bar in By program
+  and By host has a small line of its traffic per day over the chosen period,
+  so steady use and a one-off download no longer look the same.
+- **History: click a day to open it.** The daily chart's columns open into
+  that day's 24 hours, with the programs and hosts behind it, for the adapter
+  chosen.
+- **Talkers: throughput per adapter.** The last five minutes on each adapter,
+  received and sent, with the current rate, the peak, and how much of it was
+  a VPN's encrypted copy.
 
 **1.42.3** — **A shorter History tab.** Not recorded, Storage and Start with
 Windows are folded under **More** with the busy hours, alerts and sessions.

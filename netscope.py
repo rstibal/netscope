@@ -48,10 +48,12 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.42.3"
+VERSION = "1.43.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
+# Seconds of per-adapter throughput kept for the Talkers tab's chart.
+IFACE_WINDOW = 300
 # How many bytes of each packet to retain for the hex view.
 SNAPLEN = 2048
 # How often the adapter list may be re-read from the OS.
@@ -653,6 +655,12 @@ class PacketStore:
         self.evicted = {"processes": 0, "hosts": 0, "names": 0}
         self._buckets = deque(maxlen=90)  # one second each
         self._cur_bucket = None
+        # second -> {adapter: [in, out, VPN copy]}, for the Talkers tab's
+        # per-adapter chart. Everything on the wire counts, the VPN's
+        # encrypted copy included (it is real traffic on that adapter), but
+        # kept apart so the page can say how much of an adapter it was.
+        self._if_secs = {}
+        self._if_newest = 0
         # Per-conversation counters for the Connections tab. Fed from add(),
         # which is the one choke point every record passes through — live
         # capture, demo, an imported pcap and --read all land here.
@@ -724,7 +732,37 @@ class PacketStore:
                 self._buckets.append(self._cur_bucket)
             if not outer:
                 self._cur_bucket[direction] += size
+            if sec >= self._if_newest - IFACE_WINDOW:
+                slot = self._if_secs.setdefault(sec, {}).setdefault(
+                    rec.get("iface") or "", [0, 0, 0])
+                slot[0 if direction != "out" else 1] += size
+                if outer:
+                    slot[2] += size
+                if sec > self._if_newest:
+                    self._if_newest = sec
+                    if len(self._if_secs) > IFACE_WINDOW + 30:
+                        cut = sec - IFACE_WINDOW
+                        for s in [s for s in self._if_secs if s < cut]:
+                            del self._if_secs[s]
             return rec["seq"]
+
+    def adapter_rates(self, now=None):
+        """
+        The last IFACE_WINDOW seconds per adapter: {"now", "window",
+        "adapters": [{"name", "series": [[sec, in, out, vpn_copy], ...]}]},
+        busiest first. Seconds with nothing are left out.
+        """
+        with self._lock:
+            now = int(now if now is not None else self._if_newest)
+            start = now - IFACE_WINDOW
+            per = {}
+            for sec in sorted(self._if_secs):
+                if start < sec <= now:
+                    for name, v in self._if_secs[sec].items():
+                        per.setdefault(name, []).append([sec, v[0], v[1], v[2]])
+        ranked = sorted(per.items(), key=lambda kv: -sum(x[1] + x[2] for x in kv[1]))
+        return {"now": now, "window": IFACE_WINDOW,
+                "adapters": [{"name": n, "series": s} for n, s in ranked]}
 
     def _trim(self, table, limit, what):
         """Drop the quietest tenth of table (caller holds the lock). Going
@@ -845,6 +883,8 @@ class PacketStore:
             self.unowned = 0
             self._buckets.clear()
             self._cur_bucket = None
+            self._if_secs.clear()
+            self._if_newest = 0
             self.started_at = time.time()
             # The Connections tab's byte counts come from here. Leaving it
             # alone meant Clear (and an import, which clears too) kept showing
@@ -3077,6 +3117,19 @@ class Handler(BaseHTTPRequestHandler):
             days = max(1, min(365, int(qs.get("days", ["30"])[0])))
             return self._send(200, h.detail(kind, name, days,
                                             iface=qs.get("iface", [""])[0][:200]))
+
+        if path == "/api/history/day":
+            h = self.app.history
+            day = qs.get("day", [""])[0]
+            if h is None or not h.enabled or not re.fullmatch(r"\d{4}-\d\d-\d\d", day):
+                return self._send(400, {"error": "bad request"})
+            return self._send(200, h.day_detail(day, iface=qs.get("iface", [""])[0][:200]))
+
+        if path == "/api/adapters":
+            # A loaded .pcap ends when it ends; live data ends now.
+            store = self.app.store
+            return self._send(200, store.adapter_rates(
+                None if self.app.source else time.time()))
 
         if path == "/api/connections":
             store = self.app.store

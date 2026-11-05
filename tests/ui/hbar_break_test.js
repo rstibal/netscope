@@ -29,7 +29,7 @@ let current = history([proc('vrstreamer.exe',231), proc('chrome.exe',25), proc('
     const rows = [...sec.querySelectorAll('.hbar')].map(r=>{
       const t = r.querySelector('.track'), w = t.getBoundingClientRect().width;
       const fill = [...t.querySelectorAll('i')].reduce((a,i)=>a+i.getBoundingClientRect().width,0);
-      return {name: r.querySelector('.nm').textContent, label: r.children[1].textContent,
+      return {name: r.querySelector('.nm').textContent, label: r.children[2].textContent,
               pct: fill/w*100, brk: !!t.querySelector('b.brk'), title: t.getAttribute('title')||''};
     });
     return {rows, note: /cut short/.test(sec.textContent)};

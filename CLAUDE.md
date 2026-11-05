@@ -367,6 +367,16 @@ History's own adapter dropdown is separate from the live one and passes
 `iface` to every query; empty means all. Its list is `HistoryStore.ifaces()`:
 every adapter with usage, attached or not.
 
+**The newer charts are drawn from server-side counts (1.43).** By program and
+By host carry a `trend` (bytes per day, `HistoryStore._with_trend`); a
+clicked day comes from `/api/history/day` (`day_detail`); Talkers' By adapter
+from `/api/adapters` (`PacketStore.adapter_rates`, `IFACE_WINDOW` seconds).
+The page never tallies these from the packets it polls, for the same reason as
+the Timeline. The trend is one ink (it is one series); the adapter rows use
+blue up / orange down, one row per adapter on its own scale, not one line
+per adapter: only two hues pass the deuteranope check. By adapter counts the
+VPN copy (it is on that wire), unlike every total, and says how much of it was.
+
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
 Tests change alert rules, mutes and history exclusions through the real API,
