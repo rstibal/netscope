@@ -990,6 +990,13 @@ names.
 
 ## Version history
 
+**1.44.1** — History's charts are drawn at the width of the pane instead of
+stretched to it. In a window under 1100px wide, where the side panel moves
+under the packet table and goes full width, every label and bar came out
+nearly twice the size and the axis labels ran off the left edge; beside the
+table, the labels were shrunk to 8px. They are 10px everywhere now, and are
+redrawn when the window changes size.
+
 **1.44.0** — **History's More is shorter.** The **Busy hours** heatmap and
 **Recent sessions** are gone; neither told you anything worth acting on. More
 now holds the alert count, Not recorded, Storage and Start with Windows.

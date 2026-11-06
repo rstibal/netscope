@@ -1849,10 +1849,34 @@ function capPath(x, y, w, h, r){
        + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
 }
 
+// Charts are drawn at the pane's real width, one unit to a pixel. Drawn at a
+// fixed 560 and stretched, they doubled every label and bar once the side
+// panel moved under the table (windows under 1100px) and went full width.
+function histChartW(inset){
+  const p = $('p-history'), w = p ? p.clientWidth - 24 - (inset || 0) : 0;
+  return w > 200 ? Math.round(w) : 560;
+}
+let histChartsAt = 0;
+function refitHistCharts(){
+  const w = histChartW();
+  if (!histData || !histData.daily || Math.abs(w - histChartsAt) < 8) return;
+  const cw = $('cw-daily');
+  if (cw){
+    const sel = histData.daily.findIndex(r => r.day === histDayOpen);
+    cw.querySelector('svg').outerHTML = dailyChart(histData.daily, {sel, width: w});
+    wireDailyHover(histData.daily);
+  }
+  const ch = $('cw-hours');
+  if (ch && histDayData && histDayData.day === histDayOpen)
+    ch.querySelector('svg').outerHTML = hoursChart(histDayData);
+  histChartsAt = w;
+}
+try { new ResizeObserver(refitHistCharts).observe($('p-history')); } catch (e) {}
+
 function dailyChart(rows, opt){
   opt = opt || {};
   const label = opt.label || (r => r.day.slice(5));
-  const W = 560, H = opt.height || 168, PADL = 46, PADR = 8, PADT = 12, PADB = 22;
+  const W = opt.width || 560, H = opt.height || 168, PADL = 46, PADR = 8, PADT = 12, PADB = 22;
   const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
   const max = niceMax(Math.max(1, ...rows.map(r => r.bytes_in + r.bytes_out)));
   const band = plotW / rows.length;
@@ -2102,11 +2126,15 @@ function dayPanel(){
   h += '<button class="btn-sm" id="dayClose">Close</button></div>';
   if (!d || d.day !== histDayOpen) return h + '<div class="note">Loading…</div></div>';
   if (!d.hours.some(r => r.bytes_in + r.bytes_out)) return h + '<div class="note">Nothing recorded on this day.</div></div>';
-  h += '<div class="chartwrap" id="cw-hours">' + dailyChart(d.hours, {height: 120, every: 6,
-         label: r => String(r.hour).padStart(2, '0') + ':00', aria: 'Traffic by hour'}) + '</div>';
+  h += '<div class="chartwrap" id="cw-hours">' + hoursChart(d) + '</div>';
   if (d.programs.length) h += '<h5>Programs</h5>' + hbars(d.programs, 'name', true);
   if (d.hosts.length) h += '<h5>Hosts</h5>' + hbars(d.hosts, 'host', true);
   return h + '</div>';
+}
+function hoursChart(d){
+  // Inside the day box: its padding and border come off the width.
+  return dailyChart(d.hours, {height: 120, every: 6, width: histChartW(22),
+         label: r => String(r.hour).padStart(2, '0') + ':00', aria: 'Traffic by hour'});
 }
 function loadDay(){
   const day = histDayOpen, asked = histIface;
@@ -2200,7 +2228,7 @@ function renderHistory(d){
   if (selDay < 0){ histDayOpen = ''; histDayData = null; }
   h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
        '<div class="chartwrap' + (histDayOpen ? ' picked' : '') + '" id="cw-daily">' +
-       dailyChart(daily, {sel: selDay}) +
+       dailyChart(daily, {sel: selDay, width: (histChartsAt = histChartW())}) +
        '<div class="tip" id="tip-daily"></div></div>' + dayPanel() +
        tableView(daily, [
          {h:'Day', f:r=>r.day},
