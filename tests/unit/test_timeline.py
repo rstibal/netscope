@@ -35,12 +35,18 @@ check("packets in the same second and key add up", got[(1000, "chrome.exe", "out
 check("direction is part of the key", got[(1000, "chrome.exe", "in")] == (900, 1), got)
 check("a new second is a new bucket", got[(1001, "svc.exe", "out")] == (100, 1), got)
 k = s["keys"][0]
-check("a key carries program, host, remote, local, dir, proto, remote port, adapter",
-      k == ["chrome.exe", "example.com", "1.2.3.4", "10.0.0.2", "out", "TLS", 443, "eth0"], k)
+check("a key carries program, host, remote, local, dir, proto, remote port, adapter, VPN copy",
+      k == ["chrome.exe", "example.com", "1.2.3.4", "10.0.0.2", "out", "TLS", 443, "eth0", 0], k)
 k_in = [x for x in s["keys"] if x[4] == "in"][0]
 check("...and the remote port for inbound packets is their source port", k_in[6] == 443, k_in)
 check("the local port is not kept, so one conversation is one key",
       len(s["keys"]) == 3, s["keys"])
+
+t2 = T.Timeline()
+o = pkt(1000.5); o["tunnel_outer"] = True
+t2.observe(o); t2.observe(pkt(1000.6))
+ks = t2.snapshot()["keys"]
+check("the VPN's outer copy is a key of its own, marked", sorted(k[8] for k in ks) == [0, 1], ks)
 
 # ---- incremental fetches
 gen = s["gen"]

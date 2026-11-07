@@ -68,7 +68,7 @@ let mode = 1;
   const real = await p.evaluate(()=>api('/api/timeline').then(r=>r.json()));
   check('/api/timeline answers with keys and per-second buckets',
         real.full===true && real.keys.length>0 && real.buckets.length>0 &&
-        real.keys[0].length===8 && Array.isArray(real.buckets[0][1][0]), JSON.stringify(real).slice(0,200));
+        real.keys[0].length===9 && Array.isArray(real.buckets[0][1][0]), JSON.stringify(real).slice(0,200));
   const again = await p.evaluate(g=>api('/api/timeline?gen='+g.gen+'&kfrom='+g.keys.length+'&since='+g.newest)
                                    .then(r=>r.json()), real);
   check('...and incrementally: only new seconds and new keys',

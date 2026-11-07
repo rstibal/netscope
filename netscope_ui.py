@@ -271,6 +271,25 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
    check-in alert skips them; the box is still true, just not news. */
 .ln.sys .rg{opacity:.55}
 #tlEmpty{grid-column:1 / -1}
+/* Flows (1.46): programs left, hosts right, a band per pair as thick as its
+   bytes, the sent part above the received. */
+#flview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+.flwrap{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;position:relative}
+#flSvg{display:block;width:100%}
+.flb{opacity:.42;cursor:pointer;transition:opacity .08s}
+.flb.out{fill:var(--series-out)}
+.flb.in{fill:var(--series-in)}
+#flSvg.focus .flb{opacity:.1}
+#flSvg.focus .flb.hot,.flb:hover{opacity:.85}
+.fln rect{fill:var(--fg);opacity:.5}
+.fln{cursor:pointer;outline:none}
+.fln.lump{cursor:default}
+.fln.lump rect{opacity:.25}
+.fln text{font:12px var(--mono);fill:var(--fg)}
+.fln.lump text,.fln.sys text{fill:var(--dim)}
+.fln .tot{fill:var(--faint);font-size:10.5px}
+.fln:hover .nm,.fln.hot .nm,.fln:focus-visible .nm{text-decoration:underline}
+.fln.lump:hover .nm{text-decoration:none}
 
 /* ---------- footer stats ---------- */
 footer{
@@ -688,6 +707,8 @@ back through the table while the capture continues."><input type="checkbox"
     <button id="vTable" class="btn-sm on" aria-pressed="true">Table</button>
     <button id="vTime" class="btn-sm" aria-pressed="false"
             title="One lane per program or host against time: what runs when, and what checks in on a schedule">Timeline</button>
+    <button id="vFlow" class="btn-sm" aria-pressed="false"
+            title="Programs on the left, hosts on the right, joined by bands as thick as the bytes between them: where the traffic is going">Flows</button>
   </span>
   <span class="flabel">filter</span>
   <span class="findwrap" id="findwrap">
@@ -774,6 +795,19 @@ back through the table while the capture continues."><input type="checkbox"
         <div class="empty" id="tlEmpty" style="display:none"></div>
       </div>
       <div class="tip" id="tlTip"></div>
+    </div>
+    <div id="flview" class="viz" style="display:none">
+      <div class="tlbar">
+        <span class="viewsw" id="flWin" role="group" aria-label="Time window">
+          <button class="btn-sm" data-w="60">1 min</button><button class="btn-sm" data-w="300">5 min</button><button class="btn-sm" data-w="900">15 min</button><button class="btn-sm" data-w="3600">1 hour</button>
+        </span>
+        <span class="tlnote" id="flNote"></span>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--series-out)"></i>▲ sent</span><span><i style="background:var(--series-in)"></i>▼ received</span></div>
+      </div>
+      <div class="flwrap" id="flWrap"><svg id="flSvg" role="img" aria-label="Traffic between programs and hosts"></svg>
+        <div class="empty" id="flEmpty" style="display:none"></div></div>
+      <div class="tip" id="flTip"></div>
     </div>
     <footer>
       <!-- The chart goes first so nothing upstream of it can move it. It used
@@ -3418,9 +3452,9 @@ try {
 } catch (e){}
 
 function tlRecord(k){
-  const [process, rhost, remote, local, dir, proto, rport, iface] = k;
+  const [process, rhost, remote, local, dir, proto, rport, iface, outer] = k;
   const out = dir === 'out';
-  const r = {process, rhost, remote, dir, proto, iface,
+  const r = {process, rhost, remote, dir, proto, iface, outer: outer === 1,
              src: out ? local : remote, dst: out ? remote : local,
              sport: out ? null : rport, dport: out ? rport : null};
   r.group = isGroupIP(remote) || isGroupIP(local);
@@ -3590,6 +3624,7 @@ function tlBuild(W){
 }
 
 function tlDraw(){
+  if (viewMode === 'flows') return flDraw();
   if (viewMode !== 'timeline') return;
   const cv = $('tlCanvas'), ax = $('tlAxis');
   const W = Math.max(60, Math.floor(ax.clientWidth || cv.clientWidth));
@@ -3727,18 +3762,21 @@ function tlLaneRec(name){
 }
 
 function setView(v){
-  const tl = v === 'timeline';
-  if (tl === (viewMode === 'timeline')) return;
-  if (tl) tableTop = $('tw').scrollTop;
-  viewMode = tl ? 'timeline' : 'table';
-  document.body.classList.toggle('tlmode', tl);
-  $('tlview').style.display = tl ? '' : 'none';
-  $('vTable').classList.toggle('on', !tl); $('vTable').setAttribute('aria-pressed', !tl);
-  $('vTime').classList.toggle('on', tl);   $('vTime').setAttribute('aria-pressed', tl);
+  if (v !== 'timeline' && v !== 'flows') v = 'table';
+  if (v === viewMode) return;
+  if (viewMode === 'table') tableTop = $('tw').scrollTop;
+  viewMode = v;
+  // tlmode: the table is folded away, for either drawing.
+  document.body.classList.toggle('tlmode', v !== 'table');
+  $('tlview').style.display = v === 'timeline' ? '' : 'none';
+  $('flview').style.display = v === 'flows' ? '' : 'none';
+  for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows']]){
+    $(id).classList.toggle('on', v === m); $(id).setAttribute('aria-pressed', v === m);
+  }
   try { localStorage.setItem('netscope-view', viewMode); } catch (e){}
-  if (tl){ tlDraw(); tlFetch().then(tlDraw); }
+  $('tlTip').classList.remove('on'); $('flTip').classList.remove('on');
+  if (v !== 'table'){ tlDraw(); tlFetch().then(tlDraw); }
   else {
-    $('tlTip').classList.remove('on');
     const w = $('tw');
     w.scrollTop = $('follow').checked ? w.scrollHeight : tableTop;
     refit();
@@ -3746,7 +3784,8 @@ function setView(v){
 }
 
 function tlSetting(){
-  document.querySelectorAll('#tlWin button').forEach(b =>
+  // One window for Timeline and Flows.
+  document.querySelectorAll('#tlWin button, #flWin button').forEach(b =>
     b.classList.toggle('on', Number(b.dataset.w) === TL.win));
   document.querySelectorAll('#tlGroup button').forEach(b =>
     b.classList.toggle('on', b.dataset.g === TL.group));
@@ -3755,7 +3794,8 @@ function tlSetting(){
 
 $('vTable').onclick = () => setView('table');
 $('vTime').onclick = () => setView('timeline');
-document.querySelectorAll('#tlWin button').forEach(b => b.onclick = () => {
+$('vFlow').onclick = () => setView('flows');
+document.querySelectorAll('#tlWin button, #flWin button').forEach(b => b.onclick = () => {
   TL.win = Number(b.dataset.w); tlSetting(); tlDraw();
 });
 document.querySelectorAll('#tlGroup button').forEach(b => b.onclick = () => {
@@ -3827,6 +3867,305 @@ $('tlCanvas').addEventListener('mousemove', e => {
 });
 $('tlCanvas').addEventListener('mouseleave', () => $('tlTip').classList.remove('on'));
 try { new ResizeObserver(() => tlDraw()).observe($('tlScroll')); } catch (e){}
+
+/* ---------------- flows (1.46) ----------------
+   Programs on the left, hosts on the right, one band per pair as thick as
+   the bytes between them in the window, the sent part above the received.
+   Drawn from the Timeline's totals, which the server keeps per second, so
+   it follows the same window, filter and adapter.
+
+   Bytes are linear here, unlike the Timeline: the question is where the
+   traffic goes, and a log scale would make a download and a check-in look
+   alike. Every band still gets a hairline, so nothing that moved vanishes.
+   The VPN's encrypted copy is left out, as from every total: otherwise the
+   VPN client would be the biggest band, carrying everything twice.
+   Multicast and broadcast are not a host being talked to. */
+const FL_ROW = 18, FL_GAP = 4, FL_PAD = 10, FL_NODE = 10, FL_MIN = 1.5;
+var FL = {nodes: {p: [], h: []}, pairs: [], order: {p: [], h: []}, sig: '', at: 0,
+          hovering: false, stale: false, tunnel: 0, total: 0};
+
+function flBuild(N){
+  const bad = tlUnsupported($('find').value);
+  const pass = TL.keys.map(r => !bad.length && rowVisible(r));
+  const end = TL.offline ? TL.newest + 1 : Math.floor(TL.now) + 1;
+  const start = end - TL.win;
+  const pairs = new Map(), progs = new Map(), hosts = new Map();
+  const tally = (m, name) => { let n = m.get(name); if (!n) m.set(name, n = {name, out: 0, in: 0, pkts: 0}); return n; };
+  let tunnel = 0;
+  for (const [sec, list] of TL.secs){
+    if (sec < start || sec >= end) continue;
+    for (const [k, bytes, pkts] of list){
+      if (!pass[k]) continue;
+      const r = TL.keys[k];
+      if (r.outer){ tunnel += bytes; continue; }
+      if (r.group) continue;
+      const proc = r.process || '-', host = r.rhost || r.remote || '(none)';
+      const d = r.dir === 'out' ? 'out' : 'in';
+      for (const n of [tally(progs, proc), tally(hosts, host)]){ n[d] += bytes; n.pkts += pkts; }
+      const key = proc + '\u0000' + host;
+      let pr = pairs.get(key);
+      if (!pr) pairs.set(key, pr = {p: proc, h: host, out: 0, in: 0, pkts: 0});
+      pr[d] += bytes; pr.pkts += pkts;
+    }
+  }
+  const tot = n => n.out + n.in;
+  // The busiest N on each side, in an order held for ten seconds (as the
+  // Timeline's lanes are) so nothing swaps places under the pointer.
+  const sig = TL.win + '|' + $('find').value + '|' + ifaceTab + '|' + N;
+  const keep = sig === FL.sig && Date.now() - FL.at < 10000;
+  if (!keep){ FL.sig = sig; FL.at = Date.now(); }
+  const side = (m, s, what) => {
+    const all = [...m.values()].sort((a, b) => tot(b) - tot(a));
+    const top = all.length > N ? all.slice(0, N - 1) : all;
+    if (keep){
+      const rank = new Map(FL.order[s].map((n, i) => [n, i]));
+      const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + all.indexOf(n);
+      top.sort((a, b) => at(a) - at(b));
+    }
+    FL.order[s] = top.map(n => n.name);
+    const rest = all.slice(top.length);
+    if (rest.length){
+      const lump = {name: rest.length + ' other ' + what, lump: true, out: 0, in: 0, pkts: 0, names: new Set()};
+      for (const n of rest){ lump.out += n.out; lump.in += n.in; lump.pkts += n.pkts; lump.names.add(n.name); }
+      top.push(lump);
+    }
+    const idx = new Map();
+    top.forEach((n, i) => { n.i = i; n.side = s; if (n.names) for (const x of n.names) idx.set(x, i); else idx.set(n.name, i); });
+    return {list: top, idx};
+  };
+  const P = side(progs, 'p', 'programs'), H = side(hosts, 'h', 'hosts');
+  // Pairs folded onto the nodes drawn: two programs in "other" talking to
+  // one host are one band.
+  const merged = new Map();
+  for (const pr of pairs.values()){
+    const a = P.idx.get(pr.p), b = H.idx.get(pr.h), key = a + ',' + b;
+    let m = merged.get(key);
+    if (!m) merged.set(key, m = {a, b, out: 0, in: 0, pkts: 0, names: []});
+    m.out += pr.out; m.in += pr.in; m.pkts += pr.pkts; m.names.push(pr);
+  }
+  FL.nodes = {p: P.list, h: H.list};
+  FL.pairs = [...merged.values()].filter(m => tot(m) > 0);
+  FL.tunnel = tunnel;
+  FL.total = P.list.reduce((a, n) => a + tot(n), 0);
+  return bad;
+}
+
+// Pixel layout for a bytes-to-pixels scale k. A band is as thick at both
+// ends; a node is as tall as its bands; a node keeps a label's height.
+function flLayout(k, top){
+  const th = m => Math.max(FL_MIN, (m.out + m.in) * k);
+  let bottom = top;
+  for (const s of ['p', 'h']){
+    const other = s === 'p' ? 'b' : 'a', me = s === 'p' ? 'a' : 'b';
+    let y = top;
+    for (const n of FL.nodes[s]){
+      const mine = FL.pairs.filter(m => m[me] === n.i).sort((x, z) => x[other] - z[other]);
+      const h = mine.reduce((a, m) => a + th(m), 0);
+      const room = Math.max(h, FL_ROW);
+      n.y = y + (room - h) / 2; n.h = h;
+      let c = n.y;
+      for (const m of mine){ m[s + 'y'] = c; m.t = th(m); c += m.t; }
+      y += room + FL_GAP;
+    }
+    bottom = Math.max(bottom, y - FL_GAP);
+  }
+  return bottom;
+}
+
+function flTrunc(s, n){ return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s; }
+
+function flDraw(auto){
+  if (viewMode !== 'flows') return;
+  // Not while the pointer is on it: the bands moved under a click aimed at
+  // one, the way the Alerts pane's cards did. It catches up on leaving.
+  if (auto && FL.hovering){ FL.stale = true; return; }
+  FL.stale = false;
+  const wrap = $('flWrap'), svg = $('flSvg');
+  const W = Math.max(320, Math.floor(wrap.clientWidth));
+  const avail = Math.max(200, Math.floor(wrap.clientHeight));
+  const N = Math.max(4, Math.min(15, Math.floor((avail - 2 * FL_PAD) / (FL_ROW + FL_GAP))));
+  const bad = flBuild(N);
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const note = $('flNote');
+  const np = FL.nodes.p.length, nh = FL.nodes.h.length;
+  if (bad.length){
+    note.className = 'tlnote warn';
+    note.textContent = 'The filter uses ' + bad.join(', ') + ', which the flows view doesn\'t ' +
+      'keep: it holds totals per program, host and port, not each packet.';
+  } else {
+    note.className = 'tlnote';
+    note.textContent = FL.total ? hb(FL.total) + ' in the last ' + span +
+      (FL.tunnel ? ' · VPN copy left out: ' + hb(FL.tunnel) : '') : '';
+  }
+  const empty = $('flEmpty');
+  const none = !FL.pairs.length;
+  empty.style.display = none ? 'block' : 'none';
+  empty.textContent = bad.length ? 'Nothing to draw with this filter.'
+    : !TL.keys.length ? 'Waiting for packets…'
+    : filterFn ? 'Nothing matching this filter in the last ' + span + '.'
+    : 'No traffic in the last ' + span + '.';
+  $('flTip').classList.remove('on');
+  svg.classList.remove('focus');
+  if (none){ svg.innerHTML = ''; svg.style.height = '0px'; return; }
+
+  // The largest scale at which both columns fit the height; the floors
+  // (hairline bands, label-high nodes) make it a search, not a division.
+  // With only a few nodes, filling the height turned the bands into slabs:
+  // about two label rows per node is plenty.
+  const most = Math.max(FL.nodes.p.length, FL.nodes.h.length);
+  const room = Math.min(avail - 2 * FL_PAD, most * (FL_ROW + FL_GAP) * 2);
+  let lo = 0, hi = room / Math.max(1, FL.total);
+  if (flLayout(hi, FL_PAD) - FL_PAD <= room) lo = hi;
+  else for (let i = 0; i < 24; i++){
+    const mid = (lo + hi) / 2;
+    if (flLayout(mid, FL_PAD) - FL_PAD <= room) lo = mid; else hi = mid;
+  }
+  const H = Math.max(avail, Math.ceil(flLayout(lo, FL_PAD) + FL_PAD));
+
+  // Labels take up to a quarter each side, the bands what is left.
+  const lw = Math.round(Math.min(300, Math.max(120, W * 0.25)));
+  const xl = lw, xr = W - lw - FL_NODE, x1 = xl + FL_NODE, x2 = xr, xm = (x1 + x2) / 2;
+  const chars = Math.floor((lw - 14) / 7.2);
+  const out = [];
+  const f = v => v.toFixed(1);
+  FL.pairs.forEach((m, i) => {
+    const tt = m.out + m.in, so = m.t * m.out / tt;
+    // The sent part, then the received, at both ends.
+    for (const [cls, a, b] of [['out', 0, so], ['in', so, m.t]]){
+      if (b - a <= 0) continue;
+      const ya = m.py + a, yb = m.py + b, za = m.hy + a, zb = m.hy + b;
+      out.push('<path class="flb ' + cls + '" data-m="' + i + '" d="M' + x1 + ' ' + f(ya) +
+        'C' + f(xm) + ' ' + f(ya) + ' ' + f(xm) + ' ' + f(za) + ' ' + x2 + ' ' + f(za) +
+        'L' + x2 + ' ' + f(zb) + 'C' + f(xm) + ' ' + f(zb) + ' ' + f(xm) + ' ' + f(yb) + ' ' + x1 + ' ' + f(yb) + 'Z"/>');
+    }
+  });
+  for (const s of ['p', 'h']){
+    for (const n of FL.nodes[s]){
+      const x = s === 'p' ? xl : xr, cy = n.y + n.h / 2;
+      const total = hb(n.out + n.in);
+      const name = flTrunc(n.name, chars - total.length - 2);
+      const sys = !n.lump && /^[-(]/.test(n.name);
+      const tx = s === 'p' ? x - 8 : x + FL_NODE + 8;
+      out.push('<g class="fln' + (n.lump ? ' lump' : '') + (sys ? ' sys' : '') + '" data-s="' + s +
+        '" data-i="' + n.i + '"' + (n.lump ? '' : ' tabindex="0"') + '>' +
+        '<rect x="' + x + '" y="' + f(n.y) + '" width="' + FL_NODE + '" height="' + f(Math.max(n.h, 1)) + '"/>' +
+        '<rect x="' + (s === 'p' ? 0 : x) + '" y="' + f(cy - FL_ROW / 2) + '" width="' + (lw + FL_NODE) +
+        '" height="' + FL_ROW + '" style="opacity:0"/>' +
+        '<text x="' + tx + '" y="' + f(cy) + '" dominant-baseline="central" text-anchor="' +
+        (s === 'p' ? 'end' : 'start') + '">' +
+        (s === 'p' ? '<tspan class="tot">' + esc(total) + '</tspan>  <tspan class="nm">' + esc(name) + '</tspan>'
+                   : '<tspan class="nm">' + esc(name) + '</tspan>  <tspan class="tot">' + esc(total) + '</tspan>') +
+        '</text></g>');
+    }
+  }
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.style.height = H + 'px';
+  svg.innerHTML = out.join('');
+}
+
+// "Hosts: github.com 81%, ..." for a node: where it sends, or who sends to it.
+function flShares(n, k){
+  const me = n.side === 'p' ? 'a' : 'b', other = n.side === 'p' ? 'h' : 'p', o = n.side === 'p' ? 'b' : 'a';
+  const list = FL.pairs.filter(m => m[me] === n.i).sort((x, z) => (z.out + z.in) - (x.out + x.in));
+  const tot = n.out + n.in;
+  if (!list.length || !tot) return '';
+  const pct = v => { v = v / tot * 100; return v >= 1 ? Math.round(v) + '%' : '<1%'; };
+  return (n.side === 'p' ? 'Hosts: ' : 'Programs: ') +
+    list.slice(0, k).map(m => FL.nodes[other][m[o]].name + ' ' + pct(m.out + m.in)).join(', ') +
+    (list.length > k ? ', and ' + (list.length - k) + ' more' : '');
+}
+
+function flTarget(e){
+  const t = e.target;
+  const g = t.closest && t.closest('.fln');
+  if (g) return {node: FL.nodes[g.dataset.s][Number(g.dataset.i)], el: g};
+  if (t.classList && t.classList.contains('flb')) return {pair: FL.pairs[Number(t.dataset.m)], el: t};
+  return null;
+}
+
+function flFocus(hit){
+  const svg = $('flSvg');
+  svg.querySelectorAll('.hot').forEach(x => x.classList.remove('hot'));
+  svg.classList.toggle('focus', !!hit);
+  if (!hit) return;
+  const on = [];
+  if (hit.node){
+    const me = hit.node.side === 'p' ? 'a' : 'b';
+    FL.pairs.forEach((m, i) => { if (m[me] === hit.node.i) on.push(i); });
+    hit.el.classList.add('hot');
+  } else on.push(FL.pairs.indexOf(hit.pair));
+  for (const i of on) svg.querySelectorAll('.flb[data-m="' + i + '"]').forEach(x => x.classList.add('hot'));
+}
+
+function flTip(hit, e){
+  const tip = $('flTip');
+  if (!hit){ tip.classList.remove('on'); return; }
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const io = n => '▲ ' + esc(hb(n.out)) + ' sent &nbsp;▼ ' + esc(hb(n.in)) + ' received';
+  let html;
+  if (hit.node){
+    const n = hit.node;
+    html = '<b>' + esc(n.name) + '</b><br>' + io(n) + ' in the last ' + esc(span) +
+      '<br><span style="color:var(--dim)">' + esc(flShares(n, 4)) + '</span>' +
+      (n.lump ? '' : '<br><span style="color:var(--dim)">Click to filter to it; right-click to hide it.</span>');
+  } else {
+    const m = hit.pair, p = FL.nodes.p[m.a], h = FL.nodes.h[m.b];
+    html = '<b>' + esc(p.name) + ' ⇄ ' + esc(h.name) + '</b><br>' + io(m) + ' in the last ' + esc(span) +
+      '<br>' + m.pkts.toLocaleString() + ' packets' +
+      (p.lump || h.lump ? '' : '<br><span style="color:var(--dim)">Click to filter to this pair.</span>');
+  }
+  tip.innerHTML = html;
+  const v = $('flview').getBoundingClientRect();
+  tip.classList.add('on');
+  const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;
+  tip.style.left = Math.max(6, Math.min(x, v.width - tip.offsetWidth - 6)) + 'px';
+  tip.style.top = (y + tip.offsetHeight > v.height ? y - tip.offsetHeight - 20 : y) + 'px';
+}
+
+// A filter clause for a node: process, or host by name or by address.
+function flClause(n){
+  if (n.side === 'p') return ['process', n.name];
+  return [tlIsIP(n.name) ? 'ip' : 'host', n.name];
+}
+function flRec(n){
+  if (n.side === 'p') return {process: n.name};
+  return tlIsIP(n.name) ? {dir: 'out', dst: n.name} : {rhost: n.name};
+}
+const flClickable = n => !n.lump && n.name !== '(none)' && n.name !== '(many)';
+
+$('flWrap').addEventListener('mouseenter', () => { FL.hovering = true; });
+$('flWrap').addEventListener('mouseleave', () => {
+  FL.hovering = false; flFocus(null); flTip(null);
+  if (FL.stale) flDraw();
+});
+$('flSvg').addEventListener('mousemove', e => { const h = flTarget(e); flFocus(h); flTip(h, e); });
+$('flSvg').addEventListener('click', e => {
+  const h = flTarget(e);
+  if (!h) return;
+  if (h.node){
+    if (!flClickable(h.node)) return;
+    addClause(flClause(h.node)[0], '==', h.node.name);
+  } else {
+    const p = FL.nodes.p[h.pair.a], o = FL.nodes.h[h.pair.b];
+    if (!flClickable(p) || !flClickable(o)) return;
+    addClause(flClause(p)[0], '==', p.name);
+    addClause(flClause(o)[0], '==', o.name);
+  }
+});
+$('flSvg').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const h = flTarget(e);
+  if (h && h.node && flClickable(h.node)){ e.preventDefault(); addClause(flClause(h.node)[0], '==', h.node.name); }
+});
+$('flSvg').addEventListener('contextmenu', e => {
+  const h = flTarget(e);
+  if (!h || !h.node || !flClickable(h.node)) return;
+  e.preventDefault();
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y){ const r = h.el.getBoundingClientRect(); x = r.left + 20; y = r.bottom; }
+  openRowMenu(flRec(h.node), x, y);
+});
+try { new ResizeObserver(() => flDraw()).observe($('flWrap')); } catch (e){}
 
 /* ---------------- sparkline ---------------- */
 
@@ -3972,6 +4311,7 @@ async function poll(){
     renderStatus(d.status);
     renderStats(d.stats);
     if (viewMode === 'timeline' && !paused) tlFetch().then(tlDraw);
+    if (viewMode === 'flows' && !paused) tlFetch().then(() => flDraw(true));
     if (!paused && d.packets.length){
       const tb = $('rows'), w = $('tw'), frag = document.createDocumentFragment();
       const following = $('follow').checked;
@@ -4196,7 +4536,7 @@ function setPaused(v){
   $('statusText').style.opacity = paused ? .5 : 1;
   $('fcount').textContent = paused
     ? 'paused — the capture is still running, the ' +
-      (viewMode === 'timeline' ? 'timeline' : 'table') + ' is not updating'
+      (viewMode === 'timeline' ? 'timeline' : viewMode === 'flows' ? 'flows view' : 'table') + ' is not updating'
     : '';
   if (!paused) updateCount();
 }
@@ -4288,7 +4628,7 @@ setInterval(() => {
   if (document.activeElement !== $('iface')) loadInterfaces();
 }, 15000);
 
-try { if (localStorage.getItem('netscope-view') === 'timeline') setView('timeline'); } catch (e){}
+try { setView(localStorage.getItem('netscope-view')); } catch (e){}
 poll();
 setInterval(poll, 700);
 // History is the tab the page opens on, so fetch it now rather than waiting

@@ -304,6 +304,17 @@ made every lane read as two rows. Every other lane (and its label) is shaded
 instead; the empty pixel row where sent and received meet marks the middle.
 The time lines are drawn under the bands at half strength.
 
+**Flows is drawn from the Timeline's totals, linear, and still under the
+pointer (1.46).** It needs nothing the Timeline's per-second keys don't
+have, so it has no endpoint of its own; the key gained a ninth field, the
+VPN-copy flag, so Flows can leave that copy out as every total does (the
+Timeline still draws it, being on that wire). Bytes are linear, not log as on
+the Timeline: the question is where bandwidth goes. Every band has a 1.5px
+floor and every node a label's height, so the scale is found by a search,
+not a division. Height is capped at about two rows per node: with three
+nodes, filling the pane made slabs. The automatic redraw waits while the
+pointer is over it, for the reason the Alerts pane does.
+
 **Regularity is checked per program-and-host pair, not only per lane.** On a
 real machine the Programs view tagged nothing while Claude.exe checked in with
 `downloads.claude.ai` every 45 s: the program's other traffic filled the gaps,

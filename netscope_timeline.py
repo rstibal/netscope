@@ -89,9 +89,12 @@ class Timeline:
         remote = rec.get("remote") or (rec.get("dst") if out else rec.get("src")) or ""
         local = (rec.get("src") if out else rec.get("dst")) or ""
         rport = rec.get("dport") if out else rec.get("sport")
+        # The last field marks the VPN's encrypted outer copy (1.46). The
+        # Timeline draws it, since it is on that wire; Flows leaves it out,
+        # as every total does, or the VPN client would be its biggest band.
         return (rec.get("process") or "-", rec.get("rhost") or "", remote, local,
                 "out" if out else "in", rec.get("proto") or "", rport,
-                rec.get("iface") or "")
+                rec.get("iface") or "", 1 if rec.get("tunnel_outer") else 0)
 
     @staticmethod
     def carries_data(rec):
@@ -112,8 +115,8 @@ class Timeline:
     def _lumped(key):
         # What a key collapses to once a second (or the table) is full: the
         # program and direction survive, which is what the lanes are made of.
-        proc, _h, _r, local, d, _p, _port, iface = key
-        return (proc, "", "(many)", local, d, "", None, iface)
+        proc, _h, _r, local, d, _p, _port, iface, outer = key
+        return (proc, "", "(many)", local, d, "", None, iface, outer)
 
     def _intern(self, key):
         i = self._index.get(key)

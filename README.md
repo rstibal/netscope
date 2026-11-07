@@ -406,6 +406,38 @@ with no operator searches the program, host, addresses, protocol and port
 here, not the Info column. Pause (`space`) freezes the timeline as it does the
 table.
 
+### Flows
+
+**Flows**, beside Timeline, shows where the traffic is going right now:
+programs down the left, hosts down the right, and a band between each program
+and each host it talked to, as thick as the bytes between them. Each band is
+two colours: the **sent** part above, the **received** part below.
+
+- **1 min / 5 min / 15 min / 1 hour** sets the span. It is the same setting as
+  the Timeline's, and comes from the same per-second totals.
+- Thickness is linear in bytes, unlike the Timeline's log scale: the question
+  here is where the bandwidth goes, and a log scale makes a download and a
+  check-in look alike. Every band still gets a hairline, so nothing that moved
+  disappears.
+- The busiest programs and hosts that fit the height are drawn, busiest at the
+  top; the rest are folded into **N other programs** and **N other hosts** at
+  the bottom. The order holds for ten seconds at a time, as the Timeline's
+  lanes do.
+- The VPN's encrypted copy is left out, as it is from every total, and the
+  note at the top says how much there was. Multicast and broadcast are left
+  out too: they aren't a host being talked to.
+- **Hover** a program or host to light up its bands and see its bytes each way
+  and its share with each partner; hover a band for that pair. While the
+  pointer is over the drawing it doesn't redraw, so nothing moves under a
+  click; it catches up when the pointer leaves.
+- **Click** a program or host to filter to it, and the drawing shows only its
+  traffic: everywhere one program goes, or every program behind one host.
+  **Click a band** to filter to that pair. **Right-click** a name for the hide
+  and don't-record menu. The "other" nodes aren't filters.
+
+The display filter and the adapter dropdown apply as on the Timeline, with
+the same limit on the fields it can use.
+
 ### Checking the capture is keeping up
 
 Two states used to look identical: a capture with no drops, and one whose driver
@@ -990,6 +1022,13 @@ names.
 ---
 
 ## Version history
+
+**1.46.0** — New: **Flows**, a third view beside Table and Timeline. Programs
+on the left, hosts on the right, joined by bands as thick as the bytes
+between them over the last minute to hour, sent above received. Hover for
+the numbers, click a name or a band to filter to it. The VPN's encrypted
+copy and multicast are left out, as from every total. See *Flows* under
+*Using the dashboard*.
 
 **1.45.0** — **An easier Timeline to read.** Each lane used to have a line
 through its middle (sent above, received below) in the same grey as the line
