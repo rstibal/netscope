@@ -368,7 +368,8 @@ each packet was; the timeline shows *when* things happen: what woke up when
 you unlocked the machine, what talks at 3 a.m., and what checks in on a
 schedule.
 
-- **Sent** marks rise above each lane's midline, **received** hang below it.
+- **Sent** marks rise from the middle of each lane, **received** hang below it.
+  Every other lane is shaded, so each lane reads as one band.
   Their height is on a log scale shared by every lane, so a 200-byte check-in
   still shows next to a download. Any traffic at all gets at least a pixel.
 - **1 min / 5 min / 15 min / 1 hour** sets the span. NetScope keeps an hour of
@@ -989,6 +990,12 @@ names.
 ---
 
 ## Version history
+
+**1.45.0** — **An easier Timeline to read.** Each lane used to have a line
+through its middle (sent above, received below) in the same grey as the line
+between lanes, so every lane looked like two rows. Both lines are gone:
+every other lane is shaded instead, its name included, and the time lines
+are fainter than the lanes.
 
 **1.44.1** — History's charts are drawn at the width of the pane instead of
 stretched to it. In a window under 1100px wide, where the side panel moves

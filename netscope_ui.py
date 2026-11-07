@@ -249,8 +249,12 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 #tlAxis{height:22px}
 #tlLabels{min-width:0}
 .ln{display:flex;align-items:center;gap:6px;width:100%;height:26px;padding:0 8px 0 14px;
-  border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;
+  border:0;border-radius:0;background:none;
   color:var(--fg);font:12px var(--mono);text-align:left;cursor:pointer;min-width:0}
+/* Lanes are told apart by banding, not lines (1.45). A centre line (sent
+   above, received below) in the same grey as the line between lanes made
+   every lane read as two rows. The canvas bands the same lanes. */
+.ln:nth-child(even){background:var(--band)}
 .ln:hover,.ln:focus-visible{background:var(--panel2);color:var(--fg);outline:none}
 /* The name takes whatever the total and the box leave. A 60% cap cut
    oauthaccountmanager.googleapis.com off at 22 characters beside empty space. */
@@ -509,14 +513,15 @@ code.k{color:var(--accent);font-family:var(--mono)}
   --series-in:  #2a78d6;
   --series-out: #eb6834;
   --grid: #d8dee4;
+  --band: rgba(31,35,40,.045);
 }
 :root:not([data-theme="light"]) .viz{ --series-in:#3987e5; --series-out:#d95926;
-  --grid:#242c37; }
+  --grid:#242c37; --band:rgba(219,227,238,.055); }
 :root[data-theme="dark"] .viz{ --series-in:#3987e5; --series-out:#d95926;
-  --grid:#242c37; }
+  --grid:#242c37; --band:rgba(219,227,238,.055); }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]) .viz{ --series-in:#3987e5; --series-out:#d95926;
-    --grid:#242c37; }
+    --grid:#242c37; --band:rgba(219,227,238,.055); }
 }
 
 .kpirow{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));
@@ -3592,7 +3597,7 @@ function tlDraw(){
   const lanes = TL.lanes, B = TL.bins, binW = W / B;
   const cs = getComputedStyle($('tlview'));
   const col = n => cs.getPropertyValue(n).trim();
-  const cIn = col('--series-in'), cOut = col('--series-out'), cGrid = col('--grid');
+  const cIn = col('--series-in'), cOut = col('--series-out'), cGrid = col('--grid'), cBand = col('--band');
   const dpr = window.devicePixelRatio || 1;
 
   // Note, empty state.
@@ -3659,14 +3664,19 @@ function tlDraw(){
     max = Math.max(max, l.bins[j * 3], l.bins[j * 3 + 1]);
   const lmax = Math.log1p(max), half = TL_LANE / 2 - 3;
   const ticks = tlTicks(W);
+  // Every other lane banded, as its label is; no line between lanes and none
+  // through the middle. The empty pixel row between sent and received still
+  // marks where the two meet. Time lines go under the bands at half strength:
+  // background, where the lanes are the structure.
+  g.fillStyle = cBand;
+  for (let i = 1; i < lanes.length; i += 2) g.fillRect(0, i * TL_LANE, W, TL_LANE);
   g.fillStyle = cGrid;
+  g.globalAlpha = .5;
   for (const t of ticks) g.fillRect(Math.round(t.x), 0, 1, H);
+  g.globalAlpha = 1;
   const bw = binW > 3 ? binW - 1 : Math.max(1, binW);
   lanes.forEach((l, i) => {
     const y0 = i * TL_LANE, mid = y0 + TL_LANE / 2;
-    g.fillStyle = cGrid;
-    g.fillRect(0, y0 + TL_LANE - 1, W, 1);
-    g.fillRect(0, Math.round(mid), W, 1);
     for (let j = 0; j < B; j++){
       const x = j * binW, vin = l.bins[j * 3], vout = l.bins[j * 3 + 1];
       // At least a pixel for any traffic at all: one small packet is still

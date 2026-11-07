@@ -298,6 +298,12 @@ requires short bursts at a steady interval (80% of gaps within 10%, or 1 s), so 
 steady stream with pauses doesn't qualify. Re-ranking every second made lanes
 jump under the pointer.
 
+**Timeline lanes are banded, with no lines across them (1.45).** A centre
+line between sent and received, in the same grey as the line between lanes,
+made every lane read as two rows. Every other lane (and its label) is shaded
+instead; the empty pixel row where sent and received meet marks the middle.
+The time lines are drawn under the bands at half strength.
+
 **Regularity is checked per program-and-host pair, not only per lane.** On a
 real machine the Programs view tagged nothing while Claude.exe checked in with
 `downloads.claude.ai` every 45 s: the program's other traffic filled the gaps,

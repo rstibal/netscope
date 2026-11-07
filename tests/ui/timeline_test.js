@@ -127,6 +127,28 @@ let mode = 1;
   });
   check('a one-byte packet is still drawn (log scale, at least a pixel)', painted>=110 && painted<=121, painted+' marks');
 
+  // 1.45: no line through a lane's middle or under it; every other lane is
+  // banded instead, its label too. Bars never reach a lane's top two pixel
+  // rows, its middle row or its bottom row, so those rows hold only the band
+  // and the time lines, and must match each other exactly.
+  const lines = await p.evaluate(()=>{
+    const cv = document.getElementById('tlCanvas'), g = cv.getContext('2d');
+    const dpr = cv.width / cv.clientWidth;
+    const row = y => [...g.getImageData(0, Math.floor(y * dpr), cv.width, 1).data].join();
+    const same = i => { const y0 = i * 26, top = row(y0 + 1);
+      return row(y0 + 13) === top && row(y0 + 25) === top; };
+    const alpha = y => { const d = g.getImageData(0, Math.floor(y * dpr), cv.width, 1).data;
+      let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n / (d.length / 4); };
+    const lb = [...document.querySelectorAll('#tlLabels .ln')].map(b => getComputedStyle(b));
+    return {same: [0, 1, 2].map(same), bandA: [0, 1, 2].map(i => alpha(i * 26 + 1)),
+            lbl: lb.map(c => c.backgroundColor), border: lb.map(c => c.borderBottomWidth)};
+  });
+  check('no centre line and no line between lanes', lines.same.every(Boolean), JSON.stringify(lines.same));
+  check('...every other lane is banded instead', lines.bandA[1] > 0.95 && lines.bandA[0] < 0.1 && lines.bandA[2] < 0.1,
+        JSON.stringify(lines.bandA));
+  check('...its label too', lines.lbl[1] !== lines.lbl[0] && lines.lbl[0] === lines.lbl[2] &&
+        lines.border.every(w => w === '0px'), JSON.stringify(lines));
+
   const align = await p.evaluate(()=>{
     const a = document.getElementById('tlAxis').getBoundingClientRect(),
           c = document.getElementById('tlCanvas').getBoundingClientRect();
