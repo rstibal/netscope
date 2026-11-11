@@ -498,6 +498,39 @@ at the right a line of its shape across the window.
 The display filter and the adapter dropdown apply as on the Timeline, with
 the same limit on the fields it can use.
 
+### Latency
+
+**Latency**, beside Kinds, shows how long each host takes to answer a new
+connection, over time. One slow host under a calm **All hosts** row is that
+site; every row climbing together is your own network.
+
+- What is timed is the TCP handshake: this machine's connection request to
+  the host's answer, one network round trip. It is the **RTT** the
+  Connections tab shows per connection, kept for an hour instead of for as
+  long as the connection lasts. It works for encrypted traffic.
+- There is one time per **new** connection. A host reached over QUIC, a
+  connection that was already open, and a connection somebody else opened
+  have none, and the view says so when it is empty. With a VPN or a proxy in
+  the path, the time includes it.
+- **All hosts** is the first row; then one row per host, the hosts connected
+  to most first. Each connection is a dot, placed across the row by when it
+  was opened and up the row by how long it took.
+- Each row is on its own scale: the figures at the right (**usual**, the
+  median; **worst**; and the number of connections) compare hosts, and the
+  dots show one host's own shape.
+- A dot is orange when the connection took at least three times the host's
+  usual and at least 20 ms longer. On a 1 ms LAN, 4 ms is not worth marking.
+- The hosts that fit the height are drawn; the rest are folded into **N other
+  hosts**. The order holds for ten seconds at a time.
+- **Hover** a row for its times and the programs that connected. **Click** it
+  to filter to the host; **right-click** for the hide and don't-record menu.
+  It doesn't redraw while the pointer is over it.
+
+The display filter and the adapter dropdown apply. A filter on the protocol
+can't be applied, and the view says so: the handshake is TCP whatever the
+connection went on to carry. The times are kept in memory for an hour and
+are not written to the history database.
+
 ### Checking the capture is keeping up
 
 Two states used to look identical: a capture with no drops, and one whose driver
@@ -1031,6 +1064,7 @@ netscope_alerts.py  alert rules and Windows toast notifications
 netscope_block.py   blocking a host or program through Windows Firewall rules
 netscope_conn.py    connection table — flow accounting joined to the socket table
 netscope_timeline.py per-second totals for the Timeline view
+netscope_latency.py  an hour of handshake times for the Latency view
 netscope_pcap.py    .pcap writing and reading
 netscope_history.py SQLite history — rollups, first-seen records, alert log
 netscope_tray.py    tray icon, console hiding, start-on-login
@@ -1082,6 +1116,13 @@ names.
 ---
 
 ## Version history
+
+**1.49.0** — New: **Latency**, a sixth view. How long each host takes to
+answer a new connection (the TCP handshake), one dot per connection across
+the last minute to hour, one row per host under an **All hosts** row, with
+the usual and worst time for each. A connection far slower than its host's
+usual is marked. Tells one slow site from a slow network. See *Latency* under
+*Using the dashboard*.
 
 **1.48.0** — New: **Kinds**, a fifth view. One row per kind of traffic (TLS,
 QUIC, DNS, SMB2..., or a port for what isn't decoded), with a bar of its

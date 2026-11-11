@@ -12,6 +12,7 @@ netscope_ui.py        the entire dashboard as one PAGE_HTML string
 netscope_block.py     host/program blocks as Windows Firewall rules
 netscope_conn.py      connection table: flow accounting joined to the socket table
 netscope_timeline.py  per-second totals per (program, host, port, ...) for the Timeline view
+netscope_latency.py   an hour of TCP handshake times for the Latency view
 netscope_alerts.py    alert rules, muting, Windows toasts
 netscope_history.py   SQLite history and the settings file
 netscope_streams.py   TCP reassembly and HTTP/FTP file extraction
@@ -334,6 +335,21 @@ click writes the filter that means the same packets (`kdExpr`), folds
 included, so the table and the drawing never disagree. Multicast is kept
 here, unlike Flows and Balance: it is not a host, but it is a kind. The
 trend line is one ink on the row's own scale, as History's is.
+
+**Latency is the handshake time the flow table already measured, kept
+after the flow is gone (1.49).** `FlowTable.on_rtt` fires once per timed
+handshake and `PacketStore._on_rtt` puts it in `Latency`
+(`netscope_latency.py`): an hour, capped, memory only, read by the page a
+slice at a time (`/api/latency?after=&gen=`) like the Timeline. A host is
+usually unnamed when its SYN/ACK goes by (the name is in the ClientHello,
+after), so `snapshot()` names it at read time from the hostname cache. Rows
+are ordered by connections, not slowest first: one slow connection to a host
+seen once would lead. A dot is "slow" at three times the row's median *and*
+20 ms over it; the ratio alone marked 4 ms on a 1 ms LAN. A `proto` filter is
+refused, not applied: every sample is TCP, so `proto == "TLS"` would draw
+nothing and read as "no TLS host was timed". Don't add QUIC or
+already-open connections by guessing; the empty message says why they are
+missing.
 
 **Regularity is checked per program-and-host pair, not only per lane.** On a
 real machine the Programs view tagged nothing while Claude.exe checked in with

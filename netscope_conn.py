@@ -167,6 +167,10 @@ class FlowTable:
         self._lock = threading.Lock()
         self.max_flows = max_flows
         self._last_prune = 0.0
+        # Called as on_rtt(rec, flow) the moment a handshake has been timed,
+        # with the SYN/ACK's record: the Latency view keeps these over time,
+        # which a row that goes when its connection does cannot.
+        self.on_rtt = None
 
     def observe(self, rec):
         """
@@ -227,7 +231,13 @@ class FlowTable:
             f["pid"] = rec.get("pid")
         if not f["rhost"] and rec.get("rhost"):
             f["rhost"] = rec["rhost"]
+        timed = f["rtt"] is not None
         _quality(f, rec, now)
+        if not timed and f["rtt"] is not None and self.on_rtt is not None:
+            try:
+                self.on_rtt(rec, f)
+            except Exception:
+                pass                    # a listener must never drop a packet
         self._flows.move_to_end(key)
         self._prune(now)
 

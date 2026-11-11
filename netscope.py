@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.48.0"
+VERSION = "1.49.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -93,6 +93,7 @@ from netscope_alerts import AlertEngine, DesktopNotifier, RULE_WHY
 from netscope_block import Blocker, BlockError
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_timeline import Timeline
+from netscope_latency import Latency
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
                          owner_label, parse_ra, UNOWNED, SHARED_PORT,
                          is_group_ip)
@@ -668,6 +669,19 @@ class PacketStore:
         # An hour of per-second totals for the Timeline view, which needs far
         # longer than the ring holds.
         self.timeline = Timeline()
+        # An hour of handshake times for the Latency view. The flow table
+        # times each handshake; this keeps the timings after the flow is gone.
+        self.latency = Latency()
+        self.flows.on_rtt = self._on_rtt
+
+    def _on_rtt(self, rec, f):
+        # Called from flows.observe(), inside add()'s lock: no locking here.
+        # rec is the SYN/ACK, so its source port is the remote one.
+        if rec.get("tunnel_outer"):
+            return
+        self.latency.note(rec.get("ts"), f.get("rtt"), f.get("process"),
+                          f.get("rhost") or rec.get("rhost"), rec.get("remote"),
+                          rec.get("sport"), rec.get("iface"))
 
     def add(self, rec: dict, raw: bytes):
         with self._lock:
@@ -892,6 +906,7 @@ class PacketStore:
             # a name learned earlier is still true.
             self.flows.clear()
             self.timeline.clear()
+            self.latency.clear()
 
 
 class ReverseResolver:
@@ -3012,6 +3027,20 @@ class Handler(BaseHTTPRequestHandler):
             snap = self.app.store.timeline.snapshot(
                 since=num("since"), kfrom=num("kfrom", 0), gen=num("gen"))
             # A loaded .pcap ends when it ends; live data ends now.
+            snap["now"] = snap["newest"] if self.app.source else time.time()
+            snap["offline"] = bool(self.app.source)
+            return self._send(200, snap)
+
+        if path == "/api/latency":
+            def lnum(name):
+                try:
+                    return int(qs[name][0])
+                except (KeyError, ValueError, IndexError):
+                    return None
+            store = self.app.store
+            snap = store.latency.snapshot(after=lnum("after"), gen=lnum("gen"),
+                                          name_for=store.hostname)
+            # As for the timeline: a loaded .pcap ends when it ends.
             snap["now"] = snap["newest"] if self.app.source else time.time()
             snap["offline"] = bool(self.app.source)
             return self._send(200, snap)

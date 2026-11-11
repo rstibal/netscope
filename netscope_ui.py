@@ -313,6 +313,14 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 #kdSvg{display:block;width:100%}
 path.kdt.a{fill:var(--dim);opacity:.22}
 path.kdt.l{fill:none;stroke:var(--dim);stroke-width:1.2}
+/* Latency (1.49): a row per host, a dot per timed handshake. One ink; a
+   connection far slower than the host's usual takes the second hue. */
+#laview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+#laSvg{display:block;width:100%}
+circle.lad{fill:var(--series-in);opacity:.8}
+circle.lad.slow{fill:var(--series-out);opacity:1}
+.bln.all .nm{font-weight:600}
+.labase{stroke:var(--grid);stroke-width:1}
 
 /* ---------- footer stats ---------- */
 footer{
@@ -736,6 +744,8 @@ back through the table while the capture continues."><input type="checkbox"
             title="One row per program or host, bytes sent on the left and received on the right, the biggest sender first: what is uploading">Balance</button>
     <button id="vKind" class="btn-sm" aria-pressed="false"
             title="One row per kind of traffic (web, name lookups, file sharing...), with its bytes and its shape over time">Kinds</button>
+    <button id="vLat" class="btn-sm" aria-pressed="false"
+            title="How long each host takes to answer a new connection, one dot per connection: is it one site that is slow, or everything">Latency</button>
   </span>
   <span class="flabel">filter</span>
   <span class="findwrap" id="findwrap">
@@ -864,6 +874,19 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="flwrap" id="kdWrap"><svg id="kdSvg" role="img" aria-label="Bytes per kind of traffic, with each kind's shape over time"></svg>
         <div class="empty" id="kdEmpty" style="display:none"></div></div>
       <div class="tip" id="kdTip"></div>
+    </div>
+    <div id="laview" class="viz" style="display:none">
+      <div class="tlbar">
+        <span class="viewsw" id="laWin" role="group" aria-label="Time window">
+          <button class="btn-sm" data-w="60">1 min</button><button class="btn-sm" data-w="300">5 min</button><button class="btn-sm" data-w="900">15 min</button><button class="btn-sm" data-w="3600">1 hour</button>
+        </span>
+        <span class="tlnote" id="laNote"></span>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--series-in);border-radius:50%"></i>a connection</span><span><i style="background:var(--series-out);border-radius:50%"></i>far slower than usual for the host</span></div>
+      </div>
+      <div class="flwrap" id="laWrap"><svg id="laSvg" role="img" aria-label="Time to answer a new connection, per host, over time"></svg>
+        <div class="empty" id="laEmpty" style="display:none"></div></div>
+      <div class="tip" id="laTip"></div>
     </div>
     <footer>
       <!-- The chart goes first so nothing upstream of it can move it. It used
@@ -3683,6 +3706,7 @@ function tlDraw(){
   if (viewMode === 'flows') return flDraw();
   if (viewMode === 'balance') return blDraw();
   if (viewMode === 'kinds') return kdDraw();
+  if (viewMode === 'latency') return laDraw();
   if (viewMode !== 'timeline') return;
   const cv = $('tlCanvas'), ax = $('tlAxis');
   const W = Math.max(60, Math.floor(ax.clientWidth || cv.clientWidth));
@@ -3820,7 +3844,7 @@ function tlLaneRec(name){
 }
 
 function setView(v){
-  if (v !== 'timeline' && v !== 'flows' && v !== 'balance' && v !== 'kinds') v = 'table';
+  if (v !== 'timeline' && v !== 'flows' && v !== 'balance' && v !== 'kinds' && v !== 'latency') v = 'table';
   if (v === viewMode) return;
   if (viewMode === 'table') tableTop = $('tw').scrollTop;
   viewMode = v;
@@ -3830,13 +3854,15 @@ function setView(v){
   $('flview').style.display = v === 'flows' ? '' : 'none';
   $('blview').style.display = v === 'balance' ? '' : 'none';
   $('kdview').style.display = v === 'kinds' ? '' : 'none';
+  $('laview').style.display = v === 'latency' ? '' : 'none';
   for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows'], ['vBal', 'balance'],
-                         ['vKind', 'kinds']]){
+                         ['vKind', 'kinds'], ['vLat', 'latency']]){
     $(id).classList.toggle('on', v === m); $(id).setAttribute('aria-pressed', v === m);
   }
   try { localStorage.setItem('netscope-view', viewMode); } catch (e){}
   $('tlTip').classList.remove('on'); $('flTip').classList.remove('on'); $('blTip').classList.remove('on');
-  $('kdTip').classList.remove('on');
+  $('kdTip').classList.remove('on'); $('laTip').classList.remove('on');
+  if (v === 'latency') laFetch().then(() => laDraw());
   if (v !== 'table'){ tlDraw(); tlFetch().then(tlDraw); }
   else {
     const w = $('tw');
@@ -3846,9 +3872,9 @@ function setView(v){
 }
 
 function tlSetting(){
-  // One window for Timeline, Flows, Balance and Kinds; one Programs/Hosts
-  // choice for Timeline and Balance.
-  document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button').forEach(b =>
+  // One window for Timeline, Flows, Balance, Kinds and Latency; one
+  // Programs/Hosts choice for Timeline and Balance.
+  document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button, #laWin button').forEach(b =>
     b.classList.toggle('on', Number(b.dataset.w) === TL.win));
   document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b =>
     b.classList.toggle('on', b.dataset.g === TL.group));
@@ -3860,7 +3886,8 @@ $('vTime').onclick = () => setView('timeline');
 $('vFlow').onclick = () => setView('flows');
 $('vBal').onclick = () => setView('balance');
 $('vKind').onclick = () => setView('kinds');
-document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button').forEach(b => b.onclick = () => {
+$('vLat').onclick = () => setView('latency');
+document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button, #laWin button').forEach(b => b.onclick = () => {
   TL.win = Number(b.dataset.w); tlSetting(); tlDraw();
 });
 document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b => b.onclick = () => {
@@ -4674,6 +4701,228 @@ $('kdSvg').addEventListener('contextmenu', e => {
 });
 try { new ResizeObserver(() => kdDraw()).observe($('kdWrap')); } catch (e){}
 
+/* ---------------- latency (1.49) ----------------
+   How long each host takes to answer a new connection: the TCP handshake,
+   which the Connections tab shows per connection. Here every timing in the
+   window is a dot, placed by when it happened and how long it took, one row
+   per host under an "All hosts" row. One slow host with a calm All row is
+   that site; every row climbing together is this machine's network.
+
+   The samples come from /api/latency, a slice at a time, and are kept here
+   for the hour the server keeps them. One sample per new connection, so a
+   host reached over QUIC, or over a connection opened long ago, has none:
+   the empty message says so rather than leaving a blank.
+
+   Each row is on its own scale (the figures compare rows; the dots show a
+   row's own shape). A dot is marked when it is three times the row's usual
+   and at least 20 ms over it: on a 1 ms LAN, 4 ms is not news. */
+const LA_ROW = 30, LA_PAD = 10, LA_DOT = 2.4, LA_SLOW_X = 3, LA_SLOW_MS = 20;
+var LA = {gen: null, next: 0, samples: [], now: 0, newest: 0, offline: false, busy: false,
+          rows: [], order: [], sig: '', at: 0, hovering: false, stale: false, total: 0};
+
+function laRecord(s){
+  const [ts, ms_, process, rhost, remote, rport, iface] = s;
+  const r = {ts, ms: ms_, process, rhost, remote, iface, dir: 'out', dst: remote, dport: rport, sport: null};
+  r._hay = (process + ' ' + rhost + ' ' + remote + ' ' + (rport == null ? '' : rport) + ' ' + iface).toLowerCase();
+  return r;
+}
+
+async function laFetch(){
+  if (LA.busy) return;
+  LA.busy = true;
+  try {
+    const q = LA.gen == null ? '' : '?after=' + LA.next + '&gen=' + LA.gen;
+    const d = await (await api('/api/latency' + q)).json();
+    if (d.gen !== LA.gen || d.start < LA.next){ LA.samples = []; }
+    for (const s of d.samples) LA.samples.push(laRecord(s));
+    LA.gen = d.gen; LA.next = d.next; LA.now = d.now; LA.newest = d.newest; LA.offline = !!d.offline;
+    const cutoff = (LA.offline ? LA.newest : LA.now) - (d.retain || 3600);
+    let drop = 0;
+    while (drop < LA.samples.length && LA.samples[drop].ts < cutoff) drop++;
+    if (drop) LA.samples.splice(0, drop);
+  } catch (e){} finally { LA.busy = false; }
+}
+
+// Fields a handshake time doesn't have. The protocol is one of them: the
+// handshake is TCP whatever the connection went on to carry, so "proto ==
+// TLS" would match nothing and read as "no TLS host was timed".
+function laUnsupported(text){
+  const bad = tlUnsupported(text), toks = tokenize(text);
+  for (let i = 0; i + 1 < toks.length; i++)
+    if (toks[i].toLowerCase() === 'proto' && /^(==|!=|=|~|!~)$/.test(toks[i + 1]) && !bad.includes('protocol'))
+      bad.push('protocol');
+  return bad;
+}
+
+function laStats(n){
+  const v = n.pts.map(p => p.ms).sort((a, b) => a - b);
+  n.n = v.length; n.med = v[(v.length - 1) >> 1]; n.worst = v[v.length - 1]; n.best = v[0];
+  return n;
+}
+
+function laBuild(N){
+  const bad = laUnsupported($('find').value);
+  const end = LA.offline ? LA.newest : LA.now, start = end - TL.win;
+  const hosts = new Map();
+  const all = {name: 'All hosts', all: true, pts: [], progs: new Map()};
+  if (!bad.length) for (const s of LA.samples){
+    if (s.ts < start || s.ts > end || !rowVisible(s)) continue;
+    const name = s.rhost || s.remote || '(none)';
+    let n = hosts.get(name);
+    if (!n) hosts.set(name, n = {name, pts: [], progs: new Map()});
+    for (const x of [n, all]){ x.pts.push(s); x.progs.set(s.process, (x.progs.get(s.process) || 0) + 1); }
+  }
+  LA.start = start; LA.end = end; LA.total = all.pts.length;
+  if (!all.pts.length){ LA.rows = []; return bad; }
+  // The hosts connected to most, in an order held for ten seconds.
+  const sig = TL.win + '|' + $('find').value + '|' + ifaceTab + '|' + N;
+  const keep = sig === LA.sig && Date.now() - LA.at < 10000;
+  if (!keep){ LA.sig = sig; LA.at = Date.now(); }
+  const list = [...hosts.values()].sort((a, b) => b.pts.length - a.pts.length || (a.name < b.name ? -1 : 1));
+  const room = N - 1;                       // "All hosts" has the first row
+  const top = list.length > room ? list.slice(0, room - 1) : list;
+  if (keep){
+    const rank = new Map(LA.order.map((n, i) => [n, i]));
+    const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + list.indexOf(n);
+    top.sort((a, b) => at(a) - at(b));
+  }
+  LA.order = top.map(n => n.name);
+  const rest = list.slice(top.length);
+  if (rest.length){
+    const lump = {name: rest.length + ' other hosts', lump: true, pts: [], progs: new Map()};
+    for (const n of rest){
+      for (const s of n.pts) lump.pts.push(s);
+      for (const [k, v] of n.progs) lump.progs.set(k, (lump.progs.get(k) || 0) + v);
+    }
+    lump.pts.sort((a, b) => a.ts - b.ts);
+    top.push(lump);
+  }
+  LA.rows = [all, ...top].map(laStats);
+  return bad;
+}
+
+const laSlow = (n, v) => v >= n.med * LA_SLOW_X && v - n.med >= LA_SLOW_MS;
+
+function laDraw(auto){
+  if (viewMode !== 'latency') return;
+  // Not while the pointer is on it, for the reason Flows gives.
+  if (auto && LA.hovering){ LA.stale = true; return; }
+  LA.stale = false;
+  const wrap = $('laWrap'), svg = $('laSvg');
+  const W = Math.max(320, Math.floor(wrap.clientWidth));
+  const avail = Math.max(200, Math.floor(wrap.clientHeight));
+  const N = Math.max(4, Math.min(BL_MAX_ROWS, Math.floor((avail - 2 * LA_PAD) / LA_ROW)));
+  const bad = laBuild(N);
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const note = $('laNote');
+  if (bad.length){
+    note.className = 'tlnote warn';
+    note.textContent = 'The filter uses ' + bad.join(', ') + ', which the latency view doesn\'t ' +
+      'keep: it holds a time per new connection, with its program, host, port and adapter.';
+  } else {
+    note.className = 'tlnote';
+    note.textContent = LA.total ? LA.total.toLocaleString() + ' connection' + (LA.total === 1 ? '' : 's') +
+      ' timed in the last ' + span : '';
+  }
+  const empty = $('laEmpty');
+  const none = !LA.rows.length;
+  empty.style.display = none ? 'block' : 'none';
+  empty.textContent = bad.length ? 'Nothing to draw with this filter.'
+    : (filterFn ? 'No connection matching this filter was opened in the last ' + span + '.'
+                : 'No new connection was opened in the last ' + span + '.') +
+      ' Only new TCP connections are timed: a host reached over QUIC, or over a connection already open, has nothing here.';
+  $('laTip').classList.remove('on');
+  if (none){ svg.innerHTML = ''; svg.style.height = '0px'; return; }
+
+  // Name, the dots across the window, then the figures.
+  const lw = Math.round(Math.min(300, Math.max(120, W * 0.25))), fw = 200;
+  const x0 = lw + 14, pw = Math.max(40, W - 12 - fw - 14 - x0);
+  const chars = Math.floor((lw - 14) / 7.2);
+  const H = LA.rows.length * LA_ROW + 2 * LA_PAD;
+  const f = v => v.toFixed(1);
+  const out = [];
+  LA.rows.forEach((n, i) => {
+    const y = LA_PAD + i * LA_ROW, cy = y + LA_ROW / 2, base = y + LA_ROW - 5, top = y + 5;
+    const dots = n.pts.map(s => {
+      const cx = x0 + (s.ts - LA.start) / TL.win * pw;
+      const cyy = base - (n.worst > 0 ? s.ms / n.worst : 0) * (base - top);
+      return '<circle class="lad' + (laSlow(n, s.ms) ? ' slow' : '') + '" cx="' + f(cx) + '" cy="' + f(cyy) + '" r="' + LA_DOT + '"/>';
+    }).join('');
+    const sys = !n.lump && !n.all && /^[-(]/.test(n.name);
+    out.push('<g class="bln' + (n.lump ? ' lump' : '') + (n.all ? ' all' : '') + (sys ? ' sys' : '') + '" data-i="' + i + '"' +
+      (n.lump || n.all ? '' : ' tabindex="0"') + '>' +
+      '<rect class="hit" x="0" y="' + y + '" width="' + W + '" height="' + LA_ROW + '"/>' +
+      '<text class="nm" x="' + lw + '" y="' + cy + '" dominant-baseline="central" text-anchor="end">' +
+        esc(flTrunc(n.name, chars)) + '</text>' +
+      '<line class="labase" x1="' + x0 + '" y1="' + (base + 0.5) + '" x2="' + (x0 + pw) + '" y2="' + (base + 0.5) + '"/>' +
+      dots +
+      '<text class="tot" x="' + (x0 + pw + 14) + '" y="' + cy + '" dominant-baseline="central">' +
+        esc(ms(n.med) + ' usual · ' + ms(n.worst) + ' worst · ' + n.n) + '</text>' +
+      '</g>');
+  });
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.style.height = H + 'px';
+  svg.innerHTML = out.join('');
+}
+
+function laTarget(e){
+  const g = e.target.closest && e.target.closest('.bln');
+  return g ? {row: LA.rows[Number(g.dataset.i)], el: g} : null;
+}
+
+function laHover(hit, e){
+  const svg = $('laSvg'), tip = $('laTip');
+  svg.querySelectorAll('.hot').forEach(x => x.classList.remove('hot'));
+  if (!hit || !hit.row){ tip.classList.remove('on'); return; }
+  hit.el.classList.add('hot');
+  const n = hit.row;
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const pct = v => { v = v / n.n * 100; return v >= 1 ? Math.round(v) + '%' : '<1%'; };
+  const progs = [...n.progs.entries()].sort((a, b) => b[1] - a[1]);
+  const slow = n.pts.filter(s => laSlow(n, s.ms)).length;
+  const dim = s => '<br><span style="color:var(--dim)">' + s + '</span>';
+  tip.innerHTML = '<b>' + esc(n.name) + '</b><br>usually ' + esc(ms(n.med)) + ' to answer a new connection' +
+    '<br>worst ' + esc(ms(n.worst)) + ' · fastest ' + esc(ms(n.best)) +
+    '<br>' + n.n.toLocaleString() + ' connection' + (n.n === 1 ? '' : 's') + ' in the last ' + esc(span) +
+    (slow ? ', ' + slow + ' far slower than usual' : '') +
+    dim(esc('Programs: ' + progs.slice(0, 4).map(([name, v]) => name + ' ' + pct(v)).join(', ') +
+      (progs.length > 4 ? ', and ' + (progs.length - 4) + ' more' : ''))) +
+    (laClickable(n) ? dim('Click to filter to it; right-click to hide it.') : '');
+  const v = $('laview').getBoundingClientRect();
+  tip.classList.add('on');
+  const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;
+  tip.style.left = Math.max(6, Math.min(x, v.width - tip.offsetWidth - 6)) + 'px';
+  tip.style.top = (y + tip.offsetHeight > v.height ? y - tip.offsetHeight - 20 : y) + 'px';
+}
+
+const laClickable = n => !n.lump && !n.all && n.name !== '(none)';
+const laField = n => tlIsIP(n.name) ? 'ip' : 'host';
+
+$('laWrap').addEventListener('mouseenter', () => { LA.hovering = true; });
+$('laWrap').addEventListener('mouseleave', () => {
+  LA.hovering = false; laHover(null);
+  if (LA.stale) laDraw();
+});
+$('laSvg').addEventListener('mousemove', e => laHover(laTarget(e), e));
+$('laSvg').addEventListener('click', e => {
+  const h = laTarget(e);
+  if (h && h.row && laClickable(h.row)) addClause(laField(h.row), '==', h.row.name);
+});
+$('laSvg').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const h = laTarget(e);
+  if (h && h.row && laClickable(h.row)){ e.preventDefault(); addClause(laField(h.row), '==', h.row.name); }
+});
+$('laSvg').addEventListener('contextmenu', e => {
+  const h = laTarget(e);
+  if (!h || !h.row || !laClickable(h.row)) return;
+  e.preventDefault();
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y){ const r = h.el.getBoundingClientRect(); x = r.left + 20; y = r.bottom; }
+  openRowMenu(tlIsIP(h.row.name) ? {dir: 'out', dst: h.row.name} : {rhost: h.row.name}, x, y);
+});
+try { new ResizeObserver(() => laDraw()).observe($('laWrap')); } catch (e){}
+
 /* ---------------- sparkline ---------------- */
 
 function drawSpark(tl){
@@ -4821,6 +5070,7 @@ async function poll(){
     if (viewMode === 'flows' && !paused) tlFetch().then(() => flDraw(true));
     if (viewMode === 'balance' && !paused) tlFetch().then(() => blDraw(true));
     if (viewMode === 'kinds' && !paused) tlFetch().then(() => kdDraw(true));
+    if (viewMode === 'latency' && !paused) laFetch().then(() => laDraw(true));
     if (!paused && d.packets.length){
       const tb = $('rows'), w = $('tw'), frag = document.createDocumentFragment();
       const following = $('follow').checked;
@@ -5046,7 +5296,8 @@ function setPaused(v){
   $('fcount').textContent = paused
     ? 'paused — the capture is still running, the ' +
       (viewMode === 'timeline' ? 'timeline' : viewMode === 'flows' ? 'flows view' :
-       viewMode === 'balance' ? 'balance view' : viewMode === 'kinds' ? 'kinds view' : 'table') +
+       viewMode === 'balance' ? 'balance view' : viewMode === 'kinds' ? 'kinds view' :
+       viewMode === 'latency' ? 'latency view' : 'table') +
       ' is not updating'
     : '';
   if (!paused) updateCount();
