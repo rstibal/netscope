@@ -13,6 +13,7 @@ netscope_block.py     host/program blocks as Windows Firewall rules
 netscope_conn.py      connection table: flow accounting joined to the socket table
 netscope_timeline.py  per-second totals per (program, host, port, ...) for the Timeline view
 netscope_latency.py   an hour of TCP handshake times for the Latency view
+netscope_lookups.py   DNS queries paired with answers, for the Lookups view
 netscope_alerts.py    alert rules, muting, Windows toasts
 netscope_history.py   SQLite history and the settings file
 netscope_streams.py   TCP reassembly and HTTP/FTP file extraction
@@ -350,6 +351,21 @@ refused, not applied: every sample is TCP, so `proto == "TLS"` would draw
 nothing and read as "no TLS host was timed". Don't add QUIC or
 already-open connections by guessing; the empty message says why they are
 missing.
+
+**Lookups pairs each DNS query with its answer, and reports by name, not by
+program (1.50).** `Lookups` (`netscope_lookups.py`) matches on (id, local
+port, server, adapter) and keeps each finished lookup for an hour in a
+`SampleLog`, the store Latency uses, read the same way (`/api/lookups`).
+`PacketStore.add()` hands it *every* record, not only DNS: any packet's time
+is what shows five seconds have passed without an answer, and a read does
+the same when the capture is quiet. An empty NOERROR answer is "ok", not a
+failure: every AAAA lookup of an IPv4-only name gets one, so counting them
+would show failures on a machine where nothing is wrong. mDNS and LLMNR are out, since
+nothing answers "no" to a multicast question. The list is of names because on
+Windows the asker is nearly always `svchost.exe` (the DNS Client service);
+don't "fix" that by guessing the real program. `decode_dns()` gained `rcode`
+for this. `DemoEngine._emit_lookup` emits real pairs: the demo's DNS used to
+be lone packets with random ids, which pair with nothing.
 
 **Regularity is checked per program-and-host pair, not only per lane.** On a
 real machine the Programs view tagged nothing while Claude.exe checked in with

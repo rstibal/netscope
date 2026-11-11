@@ -48,7 +48,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.49.0"
+VERSION = "1.50.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -94,6 +94,7 @@ from netscope_block import Blocker, BlockError
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_timeline import Timeline
 from netscope_latency import Latency
+from netscope_lookups import Lookups
 from netscope_l2 import (describe_icmp, describe_frame, mac_label,
                          owner_label, parse_ra, UNOWNED, SHARED_PORT,
                          is_group_ip)
@@ -377,6 +378,12 @@ def decode_dns(dns):
     if dns is None:
         return None
     out = {"id": int(dns.id), "response": bool(dns.qr), "queries": [], "answers": []}
+    # 0 is an answer (possibly an empty one), 3 "no such name", anything else
+    # the server failing or refusing. The Lookups view counts on it.
+    try:
+        out["rcode"] = int(dns.rcode or 0)
+    except Exception:
+        out["rcode"] = 0
     try:
         if dns.qd:
             recs = dns.qd if isinstance(dns.qd, (list, tuple)) else [dns.qd]
@@ -413,7 +420,10 @@ def _dns_info(d):
     """The packet-list info line for a decode_dns() result -- shared by real
     DNS, mDNS and LLMNR so all three read the same way."""
     if d["response"]:
-        names = ", ".join(a["data"] for a in d["answers"][:3]) or "no answer"
+        rcode = d.get("rcode") or 0
+        none = ("no such name" if rcode == 3 else
+                "server error (rcode %d)" % rcode if rcode else "no answer")
+        names = ", ".join(a["data"] for a in d["answers"][:3]) or none
         q = d["queries"][0]["name"] if d["queries"] else ""
         return f"response  {q} → {names}"
     q = d["queries"][0] if d["queries"] else {"name": "?", "type": "?"}
@@ -673,6 +683,8 @@ class PacketStore:
         # times each handshake; this keeps the timings after the flow is gone.
         self.latency = Latency()
         self.flows.on_rtt = self._on_rtt
+        # An hour of DNS lookups and how each ended, for the Lookups view.
+        self.lookups = Lookups()
 
     def _on_rtt(self, rec, f):
         # Called from flows.observe(), inside add()'s lock: no locking here.
@@ -735,6 +747,12 @@ class PacketStore:
                 pass                    # accounting must never drop a packet
             try:
                 self.timeline.observe(rec)
+            except Exception:
+                pass
+            try:
+                # Every record, not only DNS: any packet's time is what shows
+                # a query has gone five seconds without an answer.
+                self.lookups.observe(rec)
             except Exception:
                 pass
             if rec["process"] in UNOWNED:
@@ -907,6 +925,7 @@ class PacketStore:
             self.flows.clear()
             self.timeline.clear()
             self.latency.clear()
+            self.lookups.clear()
 
 
 class ReverseResolver:
@@ -2622,6 +2641,42 @@ class DemoEngine:
         if self.history is not None:
             self.history.record(rec)
 
+    # Names nothing answers for: a mistyped host, a proxy probe, a service
+    # that was shut down. Enough of them to show in the Lookups view.
+    DEAD_NAMES = ["wpad.localdomain", "telemetry-old.example.net",
+                  "updates.retired-app.example", "intranet.corp.invalid"]
+
+    def _emit_lookup(self, ip, host, proc):
+        """
+        One DNS lookup: the question, and unless it is one of the few that go
+        unanswered, the answer a few milliseconds later with the same id and
+        port. About one in twelve is for a name that does not exist.
+
+        A lookup is a conversation with the resolver; the name being looked
+        up is only its subject. Sending it to the site itself (github.com:53)
+        also set off the unconfigured-resolver alert.
+        """
+        now = time.time()
+        sport, qid = random.randint(49152, 65535), random.randint(1, 65535)
+        roll = random.random()
+        dead = roll < 0.08
+        name = random.choice(self.DEAD_NAMES) if dead else host
+        P = lambda dt, out, info, d, plen: self._demo_packet(
+            now + dt, out, self.RESOLVER, self.RESOLVER_NAME, proc, sport, 53,
+            "DNS", info, {"dns": d}, plen, transport="udp")
+        query = {"id": qid, "response": False, "rcode": 0,
+                 "queries": [{"name": name, "type": "A"}], "answers": []}
+        P(0, True, _dns_info(query), query, random.randint(30, 60))
+        if 0.08 <= roll < 0.10:
+            return                              # never answered
+        answer = {"id": qid, "response": True, "rcode": 3 if dead else 0,
+                  "queries": [{"name": name, "type": "A"}],
+                  "answers": [] if dead else [{"name": host, "type": "A", "data": ip}]}
+        P(random.uniform(0.004, 0.060), False, _dns_info(answer), answer,
+          random.randint(60, 140))
+        if not dead:
+            self.store.dns_cache[ip] = host
+
     def _emit_conversation(self, ip, host, proc):
         """
         One coherent TCP connection, handshake and all.
@@ -2757,18 +2812,12 @@ class DemoEngine:
             now = time.time()
 
             if kind == "dns":
-                proto, dport, info = "DNS", 53, (
-                    f"query  A  {host}" if outbound
-                    else f"response  {host} → {ip}")
-                decoded = {"dns": {"id": random.randint(1, 65535),
-                                   "response": not outbound,
-                                   "queries": [{"name": host, "type": "A"}],
-                                   "answers": ([] if outbound else
-                                               [{"name": host, "type": "A", "data": ip}])}}
-                length = random.randint(70, 190)
-                if not outbound:
-                    self.store.dns_cache[ip] = host
-            elif kind == "http":
+                # A real pair, so the Lookups view has something to pair: the
+                # lone packets below never matched each other.
+                self._emit_lookup(ip, host, proc)
+                self._stop.wait(random.uniform(0.02, 0.35))
+                continue
+            if kind == "http":
                 proto, dport = "HTTP", 80
                 info = f"GET /wp-json/wp/v2/posts HTTP/1.1   [{host}]"
                 decoded = {"http": {"start_line": "GET /wp-json/wp/v2/posts HTTP/1.1",
@@ -2797,11 +2846,7 @@ class DemoEngine:
                                    "ack": random.randint(0, 2**31), "window": 64240}}
                 length = random.randint(54, 120)
 
-            # A lookup is a conversation with the resolver; the name being
-            # looked up is only its subject. Sending it to the site itself
-            # (github.com:53) also set off the unconfigured-resolver alert.
-            peer, peer_name = ((self.RESOLVER, self.RESOLVER_NAME)
-                               if kind == "dns" else (ip, host))
+            peer, peer_name = ip, host
             src, dst = (local, peer) if outbound else (peer, local)
             rec = {
                 "ts": now,
@@ -3043,6 +3088,20 @@ class Handler(BaseHTTPRequestHandler):
             # As for the timeline: a loaded .pcap ends when it ends.
             snap["now"] = snap["newest"] if self.app.source else time.time()
             snap["offline"] = bool(self.app.source)
+            return self._send(200, snap)
+
+        if path == "/api/lookups":
+            def knum(name):
+                try:
+                    return int(qs[name][0])
+                except (KeyError, ValueError, IndexError):
+                    return None
+            live = not self.app.source
+            snap = self.app.store.lookups.snapshot(
+                after=knum("after"), gen=knum("gen"),
+                now=time.time() if live else None)
+            snap["now"] = time.time() if live else snap["newest"]
+            snap["offline"] = not live
             return self._send(200, snap)
 
         if path == "/api/packet":

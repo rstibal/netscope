@@ -321,6 +321,17 @@ circle.lad{fill:var(--series-in);opacity:.8}
 circle.lad.slow{fill:var(--series-out);opacity:1}
 .bln.all .nm{font-weight:600}
 .labase{stroke:var(--grid);stroke-width:1}
+/* Lookups (1.50): DNS lookups across the window as bars, answered with
+   failed stacked on top, and the names that failed listed under them. */
+#lkview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+#lkSvg{display:block;width:100%}
+.lkb.ok{fill:var(--series-in)}
+.lkb.bad,.lkc{fill:var(--series-out)}
+.lks{fill:var(--fg);opacity:0}
+.lks:hover{opacity:.07}
+.lkax{font:10.5px var(--mono);fill:var(--faint)}
+.lkhd{font:600 10px var(--sans);letter-spacing:.6px;fill:var(--faint);text-transform:uppercase}
+.lknone{font:12px var(--sans);fill:var(--dim)}
 
 /* ---------- footer stats ---------- */
 footer{
@@ -746,6 +757,8 @@ back through the table while the capture continues."><input type="checkbox"
             title="One row per kind of traffic (web, name lookups, file sharing...), with its bytes and its shape over time">Kinds</button>
     <button id="vLat" class="btn-sm" aria-pressed="false"
             title="How long each host takes to answer a new connection, one dot per connection: is it one site that is slow, or everything">Latency</button>
+    <button id="vLook" class="btn-sm" aria-pressed="false"
+            title="Name lookups (DNS) over time, the failed ones on top, and the names that failed: a burst of lookups for names that don't exist stands out">Lookups</button>
   </span>
   <span class="flabel">filter</span>
   <span class="findwrap" id="findwrap">
@@ -887,6 +900,19 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="flwrap" id="laWrap"><svg id="laSvg" role="img" aria-label="Time to answer a new connection, per host, over time"></svg>
         <div class="empty" id="laEmpty" style="display:none"></div></div>
       <div class="tip" id="laTip"></div>
+    </div>
+    <div id="lkview" class="viz" style="display:none">
+      <div class="tlbar">
+        <span class="viewsw" id="lkWin" role="group" aria-label="Time window">
+          <button class="btn-sm" data-w="60">1 min</button><button class="btn-sm" data-w="300">5 min</button><button class="btn-sm" data-w="900">15 min</button><button class="btn-sm" data-w="3600">1 hour</button>
+        </span>
+        <span class="tlnote" id="lkNote"></span>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--series-in)"></i>answered</span><span><i style="background:var(--series-out)"></i>failed</span></div>
+      </div>
+      <div class="flwrap" id="lkWrap"><svg id="lkSvg" role="img" aria-label="Name lookups over time, and the names that failed"></svg>
+        <div class="empty" id="lkEmpty" style="display:none"></div></div>
+      <div class="tip" id="lkTip"></div>
     </div>
     <footer>
       <!-- The chart goes first so nothing upstream of it can move it. It used
@@ -3707,6 +3733,7 @@ function tlDraw(){
   if (viewMode === 'balance') return blDraw();
   if (viewMode === 'kinds') return kdDraw();
   if (viewMode === 'latency') return laDraw();
+  if (viewMode === 'lookups') return lkDraw();
   if (viewMode !== 'timeline') return;
   const cv = $('tlCanvas'), ax = $('tlAxis');
   const W = Math.max(60, Math.floor(ax.clientWidth || cv.clientWidth));
@@ -3844,7 +3871,8 @@ function tlLaneRec(name){
 }
 
 function setView(v){
-  if (v !== 'timeline' && v !== 'flows' && v !== 'balance' && v !== 'kinds' && v !== 'latency') v = 'table';
+  if (v !== 'timeline' && v !== 'flows' && v !== 'balance' && v !== 'kinds' && v !== 'latency' &&
+      v !== 'lookups') v = 'table';
   if (v === viewMode) return;
   if (viewMode === 'table') tableTop = $('tw').scrollTop;
   viewMode = v;
@@ -3855,14 +3883,18 @@ function setView(v){
   $('blview').style.display = v === 'balance' ? '' : 'none';
   $('kdview').style.display = v === 'kinds' ? '' : 'none';
   $('laview').style.display = v === 'latency' ? '' : 'none';
+  $('lkview').style.display = v === 'lookups' ? '' : 'none';
   for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows'], ['vBal', 'balance'],
-                         ['vKind', 'kinds'], ['vLat', 'latency']]){
+                         ['vKind', 'kinds'], ['vLat', 'latency'],
+                         ['vLook', 'lookups']]){
     $(id).classList.toggle('on', v === m); $(id).setAttribute('aria-pressed', v === m);
   }
   try { localStorage.setItem('netscope-view', viewMode); } catch (e){}
   $('tlTip').classList.remove('on'); $('flTip').classList.remove('on'); $('blTip').classList.remove('on');
   $('kdTip').classList.remove('on'); $('laTip').classList.remove('on');
+  $('lkTip').classList.remove('on');
   if (v === 'latency') laFetch().then(() => laDraw());
+  if (v === 'lookups') lkFetch().then(() => lkDraw());
   if (v !== 'table'){ tlDraw(); tlFetch().then(tlDraw); }
   else {
     const w = $('tw');
@@ -3872,9 +3904,9 @@ function setView(v){
 }
 
 function tlSetting(){
-  // One window for Timeline, Flows, Balance, Kinds and Latency; one
-  // Programs/Hosts choice for Timeline and Balance.
-  document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button, #laWin button').forEach(b =>
+  // One window for every drawing; one Programs/Hosts choice for Timeline
+  // and Balance.
+  document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button, #laWin button, #lkWin button').forEach(b =>
     b.classList.toggle('on', Number(b.dataset.w) === TL.win));
   document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b =>
     b.classList.toggle('on', b.dataset.g === TL.group));
@@ -3887,7 +3919,8 @@ $('vFlow').onclick = () => setView('flows');
 $('vBal').onclick = () => setView('balance');
 $('vKind').onclick = () => setView('kinds');
 $('vLat').onclick = () => setView('latency');
-document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button, #laWin button').forEach(b => b.onclick = () => {
+$('vLook').onclick = () => setView('lookups');
+document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button, #laWin button, #lkWin button').forEach(b => b.onclick = () => {
   TL.win = Number(b.dataset.w); tlSetting(); tlDraw();
 });
 document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b => b.onclick = () => {
@@ -4923,6 +4956,244 @@ $('laSvg').addEventListener('contextmenu', e => {
 });
 try { new ResizeObserver(() => laDraw()).observe($('laWrap')); } catch (e){}
 
+/* ---------------- lookups (1.50) ----------------
+   Name lookups (DNS) across the window: a bar per slice, the answered ones
+   with the failed stacked on top, and under the chart the names that failed.
+   A lookup fails when the server says the name doesn't exist or reports an
+   error, or when nothing answers in five seconds. A burst of names that
+   don't exist is what software hunting for a server by made-up names looks
+   like; a burst of no-answers is the resolver or the network being down.
+
+   The lookups come from /api/lookups, a slice at a time, as the Latency
+   samples do; the server pairs each query with its answer. The name is the
+   useful part: on Windows the asker is usually svchost.exe, the DNS Client
+   service asking for someone else, and the row says who asked without
+   pretending that is who wanted to know. Encrypted DNS is not visible, and
+   the empty message says so.
+
+   Clicking a name opens its packets in the table, the way a Timeline lane
+   does: the view has nothing more to say about one name than its count. */
+const LK_BINS = 60, LK_CHART = 132, LK_HEAD = 30;
+const LK_WHY = {nxdomain: "doesn't exist", error: 'server error', timeout: 'no answer'};
+var LK = {gen: null, next: 0, events: [], now: 0, newest: 0, offline: false, busy: false,
+          bins: [], rows: [], order: [], sig: '', at: 0, hovering: false, stale: false,
+          total: 0, failed: 0, usual: null, start: 0, per: 1};
+
+function lkRecord(s){
+  const [ts, name, qtype, outcome, ms_, process, server, iface] = s;
+  const r = {ts, name, qtype, outcome, ms: ms_, process, rhost: name, remote: server, iface, proto: 'DNS',
+             dir: 'out', dst: server, dport: 53, sport: null};
+  r._hay = (process + ' ' + name + ' ' + server + ' dns 53 ' + iface).toLowerCase();
+  return r;
+}
+
+async function lkFetch(){
+  if (LK.busy) return;
+  LK.busy = true;
+  try {
+    const q = LK.gen == null ? '' : '?after=' + LK.next + '&gen=' + LK.gen;
+    const d = await (await api('/api/lookups' + q)).json();
+    if (d.gen !== LK.gen || d.start < LK.next){ LK.events = []; }
+    for (const s of d.samples) LK.events.push(lkRecord(s));
+    LK.gen = d.gen; LK.next = d.next; LK.now = d.now; LK.newest = d.newest; LK.offline = !!d.offline;
+    // Not in time order (an unanswered lookup is reported five seconds
+    // late), so the old ones are filtered out, not trimmed off the front.
+    const cutoff = (LK.offline ? LK.newest : LK.now) - (d.retain || 3600);
+    if (LK.events.length && LK.events[0].ts < cutoff) LK.events = LK.events.filter(e => e.ts >= cutoff);
+  } catch (e){} finally { LK.busy = false; }
+}
+
+function lkBuild(N){
+  const bad = tlUnsupported($('find').value);
+  const end = Math.floor(LK.offline ? LK.newest : LK.now) + 1, start = end - TL.win, per = TL.win / LK_BINS;
+  const bins = Array.from({length: LK_BINS}, () => ({ok: 0, bad: 0}));
+  const names = new Map(), times = [];
+  let total = 0, failed = 0;
+  if (!bad.length) for (const e of LK.events){
+    if (e.ts < start || e.ts >= end || !rowVisible(e)) continue;
+    total++;
+    if (e.ms != null) times.push(e.ms);
+    const b = bins[Math.min(LK_BINS - 1, Math.floor((e.ts - start) / per))];
+    if (e.outcome === 'ok'){ b.ok++; continue; }
+    b.bad++; failed++;
+    let n = names.get(e.name);
+    if (!n) names.set(e.name, n = {name: e.name, n: 0, why: new Map(), progs: new Map(), servers: new Map()});
+    n.n++;
+    for (const [m, k] of [[n.why, e.outcome], [n.progs, e.process], [n.servers, e.remote]]) m.set(k, (m.get(k) || 0) + 1);
+  }
+  times.sort((a, b) => a - b);
+  LK.bins = bins; LK.total = total; LK.failed = failed; LK.start = start; LK.per = per;
+  LK.usual = times.length ? times[(times.length - 1) >> 1] : null;
+  // The names that failed most, in an order held for ten seconds.
+  const sig = TL.win + '|' + $('find').value + '|' + ifaceTab + '|' + N;
+  const keep = sig === LK.sig && Date.now() - LK.at < 10000;
+  if (!keep){ LK.sig = sig; LK.at = Date.now(); }
+  const list = [...names.values()].sort((a, b) => b.n - a.n || (a.name < b.name ? -1 : 1));
+  const top = list.length > N ? list.slice(0, N - 1) : list;
+  if (keep){
+    const rank = new Map(LK.order.map((n, i) => [n, i]));
+    const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + list.indexOf(n);
+    top.sort((a, b) => at(a) - at(b));
+  }
+  LK.order = top.map(n => n.name);
+  const rest = list.slice(top.length);
+  if (rest.length){
+    const lump = {name: rest.length + ' other names', lump: true, n: 0, why: new Map(), progs: new Map(), servers: new Map()};
+    for (const n of rest){
+      lump.n += n.n;
+      for (const k of ['why', 'progs', 'servers']) for (const [a, v] of n[k]) lump[k].set(a, (lump[k].get(a) || 0) + v);
+    }
+    top.push(lump);
+  }
+  LK.rows = top;
+  return bad;
+}
+
+const lkTop = m => [...m.entries()].sort((a, b) => b[1] - a[1]);
+
+function lkDraw(auto){
+  if (viewMode !== 'lookups') return;
+  // Not while the pointer is on it, for the reason Flows gives.
+  if (auto && LK.hovering){ LK.stale = true; return; }
+  LK.stale = false;
+  const wrap = $('lkWrap'), svg = $('lkSvg');
+  const W = Math.max(320, Math.floor(wrap.clientWidth));
+  const avail = Math.max(260, Math.floor(wrap.clientHeight));
+  const listTop = BL_PAD + LK_CHART + LK_HEAD;
+  const N = Math.max(3, Math.min(BL_MAX_ROWS, Math.floor((avail - listTop - BL_PAD) / BL_ROW)));
+  const bad = lkBuild(N);
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const note = $('lkNote');
+  if (bad.length){
+    note.className = 'tlnote warn';
+    note.textContent = 'The filter uses ' + bad.join(', ') + ', which the lookups view doesn\'t ' +
+      'keep: it holds each lookup\'s name, how it ended, who asked and which server.';
+  } else {
+    note.className = 'tlnote';
+    const share = LK.total ? LK.failed / LK.total * 100 : 0;
+    note.textContent = LK.total ? LK.total.toLocaleString() + ' lookup' + (LK.total === 1 ? '' : 's') + ' in the last ' + span +
+      ' · ' + (LK.failed ? (share >= 1 ? Math.round(share) : '<1') + '% failed' : 'none failed') +
+      (LK.usual != null ? ' · usually answered in ' + ms(LK.usual) : '') : '';
+  }
+  const empty = $('lkEmpty');
+  const none = !LK.total;
+  empty.style.display = none ? 'block' : 'none';
+  empty.textContent = bad.length ? 'Nothing to draw with this filter.'
+    : (filterFn ? 'No name lookup matching this filter in the last ' + span + '.'
+                : 'No name lookups seen in the last ' + span + '.') +
+      ' Lookups a browser sends encrypted (DNS over HTTPS) can\'t be seen, and mDNS and LLMNR are not counted.';
+  $('lkTip').classList.remove('on');
+  if (none){ svg.innerHTML = ''; svg.style.height = '0px'; return; }
+
+  const f = v => v.toFixed(1);
+  const out = [];
+  // The chart: a column per slice, answered below, failed on top of it.
+  const cx0 = 44, cw = W - cx0 - 14, bw = cw / LK_BINS, base = BL_PAD + LK_CHART - 18, top = BL_PAD + 6;
+  const most = LK.bins.reduce((a, b) => Math.max(a, b.ok + b.bad), 0);
+  const k = (base - top) / Math.max(1, most);
+  const h = v => v > 0 ? Math.max(1, v * k) : 0;
+  out.push('<text class="lkax" x="' + (cx0 - 6) + '" y="' + (top + 4) + '" text-anchor="end">' + most + '</text>' +
+    '<text class="lkax" x="' + (cx0 - 6) + '" y="' + base + '" text-anchor="end">0</text>' +
+    '<line class="labase" x1="' + cx0 + '" y1="' + (base + 0.5) + '" x2="' + (cx0 + cw) + '" y2="' + (base + 0.5) + '"/>' +
+    '<text class="lkax" x="' + cx0 + '" y="' + (base + 14) + '">' + esc(TL.win === 60 ? '1 min' : TL.win === 3600 ? '1 hour' : TL.win / 60 + ' min') + ' ago</text>' +
+    '<text class="lkax" x="' + (cx0 + cw) + '" y="' + (base + 14) + '" text-anchor="end">' + (LK.offline ? 'end' : 'now') + '</text>');
+  const w = Math.max(1, bw - 1);
+  LK.bins.forEach((b, i) => {
+    const x = cx0 + i * bw, ho = h(b.ok), hb_ = h(b.bad);
+    if (ho) out.push('<rect class="lkb ok" data-s="' + i + '" x="' + f(x) + '" y="' + f(base - ho) + '" width="' + f(w) + '" height="' + f(ho) + '"/>');
+    if (hb_) out.push('<rect class="lkb bad" data-s="' + i + '" x="' + f(x) + '" y="' + f(base - ho - hb_) + '" width="' + f(w) + '" height="' + f(hb_) + '"/>');
+    out.push('<rect class="lks" data-s="' + i + '" x="' + f(x) + '" y="' + top + '" width="' + f(bw) + '" height="' + (base - top) + '"/>');
+  });
+
+  // The names that failed.
+  out.push('<text class="lkhd" x="14" y="' + (listTop - 10) + '">Names that failed</text>');
+  if (!LK.rows.length)
+    out.push('<text class="lknone" x="14" y="' + (listTop + 12) + '">No lookup failed in the last ' + esc(span) + '.</text>');
+  const lw = Math.round(Math.min(380, Math.max(150, W * 0.36))), barMax = 90;
+  const chars = Math.floor((lw - 20) / 7.2);
+  const worst = LK.rows.reduce((a, n) => Math.max(a, n.lump ? 0 : n.n), 1);
+  LK.rows.forEach((n, i) => {
+    const y = listTop + i * BL_ROW, cy = y + BL_ROW / 2;
+    const bl = Math.max(BL_MIN, Math.min(1, n.n / worst) * barMax);
+    const why = lkTop(n.why)[0][0], who = lkTop(n.progs);
+    out.push('<g class="bln' + (n.lump ? ' lump' : '') + '" data-i="' + i + '"' + (n.lump ? '' : ' tabindex="0"') + '>' +
+      '<rect class="hit" x="0" y="' + y + '" width="' + W + '" height="' + BL_ROW + '"/>' +
+      '<text class="nm" x="' + lw + '" y="' + cy + '" dominant-baseline="central" text-anchor="end">' +
+        esc(flTrunc(n.name, chars)) + '</text>' +
+      '<rect class="lkc" x="' + (lw + 10) + '" y="' + (cy - BL_BAR / 2) + '" width="' + f(bl) + '" height="' + BL_BAR + '"/>' +
+      '<text class="tot" x="' + f(lw + 10 + bl + 8) + '" y="' + cy + '" dominant-baseline="central">' +
+        esc(n.n + ' · ' + LK_WHY[why] + ' · ' + who[0][0] + (who.length > 1 ? ' +' + (who.length - 1) : '')) + '</text>' +
+      '</g>');
+  });
+  const H = Math.max(listTop + Math.max(1, LK.rows.length) * BL_ROW + BL_PAD, BL_PAD + LK_CHART);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.style.height = H + 'px';
+  svg.innerHTML = out.join('');
+}
+
+function lkTarget(e){
+  const t = e.target;
+  const g = t.closest && t.closest('.bln');
+  if (g) return {row: LK.rows[Number(g.dataset.i)], el: g};
+  if (t.dataset && t.dataset.s != null && t.classList.contains('lks')) return {slice: Number(t.dataset.s), el: t};
+  return null;
+}
+
+function lkHover(hit, e){
+  const svg = $('lkSvg'), tip = $('lkTip');
+  svg.querySelectorAll('.hot').forEach(x => x.classList.remove('hot'));
+  if (!hit){ tip.classList.remove('on'); return; }
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const dim = s => '<br><span style="color:var(--dim)">' + s + '</span>';
+  const clock = t => new Date(t * 1000).toLocaleTimeString();
+  let html;
+  if (hit.row){
+    hit.el.classList.add('hot');
+    const n = hit.row;
+    const share = (m, k) => lkTop(m).slice(0, k).map(([a, v]) => a + ' ' + Math.round(v / n.n * 100) + '%').join(', ') +
+      (m.size > k ? ', and ' + (m.size - k) + ' more' : '');
+    html = '<b>' + esc(n.name) + '</b><br>' + n.n.toLocaleString() + ' lookup' + (n.n === 1 ? '' : 's') + ' failed in the last ' + esc(span) +
+      '<br>' + esc(lkTop(n.why).map(([a, v]) => LK_WHY[a] + ' ' + v).join(', ')) +
+      dim(esc('Asked by: ' + share(n.progs, 3))) + dim(esc('Server: ' + share(n.servers, 2))) +
+      (n.lump ? '' : dim('Click to see its packets in the table.'));
+  } else {
+    const b = LK.bins[hit.slice], t0 = LK.start + hit.slice * LK.per, n = b.ok + b.bad;
+    html = '<b>' + esc(clock(t0)) + (LK.per > 1 ? ' to ' + esc(clock(t0 + LK.per)) : '') + '</b><br>' +
+      n + ' lookup' + (n === 1 ? '' : 's') + (n ? ', ' + (b.bad ? b.bad + ' failed' : 'none failed') : '');
+  }
+  tip.innerHTML = html;
+  const v = $('lkview').getBoundingClientRect();
+  tip.classList.add('on');
+  const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;
+  tip.style.left = Math.max(6, Math.min(x, v.width - tip.offsetWidth - 6)) + 'px';
+  tip.style.top = (y + tip.offsetHeight > v.height ? y - tip.offsetHeight - 20 : y) + 'px';
+}
+
+// A failed name's packets: the table, filtered to DNS packets that mention it.
+function lkOpen(n){
+  addClause('proto', '==', 'DNS');
+  addClause('info', '~', n.name);
+  setView('table');
+  openNewestVisible();
+}
+
+$('lkWrap').addEventListener('mouseenter', () => { LK.hovering = true; });
+$('lkWrap').addEventListener('mouseleave', () => {
+  LK.hovering = false; lkHover(null);
+  if (LK.stale) lkDraw();
+});
+$('lkSvg').addEventListener('mousemove', e => lkHover(lkTarget(e), e));
+$('lkSvg').addEventListener('click', e => {
+  const h = lkTarget(e);
+  if (h && h.row && !h.row.lump) lkOpen(h.row);
+});
+$('lkSvg').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const h = lkTarget(e);
+  if (h && h.row && !h.row.lump){ e.preventDefault(); lkOpen(h.row); }
+});
+try { new ResizeObserver(() => lkDraw()).observe($('lkWrap')); } catch (e){}
+
 /* ---------------- sparkline ---------------- */
 
 function drawSpark(tl){
@@ -5071,6 +5342,7 @@ async function poll(){
     if (viewMode === 'balance' && !paused) tlFetch().then(() => blDraw(true));
     if (viewMode === 'kinds' && !paused) tlFetch().then(() => kdDraw(true));
     if (viewMode === 'latency' && !paused) laFetch().then(() => laDraw(true));
+    if (viewMode === 'lookups' && !paused) lkFetch().then(() => lkDraw(true));
     if (!paused && d.packets.length){
       const tb = $('rows'), w = $('tw'), frag = document.createDocumentFragment();
       const following = $('follow').checked;
@@ -5297,7 +5569,8 @@ function setPaused(v){
     ? 'paused — the capture is still running, the ' +
       (viewMode === 'timeline' ? 'timeline' : viewMode === 'flows' ? 'flows view' :
        viewMode === 'balance' ? 'balance view' : viewMode === 'kinds' ? 'kinds view' :
-       viewMode === 'latency' ? 'latency view' : 'table') +
+       viewMode === 'latency' ? 'latency view' :
+       viewMode === 'lookups' ? 'lookups view' : 'table') +
       ' is not updating'
     : '';
   if (!paused) updateCount();

@@ -531,6 +531,41 @@ can't be applied, and the view says so: the handshake is TCP whatever the
 connection went on to carry. The times are kept in memory for an hour and
 are not written to the history database.
 
+### Lookups
+
+**Lookups**, beside Latency, shows this machine's name lookups (DNS) over
+time and the names that failed. A burst of lookups for names that don't exist
+is what software hunting for a server by made-up names looks like; a burst
+with no answer is the resolver or the network being down.
+
+- A lookup is a DNS query this machine sent, paired with its answer. It ends
+  one of three ways: **answered**; refused, because the name **doesn't
+  exist** or the **server** reported an **error**; or **no answer** within
+  five seconds. The last two count as failed.
+- An answer with no addresses counts as answered. It is routine: an IPv6
+  lookup for a name that only has IPv4 gets one.
+- The chart has a column per slice of the window, the answered lookups in
+  blue with the failed ones stacked on top in orange. The note above it gives
+  the count, the share that failed and the usual answer time.
+- Under the chart, **Names that failed**, most failures first: how many, the
+  commonest reason, and the program that asked. The names that fit are
+  listed; the rest are folded into **N other names**.
+- On Windows the program is usually `svchost.exe`: the DNS Client service
+  asks on behalf of everything else. A browser with its own resolver shows
+  as itself. The name is the part to act on.
+- What it can't see: lookups a browser sends encrypted (DNS over HTTPS or
+  TLS). mDNS and LLMNR are left out: they are questions to the local network
+  that nothing answers "no" to.
+- **Hover** a column for that slice's counts, or a name for how its lookups
+  ended, who asked and which server. **Click** a name to open the table
+  filtered to its DNS packets, the newest one selected. It doesn't redraw
+  while the pointer is over it.
+
+The display filter and the adapter dropdown apply; `host == "name"` matches
+the name looked up. Lookups are kept in memory for an hour and are not
+written to the history database. A response's Info now says **no such name**
+or **server error** where it used to say "no answer" for both.
+
 ### Checking the capture is keeping up
 
 Two states used to look identical: a capture with no drops, and one whose driver
@@ -1065,6 +1100,7 @@ netscope_block.py   blocking a host or program through Windows Firewall rules
 netscope_conn.py    connection table — flow accounting joined to the socket table
 netscope_timeline.py per-second totals for the Timeline view
 netscope_latency.py  an hour of handshake times for the Latency view
+netscope_lookups.py  DNS queries paired with their answers, for the Lookups view
 netscope_pcap.py    .pcap writing and reading
 netscope_history.py SQLite history — rollups, first-seen records, alert log
 netscope_tray.py    tray icon, console hiding, start-on-login
@@ -1116,6 +1152,14 @@ names.
 ---
 
 ## Version history
+
+**1.50.0** — New: **Lookups**, a seventh view. Name lookups (DNS) across the
+last minute to hour as bars, answered with failed stacked on top, and under
+them the names that failed, with how often, why (doesn't exist, server error,
+no answer) and who asked. Click a name for its packets. DNS responses are now
+decoded for their result code, and a refused lookup's Info says **no such
+name** instead of "no answer". Demo mode's DNS is now real question-and-answer
+pairs. See *Lookups* under *Using the dashboard*.
 
 **1.49.0** — New: **Latency**, a sixth view. How long each host takes to
 answer a new connection (the TCP handshake), one dot per connection across
