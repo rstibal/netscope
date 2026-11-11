@@ -17,18 +17,25 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
     const recent=[...records.values()].reverse().map(r=>r.process);
     return names.find(n=>!/^\(/.test(n) && recent.includes(n)); });
   check('found a lane with packets in the buffer', !!lane);
-  await p.click('#tlLabels .ln[data-name="'+lane+'"] .nm');
+  // The click and the "is it the newest?" question are asked in one turn of
+  // the page's script. Asked 400 ms later, as this used to be, a poll in
+  // between could bring the lane a newer packet, and the check failed about
+  // half the time though the page had selected the right one.
+  const newest = await p.evaluate(sel => {
+    document.querySelector(sel).click();
+    const visible = [...records.values()].filter(rowVisible);
+    return visible.length ? visible[visible.length-1].seq === selected : false;
+  }, '#tlLabels .ln[data-name="'+lane+'"] .nm');
   await p.waitForTimeout(400);
-  const r = await p.evaluate(()=>{
+  const r = await p.evaluate(newest=>{
     const tr = document.querySelector('#rows tr.sel'), rec = selected != null ? records.get(selected) : null;
     const box = tr && tr.getBoundingClientRect(), tw = document.getElementById('tw').getBoundingClientRect();
-    const visible = [...records.values()].filter(rowVisible);
     return {view: viewMode, find: document.getElementById('find').value, proc: rec && rec.process,
-            newest: visible.length ? visible[visible.length-1].seq === selected : false,
+            newest,
             onScreen: !!box && box.top >= tw.top - 1 && box.bottom <= tw.bottom + 1,
             tab: document.querySelector('.tab.on').dataset.p,
             detail: document.getElementById('p-detail').textContent.length};
-  });
+  }, newest);
   check('the table is shown', r.view==='table', JSON.stringify(r));
   check('...filtered to the lane, in the filter box', r.find==='process == "'+lane+'"', r.find);
   check("...with the lane's newest packet selected", r.proc===lane && r.newest, JSON.stringify(r));
