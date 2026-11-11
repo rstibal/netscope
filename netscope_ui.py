@@ -290,6 +290,22 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 .fln .tot{fill:var(--faint);font-size:10.5px}
 .fln:hover .nm,.fln.hot .nm,.fln:focus-visible .nm{text-decoration:underline}
 .fln.lump:hover .nm{text-decoration:none}
+/* Balance (1.47): a row per program or host, sent left of a centre line and
+   received right of it, on one linear scale. */
+#blview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+#blSvg{display:block;width:100%}
+.blaxis{stroke:var(--grid);stroke-width:1}
+.blb.out{fill:var(--series-out)}
+.blb.in{fill:var(--series-in)}
+.bln{cursor:pointer;outline:none}
+.bln.lump{cursor:default}
+.bln .hit{fill:var(--fg);opacity:0}
+.bln.hot .hit,.bln:focus-visible .hit{opacity:.07}
+.bln text{font:12px var(--mono);fill:var(--fg)}
+.bln.lump text,.bln.sys text{fill:var(--dim)}
+.bln .tot,.bln .blr{fill:var(--dim);font-size:10.5px}
+.bln.hot .nm,.bln:focus-visible .nm{text-decoration:underline}
+.bln.lump.hot .nm{text-decoration:none}
 
 /* ---------- footer stats ---------- */
 footer{
@@ -709,6 +725,8 @@ back through the table while the capture continues."><input type="checkbox"
             title="One lane per program or host against time: what runs when, and what checks in on a schedule">Timeline</button>
     <button id="vFlow" class="btn-sm" aria-pressed="false"
             title="Programs on the left, hosts on the right, joined by bands as thick as the bytes between them: where the traffic is going">Flows</button>
+    <button id="vBal" class="btn-sm" aria-pressed="false"
+            title="One row per program or host, bytes sent on the left and received on the right, the biggest sender first: what is uploading">Balance</button>
   </span>
   <span class="flabel">filter</span>
   <span class="findwrap" id="findwrap">
@@ -808,6 +826,22 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="flwrap" id="flWrap"><svg id="flSvg" role="img" aria-label="Traffic between programs and hosts"></svg>
         <div class="empty" id="flEmpty" style="display:none"></div></div>
       <div class="tip" id="flTip"></div>
+    </div>
+    <div id="blview" class="viz" style="display:none">
+      <div class="tlbar">
+        <span class="viewsw" id="blWin" role="group" aria-label="Time window">
+          <button class="btn-sm" data-w="60">1 min</button><button class="btn-sm" data-w="300">5 min</button><button class="btn-sm" data-w="900">15 min</button><button class="btn-sm" data-w="3600">1 hour</button>
+        </span>
+        <span class="viewsw" id="blGroup" role="group" aria-label="One row per">
+          <button class="btn-sm" data-g="process">Programs</button><button class="btn-sm" data-g="host">Hosts</button>
+        </span>
+        <span class="tlnote" id="blNote"></span>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--series-out)"></i>▲ sent</span><span><i style="background:var(--series-in)"></i>▼ received</span></div>
+      </div>
+      <div class="flwrap" id="blWrap"><svg id="blSvg" role="img" aria-label="Bytes sent and received, per program or host"></svg>
+        <div class="empty" id="blEmpty" style="display:none"></div></div>
+      <div class="tip" id="blTip"></div>
     </div>
     <footer>
       <!-- The chart goes first so nothing upstream of it can move it. It used
@@ -3625,6 +3659,7 @@ function tlBuild(W){
 
 function tlDraw(){
   if (viewMode === 'flows') return flDraw();
+  if (viewMode === 'balance') return blDraw();
   if (viewMode !== 'timeline') return;
   const cv = $('tlCanvas'), ax = $('tlAxis');
   const W = Math.max(60, Math.floor(ax.clientWidth || cv.clientWidth));
@@ -3762,19 +3797,20 @@ function tlLaneRec(name){
 }
 
 function setView(v){
-  if (v !== 'timeline' && v !== 'flows') v = 'table';
+  if (v !== 'timeline' && v !== 'flows' && v !== 'balance') v = 'table';
   if (v === viewMode) return;
   if (viewMode === 'table') tableTop = $('tw').scrollTop;
   viewMode = v;
-  // tlmode: the table is folded away, for either drawing.
+  // tlmode: the table is folded away, for any of the drawings.
   document.body.classList.toggle('tlmode', v !== 'table');
   $('tlview').style.display = v === 'timeline' ? '' : 'none';
   $('flview').style.display = v === 'flows' ? '' : 'none';
-  for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows']]){
+  $('blview').style.display = v === 'balance' ? '' : 'none';
+  for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows'], ['vBal', 'balance']]){
     $(id).classList.toggle('on', v === m); $(id).setAttribute('aria-pressed', v === m);
   }
   try { localStorage.setItem('netscope-view', viewMode); } catch (e){}
-  $('tlTip').classList.remove('on'); $('flTip').classList.remove('on');
+  $('tlTip').classList.remove('on'); $('flTip').classList.remove('on'); $('blTip').classList.remove('on');
   if (v !== 'table'){ tlDraw(); tlFetch().then(tlDraw); }
   else {
     const w = $('tw');
@@ -3784,10 +3820,11 @@ function setView(v){
 }
 
 function tlSetting(){
-  // One window for Timeline and Flows.
-  document.querySelectorAll('#tlWin button, #flWin button').forEach(b =>
+  // One window for Timeline, Flows and Balance; one Programs/Hosts choice
+  // for Timeline and Balance.
+  document.querySelectorAll('#tlWin button, #flWin button, #blWin button').forEach(b =>
     b.classList.toggle('on', Number(b.dataset.w) === TL.win));
-  document.querySelectorAll('#tlGroup button').forEach(b =>
+  document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b =>
     b.classList.toggle('on', b.dataset.g === TL.group));
   try { localStorage.setItem('netscope-tl', JSON.stringify({win: TL.win, group: TL.group})); } catch (e){}
 }
@@ -3795,10 +3832,11 @@ function tlSetting(){
 $('vTable').onclick = () => setView('table');
 $('vTime').onclick = () => setView('timeline');
 $('vFlow').onclick = () => setView('flows');
-document.querySelectorAll('#tlWin button, #flWin button').forEach(b => b.onclick = () => {
+$('vBal').onclick = () => setView('balance');
+document.querySelectorAll('#tlWin button, #flWin button, #blWin button').forEach(b => b.onclick = () => {
   TL.win = Number(b.dataset.w); tlSetting(); tlDraw();
 });
-document.querySelectorAll('#tlGroup button').forEach(b => b.onclick = () => {
+document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b => b.onclick = () => {
   TL.group = b.dataset.g; tlSetting(); $('tlScroll').scrollTop = 0; tlDraw();
 });
 tlSetting();
@@ -4167,6 +4205,208 @@ $('flSvg').addEventListener('contextmenu', e => {
 });
 try { new ResizeObserver(() => flDraw()).observe($('flWrap')); } catch (e){}
 
+/* ---------------- balance (1.47) ----------------
+   One row per program (or host): bytes sent to the left of a centre line,
+   received to the right, the biggest sender first. Flows shows where the
+   traffic goes; this shows which way, so a backup, a sync or anything else
+   sending far more than it receives is at the top with its ratio.
+
+   Drawn from the Timeline's totals, as Flows is, with the same window,
+   filter, adapter and exclusions (the VPN's copy, multicast). One linear
+   scale for every bar on both sides, so lengths compare across rows; any
+   amount that moved still gets a hairline. Sorted by bytes sent, not by
+   ratio: a program that sent 2 KB and received nothing would lead. */
+const BL_ROW = 22, BL_BAR = 12, BL_PAD = 10, BL_MIN = 1.5, BL_MAX_ROWS = 40;
+var BL = {rows: [], order: [], sig: '', at: 0, hovering: false, stale: false, tunnel: 0, total: 0};
+
+function blBuild(N){
+  const bad = tlUnsupported($('find').value);
+  const pass = TL.keys.map(r => !bad.length && rowVisible(r));
+  const end = TL.offline ? TL.newest + 1 : Math.floor(TL.now) + 1;
+  const start = end - TL.win;
+  const byHost = TL.group === 'host';
+  const rows = new Map();
+  let tunnel = 0;
+  for (const [sec, list] of TL.secs){
+    if (sec < start || sec >= end) continue;
+    for (const [k, bytes, pkts] of list){
+      if (!pass[k]) continue;
+      const r = TL.keys[k];
+      if (r.outer){ tunnel += bytes; continue; }
+      if (r.group) continue;
+      const proc = r.process || '-', host = r.rhost || r.remote || '(none)';
+      const name = byHost ? host : proc, other = byHost ? proc : host;
+      let n = rows.get(name);
+      if (!n) rows.set(name, n = {name, out: 0, in: 0, pkts: 0, others: new Map()});
+      n[r.dir === 'out' ? 'out' : 'in'] += bytes; n.pkts += pkts;
+      n.others.set(other, (n.others.get(other) || 0) + bytes);
+    }
+  }
+  // The biggest senders that fit, in an order held for ten seconds (as the
+  // Timeline's lanes and the Flows nodes are).
+  const sig = TL.win + '|' + TL.group + '|' + $('find').value + '|' + ifaceTab + '|' + N;
+  const keep = sig === BL.sig && Date.now() - BL.at < 10000;
+  if (!keep){ BL.sig = sig; BL.at = Date.now(); }
+  const all = [...rows.values()].filter(n => n.out + n.in > 0)
+    .sort((a, b) => b.out - a.out || b.in - a.in);
+  const top = all.length > N ? all.slice(0, N - 1) : all;
+  if (keep){
+    const rank = new Map(BL.order.map((n, i) => [n, i]));
+    const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + all.indexOf(n);
+    top.sort((a, b) => at(a) - at(b));
+  }
+  BL.order = top.map(n => n.name);
+  const rest = all.slice(top.length);
+  if (rest.length){
+    const lump = {name: rest.length + ' other ' + (byHost ? 'hosts' : 'programs'), lump: true, out: 0, in: 0, pkts: 0};
+    for (const n of rest){ lump.out += n.out; lump.in += n.in; lump.pkts += n.pkts; }
+    top.push(lump);
+  }
+  BL.rows = top;
+  BL.tunnel = tunnel;
+  BL.total = top.reduce((a, n) => a + n.out + n.in, 0);
+  return bad;
+}
+
+// "sends 12×" for a row that sends more than it receives, else nothing.
+function blRatio(n){
+  if (!n.out || n.out < n.in * 1.05) return '';
+  if (!n.in) return 'sends only';
+  const r = n.out / n.in;
+  return 'sends ' + (r >= 1000 ? '999×+' : r >= 10 ? Math.round(r) + '×' : r.toFixed(1) + '×');
+}
+
+function blDraw(auto){
+  if (viewMode !== 'balance') return;
+  // Not while the pointer is on it, for the reason Flows gives.
+  if (auto && BL.hovering){ BL.stale = true; return; }
+  BL.stale = false;
+  const wrap = $('blWrap'), svg = $('blSvg');
+  const W = Math.max(320, Math.floor(wrap.clientWidth));
+  const avail = Math.max(200, Math.floor(wrap.clientHeight));
+  const N = Math.max(4, Math.min(BL_MAX_ROWS, Math.floor((avail - 2 * BL_PAD) / BL_ROW)));
+  const bad = blBuild(N);
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const note = $('blNote');
+  if (bad.length){
+    note.className = 'tlnote warn';
+    note.textContent = 'The filter uses ' + bad.join(', ') + ', which the balance view doesn\'t ' +
+      'keep: it holds totals per program, host and port, not each packet.';
+  } else {
+    note.className = 'tlnote';
+    note.textContent = BL.total ? hb(BL.total) + ' in the last ' + span +
+      (BL.tunnel ? ' · VPN copy left out: ' + hb(BL.tunnel) : '') : '';
+  }
+  const empty = $('blEmpty');
+  const none = !BL.rows.length;
+  empty.style.display = none ? 'block' : 'none';
+  empty.textContent = bad.length ? 'Nothing to draw with this filter.'
+    : !TL.keys.length ? 'Waiting for packets…'
+    : filterFn ? 'Nothing matching this filter in the last ' + span + '.'
+    : 'No traffic in the last ' + span + '.';
+  $('blTip').classList.remove('on');
+  if (none){ svg.innerHTML = ''; svg.style.height = '0px'; return; }
+
+  // Names on the left, the ratio on the right, and between them the centre
+  // line with room each side for the longest bar and its figure.
+  const lw = Math.round(Math.min(300, Math.max(120, W * 0.25))), rw = 96, fig = 70;
+  const half = (W - lw - rw - 16) / 2, xc = Math.round(lw + 8 + half);
+  const most = BL.rows.reduce((a, n) => Math.max(a, n.out, n.in), 0);
+  const k = Math.max(20, half - fig) / Math.max(1, most);
+  const len = v => v > 0 ? Math.max(BL_MIN, v * k) : 0;
+  const chars = Math.floor((lw - 14) / 7.2);
+  const H = BL.rows.length * BL_ROW + 2 * BL_PAD;
+  const f = v => v.toFixed(1);
+  const out = ['<line class="blaxis" x1="' + (xc + 0.5) + '" y1="' + (BL_PAD - 4) + '" x2="' + (xc + 0.5) +
+               '" y2="' + (H - BL_PAD + 4) + '"/>'];
+  BL.rows.forEach((n, i) => {
+    const y = BL_PAD + i * BL_ROW, cy = y + BL_ROW / 2, by = cy - BL_BAR / 2;
+    const lo = len(n.out), li = len(n.in);
+    const sys = !n.lump && /^[-(]/.test(n.name);
+    const ratio = blRatio(n);
+    out.push('<g class="bln' + (n.lump ? ' lump' : '') + (sys ? ' sys' : '') + '" data-i="' + i + '"' +
+      (n.lump ? '' : ' tabindex="0"') + '>' +
+      '<rect class="hit" x="0" y="' + y + '" width="' + W + '" height="' + BL_ROW + '"/>' +
+      '<text class="nm" x="' + lw + '" y="' + cy + '" dominant-baseline="central" text-anchor="end">' +
+        esc(flTrunc(n.name, chars)) + '</text>' +
+      (lo ? '<rect class="blb out" x="' + f(xc - lo) + '" y="' + by + '" width="' + f(lo) + '" height="' + BL_BAR + '"/>' : '') +
+      (li ? '<rect class="blb in" x="' + xc + '" y="' + by + '" width="' + f(li) + '" height="' + BL_BAR + '"/>' : '') +
+      '<text class="tot" x="' + f(xc - lo - 6) + '" y="' + cy + '" dominant-baseline="central" text-anchor="end">' +
+        esc(hb(n.out)) + '</text>' +
+      '<text class="tot" x="' + f(xc + li + 6) + '" y="' + cy + '" dominant-baseline="central">' + esc(hb(n.in)) + '</text>' +
+      (ratio ? '<text class="blr" x="' + (W - 10) + '" y="' + cy + '" dominant-baseline="central" text-anchor="end">' +
+        esc(ratio) + '</text>' : '') +
+      '</g>');
+  });
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.style.height = H + 'px';
+  svg.innerHTML = out.join('');
+}
+
+// "Hosts: github.com 81%, ..." for a program's row, or "Programs: ..." for a host's.
+function blShares(n, k){
+  const tot = n.out + n.in;
+  if (!n.others || !tot) return '';
+  const list = [...n.others.entries()].sort((a, b) => b[1] - a[1]);
+  const pct = v => { v = v / tot * 100; return v >= 1 ? Math.round(v) + '%' : '<1%'; };
+  return (TL.group === 'host' ? 'Programs: ' : 'Hosts: ') +
+    list.slice(0, k).map(([name, v]) => name + ' ' + pct(v)).join(', ') +
+    (list.length > k ? ', and ' + (list.length - k) + ' more' : '');
+}
+
+function blTarget(e){
+  const g = e.target.closest && e.target.closest('.bln');
+  return g ? {row: BL.rows[Number(g.dataset.i)], el: g} : null;
+}
+
+function blHover(hit, e){
+  const svg = $('blSvg'), tip = $('blTip');
+  svg.querySelectorAll('.hot').forEach(x => x.classList.remove('hot'));
+  if (!hit || !hit.row){ tip.classList.remove('on'); return; }
+  hit.el.classList.add('hot');
+  const n = hit.row;
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const ratio = blRatio(n), shares = blShares(n, 4);
+  tip.innerHTML = '<b>' + esc(n.name) + '</b><br>▲ ' + esc(hb(n.out)) + ' sent &nbsp;▼ ' + esc(hb(n.in)) +
+    ' received in the last ' + esc(span) +
+    (ratio ? '<br>' + esc(ratio === 'sends only' ? 'Sends, and receives nothing' : 'S' + ratio.slice(1) + ' what it receives') : '') +
+    (shares ? '<br><span style="color:var(--dim)">' + esc(shares) + '</span>' : '') +
+    (blClickable(n) ? '<br><span style="color:var(--dim)">Click to filter to it; right-click to hide it.</span>' : '');
+  const v = $('blview').getBoundingClientRect();
+  tip.classList.add('on');
+  const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;
+  tip.style.left = Math.max(6, Math.min(x, v.width - tip.offsetWidth - 6)) + 'px';
+  tip.style.top = (y + tip.offsetHeight > v.height ? y - tip.offsetHeight - 20 : y) + 'px';
+}
+
+const blClickable = n => !n.lump && n.name !== '(none)' && n.name !== '(many)';
+const blField = n => TL.group === 'process' ? 'process' : tlIsIP(n.name) ? 'ip' : 'host';
+
+$('blWrap').addEventListener('mouseenter', () => { BL.hovering = true; });
+$('blWrap').addEventListener('mouseleave', () => {
+  BL.hovering = false; blHover(null);
+  if (BL.stale) blDraw();
+});
+$('blSvg').addEventListener('mousemove', e => blHover(blTarget(e), e));
+$('blSvg').addEventListener('click', e => {
+  const h = blTarget(e);
+  if (h && h.row && blClickable(h.row)) addClause(blField(h.row), '==', h.row.name);
+});
+$('blSvg').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const h = blTarget(e);
+  if (h && h.row && blClickable(h.row)){ e.preventDefault(); addClause(blField(h.row), '==', h.row.name); }
+});
+$('blSvg').addEventListener('contextmenu', e => {
+  const h = blTarget(e);
+  if (!h || !h.row || !blClickable(h.row)) return;
+  e.preventDefault();
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y){ const r = h.el.getBoundingClientRect(); x = r.left + 20; y = r.bottom; }
+  openRowMenu(tlLaneRec(h.row.name), x, y);
+});
+try { new ResizeObserver(() => blDraw()).observe($('blWrap')); } catch (e){}
+
 /* ---------------- sparkline ---------------- */
 
 function drawSpark(tl){
@@ -4312,6 +4552,7 @@ async function poll(){
     renderStats(d.stats);
     if (viewMode === 'timeline' && !paused) tlFetch().then(tlDraw);
     if (viewMode === 'flows' && !paused) tlFetch().then(() => flDraw(true));
+    if (viewMode === 'balance' && !paused) tlFetch().then(() => blDraw(true));
     if (!paused && d.packets.length){
       const tb = $('rows'), w = $('tw'), frag = document.createDocumentFragment();
       const following = $('follow').checked;
@@ -4536,7 +4777,8 @@ function setPaused(v){
   $('statusText').style.opacity = paused ? .5 : 1;
   $('fcount').textContent = paused
     ? 'paused — the capture is still running, the ' +
-      (viewMode === 'timeline' ? 'timeline' : viewMode === 'flows' ? 'flows view' : 'table') + ' is not updating'
+      (viewMode === 'timeline' ? 'timeline' : viewMode === 'flows' ? 'flows view' :
+       viewMode === 'balance' ? 'balance view' : 'table') + ' is not updating'
     : '';
   if (!paused) updateCount();
 }

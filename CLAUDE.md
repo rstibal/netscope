@@ -315,6 +315,15 @@ not a division. Height is capped at about two rows per node: with three
 nodes, filling the pane made slabs. The automatic redraw waits while the
 pointer is over it, for the reason the Alerts pane does.
 
+**Balance is sorted by bytes sent, on one scale, and shares the Timeline's
+settings (1.47).** It is drawn from the Timeline's totals the way Flows is,
+with the same exclusions and the same wait while the pointer is over it.
+Sorting by the sent-to-received ratio was considered and not done: a program
+that sent 2 KB and received nothing would lead, and the ratio is shown as a
+note on the row instead. Sent and received share one linear scale, not one
+per side, so a bar's length means the same thing everywhere. Its Programs /
+Hosts switch and window are `TL.group` and `TL.win`, not settings of its own.
+
 **Regularity is checked per program-and-host pair, not only per lane.** On a
 real machine the Programs view tagged nothing while Claude.exe checked in with
 `downloads.claude.ai` every 45 s: the program's other traffic filled the gaps,

@@ -8,3 +8,4 @@ netscope.log
 .pytest_cache/
 node_modules/
 .claude/
+.superpowers/

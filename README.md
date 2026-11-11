@@ -438,6 +438,35 @@ two colours: the **sent** part above, the **received** part below.
 The display filter and the adapter dropdown apply as on the Timeline, with
 the same limit on the fields it can use.
 
+### Balance
+
+**Balance**, beside Flows, shows which way the traffic is going: one row per
+program, with the bytes it **sent** drawn to the left of a centre line and the
+bytes it **received** to the right. The biggest sender is at the top, so a
+backup, a sync, or anything else uploading is the first thing you see.
+
+- **1 min / 5 min / 15 min / 1 hour** is the same setting as the Timeline's
+  and Flows'. **Programs / Hosts** is the Timeline's too: Hosts gives one row
+  per host, so you can see where the uploads are going.
+- Every bar, on both sides, is on one linear scale, so lengths compare across
+  rows. Anything that moved gets at least a hairline; nothing is drawn for
+  nothing.
+- Rows are sorted by bytes sent, not by the ratio: a program that sent 2 KB
+  and received nothing would otherwise lead. A row that sends more than it
+  receives says by how much at the right (**sends 12×**, or **sends only**).
+- The rows that fit the height are drawn; the rest are folded into **N other
+  programs** (or hosts) at the bottom. The order holds for ten seconds at a
+  time.
+- The VPN's encrypted copy, multicast and broadcast are left out, as in Flows,
+  and the note at the top says how much VPN copy there was.
+- **Hover** a row for its bytes each way and its share with each host (or
+  program). **Click** it to filter to it; **right-click** for the hide and
+  don't-record menu. As in Flows, it doesn't redraw while the pointer is over
+  it.
+
+The display filter and the adapter dropdown apply as on the Timeline, with
+the same limit on the fields it can use.
+
 ### Checking the capture is keeping up
 
 Two states used to look identical: a capture with no drops, and one whose driver
@@ -1022,6 +1051,13 @@ names.
 ---
 
 ## Version history
+
+**1.47.0** — New: **Balance**, a fourth view beside Table, Timeline and
+Flows. One row per program or host, bytes sent to the left of a centre line
+and received to the right, the biggest sender first, with a note on rows that
+send more than they receive (**sends 12×**). Hover for the numbers and the
+hosts behind them, click a row to filter to it. See *Balance* under *Using
+the dashboard*.
 
 **1.46.0** — New: **Flows**, a third view beside Table and Timeline. Programs
 on the left, hosts on the right, joined by bands as thick as the bytes
