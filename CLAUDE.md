@@ -324,6 +324,17 @@ note on the row instead. Sent and received share one linear scale, not one
 per side, so a bar's length means the same thing everywhere. Its Programs /
 Hosts switch and window are `TL.group` and `TL.win`, not settings of its own.
 
+**Kinds folds a connection's undecoded packets into its protocol (1.48).**
+`proto` is per packet: a TLS connection's bare ACKs and handshake segments
+are plain `TCP`, so grouping by label alone left a `TCP` row as big as the
+web traffic it belonged to. Plain TCP/UDP on a (transport, port) where a
+decoded protocol was seen in the window counts under that protocol
+(`KD_ON_TCP` says which ride on TCP); the rest is named by port. A row's
+click writes the filter that means the same packets (`kdExpr`), folds
+included, so the table and the drawing never disagree. Multicast is kept
+here, unlike Flows and Balance: it is not a host, but it is a kind. The
+trend line is one ink on the row's own scale, as History's is.
+
 **Regularity is checked per program-and-host pair, not only per lane.** On a
 real machine the Programs view tagged nothing while Claude.exe checked in with
 `downloads.claude.ai` every 45 s: the program's other traffic filled the gaps,

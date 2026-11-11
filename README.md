@@ -467,6 +467,37 @@ backup, a sync, or anything else uploading is the first thing you see.
 The display filter and the adapter dropdown apply as on the Timeline, with
 the same limit on the fields it can use.
 
+### Kinds
+
+**Kinds**, beside Balance, shows what the traffic is: one row per kind, with
+a bar of its bytes (the **sent** part, then the **received**), the total, and
+at the right a line of its shape across the window.
+
+- A kind is the protocol NetScope decoded, as in the table's **Proto** column:
+  TLS, QUIC, HTTP, DNS, SMB2 and so on.
+- A connection's packets with nothing to decode (a TLS connection's bare
+  acknowledgements, a QUIC packet that couldn't be read) are labelled plain
+  TCP or UDP in the table. Here they are counted with the protocol seen on
+  the same port in the window, so web traffic is one row and not split
+  between **TLS** and a large **TCP**. Hovering the row says which ports were
+  counted with it.
+- What is left undecoded is named by its port: **TCP 8080**, **UDP 51820**.
+- Bars share one linear scale, with a hairline for anything that moved. Each
+  line is on its own scale: the bar says how much, the line says when.
+- The busiest kinds that fit the height are drawn; the rest are folded into
+  **N other kinds**. The order holds for ten seconds at a time.
+- The VPN's encrypted copy is left out and the note at the top says how much
+  there was. Multicast and broadcast are kept, unlike in Flows and Balance:
+  mDNS is not a host being talked to, but it is a kind of traffic.
+- **Hover** a row for its bytes each way and the programs using it. **Click**
+  it to filter to it; the filter written includes the plain packets counted
+  with it, so the table shows the same traffic. **Right-click** hides it, by
+  adding a clause to the filter box. It doesn't redraw while the pointer is
+  over it.
+
+The display filter and the adapter dropdown apply as on the Timeline, with
+the same limit on the fields it can use.
+
 ### Checking the capture is keeping up
 
 Two states used to look identical: a capture with no drops, and one whose driver
@@ -1051,6 +1082,13 @@ names.
 ---
 
 ## Version history
+
+**1.48.0** — New: **Kinds**, a fifth view. One row per kind of traffic (TLS,
+QUIC, DNS, SMB2..., or a port for what isn't decoded), with a bar of its
+bytes and a line of its shape over the last minute to hour. A connection's
+undecoded packets are counted with its protocol, not in one large TCP row.
+Hover for the programs behind a kind, click to filter to it, right-click to
+hide it. See *Kinds* under *Using the dashboard*.
 
 **1.47.0** — New: **Balance**, a fourth view beside Table, Timeline and
 Flows. One row per program or host, bytes sent to the left of a centre line

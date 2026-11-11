@@ -306,6 +306,13 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 .bln .tot,.bln .blr{fill:var(--dim);font-size:10.5px}
 .bln.hot .nm,.bln:focus-visible .nm{text-decoration:underline}
 .bln.lump.hot .nm{text-decoration:none}
+/* Kinds (1.48): a row per kind of traffic, its bytes as a bar and its shape
+   over the window as a line. Rows and bars are Balance's; the line is one
+   ink, as History's trend is. */
+#kdview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+#kdSvg{display:block;width:100%}
+path.kdt.a{fill:var(--dim);opacity:.22}
+path.kdt.l{fill:none;stroke:var(--dim);stroke-width:1.2}
 
 /* ---------- footer stats ---------- */
 footer{
@@ -727,6 +734,8 @@ back through the table while the capture continues."><input type="checkbox"
             title="Programs on the left, hosts on the right, joined by bands as thick as the bytes between them: where the traffic is going">Flows</button>
     <button id="vBal" class="btn-sm" aria-pressed="false"
             title="One row per program or host, bytes sent on the left and received on the right, the biggest sender first: what is uploading">Balance</button>
+    <button id="vKind" class="btn-sm" aria-pressed="false"
+            title="One row per kind of traffic (web, name lookups, file sharing...), with its bytes and its shape over time">Kinds</button>
   </span>
   <span class="flabel">filter</span>
   <span class="findwrap" id="findwrap">
@@ -842,6 +851,19 @@ back through the table while the capture continues."><input type="checkbox"
       <div class="flwrap" id="blWrap"><svg id="blSvg" role="img" aria-label="Bytes sent and received, per program or host"></svg>
         <div class="empty" id="blEmpty" style="display:none"></div></div>
       <div class="tip" id="blTip"></div>
+    </div>
+    <div id="kdview" class="viz" style="display:none">
+      <div class="tlbar">
+        <span class="viewsw" id="kdWin" role="group" aria-label="Time window">
+          <button class="btn-sm" data-w="60">1 min</button><button class="btn-sm" data-w="300">5 min</button><button class="btn-sm" data-w="900">15 min</button><button class="btn-sm" data-w="3600">1 hour</button>
+        </span>
+        <span class="tlnote" id="kdNote"></span>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--series-out)"></i>▲ sent</span><span><i style="background:var(--series-in)"></i>▼ received</span></div>
+      </div>
+      <div class="flwrap" id="kdWrap"><svg id="kdSvg" role="img" aria-label="Bytes per kind of traffic, with each kind's shape over time"></svg>
+        <div class="empty" id="kdEmpty" style="display:none"></div></div>
+      <div class="tip" id="kdTip"></div>
     </div>
     <footer>
       <!-- The chart goes first so nothing upstream of it can move it. It used
@@ -3660,6 +3682,7 @@ function tlBuild(W){
 function tlDraw(){
   if (viewMode === 'flows') return flDraw();
   if (viewMode === 'balance') return blDraw();
+  if (viewMode === 'kinds') return kdDraw();
   if (viewMode !== 'timeline') return;
   const cv = $('tlCanvas'), ax = $('tlAxis');
   const W = Math.max(60, Math.floor(ax.clientWidth || cv.clientWidth));
@@ -3797,7 +3820,7 @@ function tlLaneRec(name){
 }
 
 function setView(v){
-  if (v !== 'timeline' && v !== 'flows' && v !== 'balance') v = 'table';
+  if (v !== 'timeline' && v !== 'flows' && v !== 'balance' && v !== 'kinds') v = 'table';
   if (v === viewMode) return;
   if (viewMode === 'table') tableTop = $('tw').scrollTop;
   viewMode = v;
@@ -3806,11 +3829,14 @@ function setView(v){
   $('tlview').style.display = v === 'timeline' ? '' : 'none';
   $('flview').style.display = v === 'flows' ? '' : 'none';
   $('blview').style.display = v === 'balance' ? '' : 'none';
-  for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows'], ['vBal', 'balance']]){
+  $('kdview').style.display = v === 'kinds' ? '' : 'none';
+  for (const [id, m] of [['vTable', 'table'], ['vTime', 'timeline'], ['vFlow', 'flows'], ['vBal', 'balance'],
+                         ['vKind', 'kinds']]){
     $(id).classList.toggle('on', v === m); $(id).setAttribute('aria-pressed', v === m);
   }
   try { localStorage.setItem('netscope-view', viewMode); } catch (e){}
   $('tlTip').classList.remove('on'); $('flTip').classList.remove('on'); $('blTip').classList.remove('on');
+  $('kdTip').classList.remove('on');
   if (v !== 'table'){ tlDraw(); tlFetch().then(tlDraw); }
   else {
     const w = $('tw');
@@ -3820,9 +3846,9 @@ function setView(v){
 }
 
 function tlSetting(){
-  // One window for Timeline, Flows and Balance; one Programs/Hosts choice
-  // for Timeline and Balance.
-  document.querySelectorAll('#tlWin button, #flWin button, #blWin button').forEach(b =>
+  // One window for Timeline, Flows, Balance and Kinds; one Programs/Hosts
+  // choice for Timeline and Balance.
+  document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button').forEach(b =>
     b.classList.toggle('on', Number(b.dataset.w) === TL.win));
   document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b =>
     b.classList.toggle('on', b.dataset.g === TL.group));
@@ -3833,7 +3859,8 @@ $('vTable').onclick = () => setView('table');
 $('vTime').onclick = () => setView('timeline');
 $('vFlow').onclick = () => setView('flows');
 $('vBal').onclick = () => setView('balance');
-document.querySelectorAll('#tlWin button, #flWin button, #blWin button').forEach(b => b.onclick = () => {
+$('vKind').onclick = () => setView('kinds');
+document.querySelectorAll('#tlWin button, #flWin button, #blWin button, #kdWin button').forEach(b => b.onclick = () => {
   TL.win = Number(b.dataset.w); tlSetting(); tlDraw();
 });
 document.querySelectorAll('#tlGroup button, #blGroup button').forEach(b => b.onclick = () => {
@@ -4407,6 +4434,246 @@ $('blSvg').addEventListener('contextmenu', e => {
 });
 try { new ResizeObserver(() => blDraw()).observe($('blWrap')); } catch (e){}
 
+/* ---------------- kinds (1.48) ----------------
+   One row per kind of traffic: its bytes as a bar (sent, then received) and
+   its shape over the window as a line. Flows says where traffic goes and
+   Balance which way; this says what it is.
+
+   A kind is the protocol NetScope decoded, as in the table's Proto column.
+   But a TLS connection's bare ACKs and handshake segments are labelled plain
+   TCP, so grouping by label alone would put part of every web connection in
+   one big "TCP" row. Plain TCP or UDP on a port where a decoded protocol was
+   seen in the window is counted under that protocol; what is left is named
+   by its port ("TCP 8080"). Clicking a row writes a filter that means the
+   same packets, so the table and the drawing agree.
+
+   Drawn from the Timeline's totals, as Flows and Balance are. The VPN's copy
+   is left out as from every total. Multicast and broadcast are kept, unlike
+   in those two: mDNS and SSDP are not a host, but they are a kind. */
+const KD_BINS = 60, KD_TREND = 140;
+// Decoded protocols that ride on TCP; the rest ride on UDP.
+const KD_ON_TCP = {TLS: 1, HTTP: 1, SMB2: 1, FTP: 1, 'FTP-DATA': 1};
+const KD_PLAIN = {TCP: 1, UDP: 1};
+var KD = {rows: [], order: [], sig: '', at: 0, hovering: false, stale: false, tunnel: 0, total: 0};
+
+function kdBuild(N){
+  const bad = tlUnsupported($('find').value);
+  const pass = TL.keys.map(r => !bad.length && rowVisible(r));
+  const end = TL.offline ? TL.newest + 1 : Math.floor(TL.now) + 1;
+  const start = end - TL.win, per = TL.win / KD_BINS;
+  const portOf = r => r.dir === 'out' ? r.dport : r.sport;
+  // First pass: which decoded protocol owns each (transport, port), by bytes.
+  const seen = new Map();
+  const live = [];
+  let tunnel = 0;
+  for (const [sec, list] of TL.secs){
+    if (sec < start || sec >= end) continue;
+    for (const [k, bytes, pkts] of list){
+      if (!pass[k]) continue;
+      const r = TL.keys[k];
+      if (r.outer){ tunnel += bytes; continue; }
+      live.push([sec, r, bytes, pkts]);
+      const port = portOf(r);
+      if (port == null || KD_PLAIN[r.proto] || !r.proto || r.proto === 'OTHER') continue;
+      const at = (KD_ON_TCP[r.proto] ? 'TCP' : 'UDP') + ':' + port;
+      let m = seen.get(at);
+      if (!m) seen.set(at, m = new Map());
+      m.set(r.proto, (m.get(r.proto) || 0) + bytes);
+    }
+  }
+  const owner = new Map();
+  for (const [at, m] of seen) owner.set(at, [...m.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+  const rows = new Map();
+  for (const [sec, r, bytes, pkts] of live){
+    const port = portOf(r), proto = r.proto || 'OTHER';
+    let name = proto, fold = null, plain = null;
+    if (KD_PLAIN[proto] && port != null){
+      const o = owner.get(proto + ':' + port);
+      if (o){ name = o; fold = proto + ':' + port; }
+      else { name = proto + ' ' + port; plain = [proto, port]; }
+    }
+    let n = rows.get(name);
+    if (!n) rows.set(name, n = {name, out: 0, in: 0, pkts: 0, others: new Map(), folds: new Set(),
+                                plain, proto: plain ? null : name, trend: new Array(KD_BINS).fill(0)});
+    if (fold) n.folds.add(fold);
+    n[r.dir === 'out' ? 'out' : 'in'] += bytes; n.pkts += pkts;
+    const prog = r.process || '-';
+    n.others.set(prog, (n.others.get(prog) || 0) + bytes);
+    n.trend[Math.min(KD_BINS - 1, Math.floor((sec - start) / per))] += bytes;
+  }
+  const tot = n => n.out + n.in;
+  const sig = TL.win + '|' + $('find').value + '|' + ifaceTab + '|' + N;
+  const keep = sig === KD.sig && Date.now() - KD.at < 10000;
+  if (!keep){ KD.sig = sig; KD.at = Date.now(); }
+  const all = [...rows.values()].filter(n => tot(n) > 0).sort((a, b) => tot(b) - tot(a));
+  const top = all.length > N ? all.slice(0, N - 1) : all;
+  if (keep){
+    const rank = new Map(KD.order.map((n, i) => [n, i]));
+    const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + all.indexOf(n);
+    top.sort((a, b) => at(a) - at(b));
+  }
+  KD.order = top.map(n => n.name);
+  const rest = all.slice(top.length);
+  if (rest.length){
+    const lump = {name: rest.length + ' other kinds', lump: true, out: 0, in: 0, pkts: 0,
+                  trend: new Array(KD_BINS).fill(0)};
+    for (const n of rest){
+      lump.out += n.out; lump.in += n.in; lump.pkts += n.pkts;
+      n.trend.forEach((v, i) => { lump.trend[i] += v; });
+    }
+    top.push(lump);
+  }
+  KD.rows = top;
+  KD.tunnel = tunnel;
+  KD.total = top.reduce((a, n) => a + tot(n), 0);
+  return bad;
+}
+
+// The filter that means a row's packets: its protocol, plus the plain TCP or
+// UDP on the ports counted with it; or a transport and port for the undecoded.
+function kdExpr(n){
+  if (n.plain) return 'proto == "' + n.plain[0] + '" && port == ' + n.plain[1];
+  const parts = ['proto == "' + n.proto + '"'];
+  for (const f of [...n.folds].sort()){
+    const [t, port] = f.split(':');
+    parts.push('(proto == "' + t + '" && port == ' + port + ')');
+  }
+  return parts.join(' || ');
+}
+// As addClause(), for an expression rather than one field.
+function kdFilter(n){
+  const text = $('find').value.trim(), expr = kdExpr(n);
+  const wrap = s => /\|\||\bor\b/i.test(s) ? '(' + s + ')' : s;
+  $('find').value = text ? wrap(text) + ' && ' + wrap(expr) : wrap(expr);
+  $('find').dispatchEvent(new Event('input'));
+}
+function kdHide(n){
+  if (n.proto && !n.folds.size) return hideClause('proto', n.proto);
+  const text = $('find').value.trim(), expr = '!(' + kdExpr(n) + ')';
+  $('find').value = text ? (/\|\||\bor\b/i.test(text) ? '(' + text + ')' : text) + ' && ' + expr : expr;
+  $('find').dispatchEvent(new Event('input'));
+}
+
+function kdDraw(auto){
+  if (viewMode !== 'kinds') return;
+  // Not while the pointer is on it, for the reason Flows gives.
+  if (auto && KD.hovering){ KD.stale = true; return; }
+  KD.stale = false;
+  const wrap = $('kdWrap'), svg = $('kdSvg');
+  const W = Math.max(320, Math.floor(wrap.clientWidth));
+  const avail = Math.max(200, Math.floor(wrap.clientHeight));
+  const N = Math.max(4, Math.min(BL_MAX_ROWS, Math.floor((avail - 2 * BL_PAD) / BL_ROW)));
+  const bad = kdBuild(N);
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const note = $('kdNote');
+  if (bad.length){
+    note.className = 'tlnote warn';
+    note.textContent = 'The filter uses ' + bad.join(', ') + ', which the kinds view doesn\'t ' +
+      'keep: it holds totals per program, host and port, not each packet.';
+  } else {
+    note.className = 'tlnote';
+    note.textContent = KD.total ? hb(KD.total) + ' in the last ' + span +
+      (KD.tunnel ? ' · VPN copy left out: ' + hb(KD.tunnel) : '') : '';
+  }
+  const empty = $('kdEmpty');
+  const none = !KD.rows.length;
+  empty.style.display = none ? 'block' : 'none';
+  empty.textContent = bad.length ? 'Nothing to draw with this filter.'
+    : !TL.keys.length ? 'Waiting for packets…'
+    : filterFn ? 'Nothing matching this filter in the last ' + span + '.'
+    : 'No traffic in the last ' + span + '.';
+  $('kdTip').classList.remove('on');
+  if (none){ svg.innerHTML = ''; svg.style.height = '0px'; return; }
+
+  // Name, bar, figure, then the line at the right edge.
+  const lw = Math.round(Math.min(200, Math.max(100, W * 0.16))), fig = 74;
+  const tw = Math.min(KD_TREND, Math.max(60, Math.round(W * 0.2))), tx = W - 12 - tw;
+  const x0 = lw + 10, room = Math.max(20, tx - 16 - fig - x0);
+  const most = KD.rows.reduce((a, n) => Math.max(a, n.out + n.in), 0);
+  const k = room / Math.max(1, most);
+  const len = v => v > 0 ? Math.max(BL_MIN, v * k) : 0;
+  const chars = Math.floor((lw - 14) / 7.2);
+  const H = KD.rows.length * BL_ROW + 2 * BL_PAD;
+  const f = v => v.toFixed(1);
+  const out = [];
+  KD.rows.forEach((n, i) => {
+    const y = BL_PAD + i * BL_ROW, cy = y + BL_ROW / 2, by = cy - BL_BAR / 2;
+    const lo = len(n.out), li = len(n.in);
+    // The line: this row's bytes per slice of the window, on its own scale.
+    // The bar says how much; this says when.
+    const peak = Math.max(1, ...n.trend), th = BL_ROW - 8, base = y + BL_ROW - 4;
+    const pts = n.trend.map((v, j) => f(tx + j / (KD_BINS - 1) * tw) + ',' + f(base - v / peak * th));
+    const line = 'M' + pts.join(' L');
+    out.push('<g class="bln' + (n.lump ? ' lump' : '') + '" data-i="' + i + '"' + (n.lump ? '' : ' tabindex="0"') + '>' +
+      '<rect class="hit" x="0" y="' + y + '" width="' + W + '" height="' + BL_ROW + '"/>' +
+      '<text class="nm" x="' + lw + '" y="' + cy + '" dominant-baseline="central" text-anchor="end">' +
+        esc(flTrunc(n.name, chars)) + '</text>' +
+      (lo ? '<rect class="blb out" x="' + x0 + '" y="' + by + '" width="' + f(lo) + '" height="' + BL_BAR + '"/>' : '') +
+      (li ? '<rect class="blb in" x="' + f(x0 + lo) + '" y="' + by + '" width="' + f(li) + '" height="' + BL_BAR + '"/>' : '') +
+      '<text class="tot" x="' + f(x0 + lo + li + 6) + '" y="' + cy + '" dominant-baseline="central">' +
+        esc(hb(n.out + n.in)) + '</text>' +
+      '<path class="kdt a" d="' + line + ' L' + f(tx + tw) + ',' + f(base) + ' L' + f(tx) + ',' + f(base) + ' Z"/>' +
+      '<path class="kdt l" d="' + line + '"/>' +
+      '</g>');
+  });
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.style.height = H + 'px';
+  svg.innerHTML = out.join('');
+}
+
+function kdTarget(e){
+  const g = e.target.closest && e.target.closest('.bln');
+  return g ? {row: KD.rows[Number(g.dataset.i)], el: g} : null;
+}
+
+function kdHover(hit, e){
+  const svg = $('kdSvg'), tip = $('kdTip');
+  svg.querySelectorAll('.hot').forEach(x => x.classList.remove('hot'));
+  if (!hit || !hit.row){ tip.classList.remove('on'); return; }
+  hit.el.classList.add('hot');
+  const n = hit.row, tot = n.out + n.in;
+  const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
+  const pct = v => { v = v / tot * 100; return v >= 1 ? Math.round(v) + '%' : '<1%'; };
+  const progs = n.others ? [...n.others.entries()].sort((a, b) => b[1] - a[1]) : [];
+  const folds = n.folds ? [...n.folds].sort().map(x => x.replace(':', ' on port ')) : [];
+  const dim = s => '<br><span style="color:var(--dim)">' + s + '</span>';
+  tip.innerHTML = '<b>' + esc(n.name) + '</b><br>▲ ' + esc(hb(n.out)) + ' sent &nbsp;▼ ' + esc(hb(n.in)) +
+    ' received in the last ' + esc(span) +
+    (progs.length ? dim(esc('Programs: ' + progs.slice(0, 4).map(([name, v]) => name + ' ' + pct(v)).join(', ') +
+      (progs.length > 4 ? ', and ' + (progs.length - 4) + ' more' : ''))) : '') +
+    (folds.length ? dim(esc('Includes plain ' + folds.join(', ') + ': the same connections\' packets with nothing to decode.')) : '') +
+    (n.lump ? '' : dim('Click to filter to it; right-click to hide it.'));
+  const v = $('kdview').getBoundingClientRect();
+  tip.classList.add('on');
+  const x = e.clientX - v.left + 14, y = e.clientY - v.top + 14;
+  tip.style.left = Math.max(6, Math.min(x, v.width - tip.offsetWidth - 6)) + 'px';
+  tip.style.top = (y + tip.offsetHeight > v.height ? y - tip.offsetHeight - 20 : y) + 'px';
+}
+
+$('kdWrap').addEventListener('mouseenter', () => { KD.hovering = true; });
+$('kdWrap').addEventListener('mouseleave', () => {
+  KD.hovering = false; kdHover(null);
+  if (KD.stale) kdDraw();
+});
+$('kdSvg').addEventListener('mousemove', e => kdHover(kdTarget(e), e));
+$('kdSvg').addEventListener('click', e => {
+  const h = kdTarget(e);
+  if (h && h.row && !h.row.lump) kdFilter(h.row);
+});
+$('kdSvg').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const h = kdTarget(e);
+  if (h && h.row && !h.row.lump){ e.preventDefault(); kdFilter(h.row); }
+});
+// Hidden through the filter box, as everywhere: what is hidden stays on screen.
+$('kdSvg').addEventListener('contextmenu', e => {
+  const h = kdTarget(e);
+  if (!h || !h.row || h.row.lump) return;
+  e.preventDefault();
+  kdHide(h.row);
+});
+try { new ResizeObserver(() => kdDraw()).observe($('kdWrap')); } catch (e){}
+
 /* ---------------- sparkline ---------------- */
 
 function drawSpark(tl){
@@ -4553,6 +4820,7 @@ async function poll(){
     if (viewMode === 'timeline' && !paused) tlFetch().then(tlDraw);
     if (viewMode === 'flows' && !paused) tlFetch().then(() => flDraw(true));
     if (viewMode === 'balance' && !paused) tlFetch().then(() => blDraw(true));
+    if (viewMode === 'kinds' && !paused) tlFetch().then(() => kdDraw(true));
     if (!paused && d.packets.length){
       const tb = $('rows'), w = $('tw'), frag = document.createDocumentFragment();
       const following = $('follow').checked;
@@ -4778,7 +5046,8 @@ function setPaused(v){
   $('fcount').textContent = paused
     ? 'paused — the capture is still running, the ' +
       (viewMode === 'timeline' ? 'timeline' : viewMode === 'flows' ? 'flows view' :
-       viewMode === 'balance' ? 'balance view' : 'table') + ' is not updating'
+       viewMode === 'balance' ? 'balance view' : viewMode === 'kinds' ? 'kinds view' : 'table') +
+      ' is not updating'
     : '';
   if (!paused) updateCount();
 }
