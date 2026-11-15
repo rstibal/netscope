@@ -910,11 +910,14 @@ class HistoryStore:
             "ORDER BY (SUM(bytes_in)+SUM(bytes_out)) DESC LIMIT ?", [since] + a + [limit])
         return self._with_trend(rows, "name", "usage", "process", days, iface)
 
-    def _with_trend(self, rows, key, table, col, days, iface=""):
+    def _with_trend(self, rows, key, table, col, days, iface="", only=None):
         """
-        Each row's bytes per day across the range, as `trend`, one number per
-        day of _range_days(days). A total alone can't say whether 40 GB was
-        steady use or one download; the page draws this beside the bar.
+        Each row's bytes per day across the range, as `trend_in` and
+        `trend_out`, one number per day of _range_days(days). A total alone
+        can't say whether 40 GB was steady use or one download; the page draws
+        these as a lane under the daily chart, on its day columns (1.51).
+        `only` is a (column, value) the rows are within: a host's programs
+        count only their traffic with that host.
         """
         names = [r[key] for r in rows]
         if not names:
@@ -922,17 +925,22 @@ class HistoryStore:
         wanted = self._range_days(days)
         pos = {d: i for i, d in enumerate(wanted)}
         w, a = self._on(iface)
+        if only:
+            w, a = f" AND {only[0]} = ?" + w, [only[1]] + a
         marks = ",".join("?" * len(names))
-        per = {n: [0] * len(wanted) for n in names}
+        per_in = {n: [0] * len(wanted) for n in names}
+        per_out = {n: [0] * len(wanted) for n in names}
         for r in self._q(
-                f"SELECT {col} AS n, day, SUM(bytes_in+bytes_out) AS b FROM {table} "
-                f"WHERE day >= ? AND {col} IN ({marks})" + w + f" GROUP BY {col}, day",
-                [wanted[0]] + names + a):
+                f"SELECT {col} AS n, day, SUM(bytes_in) AS bi, SUM(bytes_out) AS bo "
+                f"FROM {table} WHERE day >= ? AND {col} IN ({marks})" + w +
+                f" GROUP BY {col}, day", [wanted[0]] + names + a):
             i = pos.get(r["day"])
-            if i is not None and r["n"] in per:
-                per[r["n"]][i] = r["b"] or 0
+            if i is not None and r["n"] in per_in:
+                per_in[r["n"]][i] = r["bi"] or 0
+                per_out[r["n"]][i] = r["bo"] or 0
         for r in rows:
-            r["trend"] = per.get(r[key], [])
+            r["trend_in"] = per_in.get(r[key], [])
+            r["trend_out"] = per_out.get(r[key], [])
         return rows
 
     def day_detail(self, day, iface="", limit=8):
@@ -987,6 +995,8 @@ class HistoryStore:
                 "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
                 "FROM usage_pairs WHERE day >= ? AND process = ?" + w + " GROUP BY host "
                 "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", [since, name] + a + [limit])
+            self._with_trend(out["rows"], "name", "usage_pairs", "host", days, iface,
+                             only=("process", name))
             now = datetime.now().replace(minute=0, second=0, microsecond=0)
             slots = [now - timedelta(hours=i) for i in range(71, -1, -1)]
             have = {(r["day"], r["hour"]): r for r in self._q(
@@ -1021,6 +1031,8 @@ class HistoryStore:
                 "SUM(bytes_out) AS bytes_out, SUM(packets) AS packets "
                 "FROM usage_pairs WHERE day >= ? AND host = ?" + w + " GROUP BY process "
                 "ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?", [since, name] + a + [limit])
+            self._with_trend(out["rows"], "name", "usage_pairs", "process", days, iface,
+                             only=("host", name))
         return out
 
     def by_host(self, days=30, limit=15, iface=""):

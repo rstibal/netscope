@@ -12,10 +12,13 @@ function history(){
   for (let i = 0; i < 7; i++)
     daily.push({day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:(i+1)*K, bytes_out:K, packets:10});
   return {enabled:true, days:7, iface:'', ifaces:['Wi-Fi'], daily,
-          hosts:[{host:'a.example', bytes_in:K, bytes_out:1, packets:1, first_seen:1.8e9, trend:[0,0,1,0,0,0,K]}],
+          hosts:[{host:'a.example', bytes_in:K, bytes_out:1, packets:1, first_seen:1.8e9,
+                  trend_in:[0,0,0,0,0,0,K], trend_out:[0,0,1,0,0,0,0]}],
           new_hosts:[], sessions:[],
-          processes:[{name:'steady.exe', bytes_in:7*K, bytes_out:0, packets:7, trend:[K,K,K,K,K,K,K]},
-                     {name:'burst.exe', bytes_in:9*K, bytes_out:0, packets:1, trend:[0,0,0,9*K,0,0,0]}],
+          processes:[{name:'steady.exe', bytes_in:7*K, bytes_out:0, packets:7,
+                      trend_in:[K,K,K,K,K,K,K], trend_out:[0,0,0,0,0,0,0]},
+                     {name:'burst.exe', bytes_in:9*K, bytes_out:K, packets:1,
+                      trend_in:[0,0,0,9*K,0,0,0], trend_out:[0,0,0,K,0,0,0]}],
           range:{bytes_in:16*K, bytes_out:K, packets:8, programs:2, hosts:1},
           alert_counts:{total:0}, exclude:{programs:[],hosts:[]},
           summary:{since:'2026-10-25', path:'C:\\history.db', size:1, retain_days:90, alert_retain_days:30}};
@@ -50,17 +53,63 @@ function dayData(day){
   await p.waitForSelector('#cw-daily svg', {timeout: 30000});
 
   // -- trends ------------------------------------------------------------------------
-  const tr = await p.evaluate(() => [...document.querySelectorAll('#p-history .hbar[data-k]')].map(r => {
-    const s = r.querySelector('svg.trend'), b = s && s.getBoundingClientRect();
-    return {n: r.querySelector('.nm').textContent, w: b ? Math.round(b.width) : 0,
-            title: s ? s.querySelector('title').textContent : '', line: s ? s.querySelector('path.l').getAttribute('d') : ''};
-  }));
-  check('each program and host bar has a trend beside it', tr.length === 3 && tr.every(t => t.w === 64), JSON.stringify(tr));
-  const steady = tr.find(t => /steady/.test(t.n)), burst = tr.find(t => /burst/.test(t.n));
-  check('...a steady program draws flat, a burst one a spike',
-        /M0\.0,1\.0 L/.test(steady.line) && !/,13\.0 L/.test(steady.line) && /,13\.0 L/.test(burst.line),
-        steady.line + ' | ' + burst.line);
-  check('...and says when its busiest day was', /busiest 9\.0 KB on 2026-10-28, active 1 of 7 days/.test(burst.title), burst.title);
+  // 1.51: each program and host is a lane of per-day bars on the daily chart's
+  // own day columns, sent above received, on one log scale.
+  const lanes = () => p.evaluate(() => {
+    const box = e => { const b = e.getBoundingClientRect(); return {l: b.left, r: b.right, t: b.top, b: b.bottom, h: b.height, cx: b.left + b.width / 2}; };
+    const chart = box(document.querySelector('#cw-daily svg'));
+    const cols = [...document.querySelectorAll('#cw-daily .hitrect')].map(h => box(h).cx);
+    const rows = [...document.querySelectorAll('#p-history .hbar[data-k]')].map(r => {
+      const s = r.querySelector('svg.lanes'), hot = s && s.querySelector('.lhot');
+      return {n: r.querySelector('.nm').textContent, tot: (r.querySelector('.tot') || {}).textContent || '',
+              svg: s ? box(s) : null, title: s ? s.querySelector('title').textContent : '',
+              ins: s ? [...s.querySelectorAll('.lb.in')].map(b => Object.assign(box(b), {i: +b.dataset.i})) : [],
+              outs: s ? [...s.querySelectorAll('.lb.out')].map(b => Object.assign(box(b), {i: +b.dataset.i})) : [],
+              hot: hot && getComputedStyle(hot).display !== 'none' ? box(hot).cx : null};
+    });
+    return {chart, cols, rows, hotCol: [...document.querySelectorAll('#cw-daily .colgroup.hot')].map(g => g.dataset.i).join()};
+  });
+  let ln = await lanes();
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  check('each program and host has a lane as wide as the daily chart',
+        ln.rows.length === 3 && ln.rows.every(r => r.svg && near(r.svg.l, ln.chart.l) && near(r.svg.r, ln.chart.r)),
+        JSON.stringify(ln.rows.map(r => r.svg)) + ' vs ' + JSON.stringify(ln.chart));
+  const row = (g, re) => g.rows.find(r => re.test(r.n));
+  let steady = row(ln, /steady/), burst = row(ln, /burst/), host = row(ln, /a\.example/);
+  check('...a steady program has a bar every day, a burst one a single day',
+        steady.ins.length === 7 && steady.outs.length === 0 && burst.ins.length === 1 && burst.outs.length === 1,
+        JSON.stringify([steady.ins.length, steady.outs.length, burst.ins.length, burst.outs.length]));
+  check('...each bar under its day of the chart above',
+        burst.ins[0].i === 3 && near(burst.ins[0].cx, ln.cols[3]) && steady.ins.every(b => near(b.cx, ln.cols[b.i])),
+        JSON.stringify([burst.ins[0], ln.cols]));
+  check('...sent drawn above received', burst.outs[0].b <= burst.ins[0].t + 0.5, JSON.stringify([burst.outs[0], burst.ins[0]]));
+  const ratio = burst.ins[0].h / steady.ins[0].h;
+  check('...on a log scale: nine times the bytes is taller, not nine times as tall',
+        ratio > 1.1 && ratio < 3, String(ratio));
+  check('...and a single byte still shows', host.outs.length === 1 && host.outs[0].h >= 0.9, JSON.stringify(host.outs));
+  check('...the row gives its total and the split', /^10\.0 KB/.test(burst.tot) && /▼ 9\.0 KB/.test(burst.tot) && /▲ 1\.0 KB/.test(burst.tot), burst.tot);
+  check('...and says when its busiest day was', /busiest 10\.0 KB on 2026-10-28, active 1 of 7 days/.test(burst.title), burst.title);
+  check('no bar and no trend line is left beside the name',
+        await p.evaluate(() => !document.querySelector('#p-history .hbar[data-k] .track, #p-history svg.trend')));
+
+  // Pointing at a day marks it through every lane, and the rows give that day.
+  const hit0 = await p.$eval('#cw-daily .hitrect[data-i="3"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
+  await p.mouse.move(hit0[0], hit0[1]);
+  ln = await lanes(); steady = row(ln, /steady/); burst = row(ln, /burst/);
+  check('pointing at a day of the chart marks that day in every lane',
+        ln.rows.every(r => r.hot !== null && near(r.hot, ln.cols[3])), JSON.stringify(ln.rows.map(r => r.hot)));
+  check('...and each row shows that day', /10-28/.test(burst.tot) && /▼ 9\.0 KB/.test(burst.tot) && /10-28/.test(steady.tot) && /▼ 1\.0 KB/.test(steady.tot),
+        burst.tot + ' | ' + steady.tot);
+  // ...and the other way: a day pointed at in a lane lights the chart's column.
+  await p.mouse.move(ln.cols[5], (burst.svg.t + burst.svg.b) / 2);
+  ln = await lanes(); burst = row(ln, /burst/);
+  check('pointing at a day in a lane marks the chart column too',
+        ln.hotCol === '5' && ln.rows.every(r => r.hot !== null && near(r.hot, ln.cols[5])), ln.hotCol);
+  check('...and a day with nothing says so', /10-30/.test(burst.tot) && /nothing/.test(burst.tot), burst.tot);
+  await p.mouse.move(5, 5);
+  ln = await lanes(); burst = row(ln, /burst/);
+  check('moving away puts the period totals back',
+        ln.hotCol === '' && ln.rows.every(r => r.hot === null) && /^10\.0 KB/.test(burst.tot), burst.tot + ' ' + ln.hotCol);
 
   // -- a day opened ---------------------------------------------------------------------
   const hit = i => p.$eval('#cw-daily .hitrect[data-i="'+i+'"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });

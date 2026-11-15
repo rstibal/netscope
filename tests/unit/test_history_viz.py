@@ -25,20 +25,47 @@ h.record(pkt("steady.exe", "a.example", 100, today))
 h.record(pkt("steady.exe", "a.example", 100, two_ago))
 h.record(pkt("burst.exe", "b.example", 5000, two_ago, iface="VR"))
 h.record(pkt("-", "b.example", 7, today))
+h.record(pkt("steady.exe", "a.example", 40, today, out=False))
+four_ago = (noon - timedelta(days=4)).timestamp()
+h.record(pkt("two.exe", "x.example", 11, two_ago))
+h.record(pkt("two.exe", "y.example", 22, four_ago))
 h.flush()
 
+# -- an opened row's own rows have their days too ----------------------------------------
+dp = {r["name"]: r for r in h.detail("program", "two.exe", 7)["rows"]}
+check("a program's hosts each carry their days with that program",
+      dp["x.example"]["trend_out"] == [0, 0, 0, 0, 11, 0, 0]
+      and dp["y.example"]["trend_out"] == [0, 0, 22, 0, 0, 0, 0]
+      and dp["x.example"]["trend_in"] == [0] * 7, dp)
+dhh = {r["name"]: r for r in h.detail("host", "b.example", 7)["rows"]}
+check("a host's programs each carry their days with that host",
+      dhh["burst.exe"]["trend_out"] == [0, 0, 0, 0, 5000, 0, 0]
+      and dhh["-"]["trend_out"] == [0, 0, 0, 0, 0, 0, 7], dhh)
+check("...only that host's share of a program that talks to others",
+      h.detail("host", "x.example", 7)["rows"][0]["trend_out"] == [0, 0, 0, 0, 11, 0, 0])
+check("...and only the chosen adapter's",
+      [(r["name"], r["trend_out"][-3]) for r in h.detail("host", "b.example", 7, iface="VR")["rows"]]
+      == [("burst.exe", 5000)])
+
 # -- trends ---------------------------------------------------------------------------
-procs = {r["name"]: r["trend"] for r in h.by_process(7)}
-check("each program carries one figure per day of the range",
-      all(len(t) == 7 for t in procs.values()), procs)
+# 1.51: received and sent apart, so the page can draw one above the other.
+rows = h.by_process(7)
+procs = {r["name"]: r["trend_out"] for r in rows}
+recv = {r["name"]: r["trend_in"] for r in rows}
+check("each program carries one figure per day of the range, each way",
+      all(len(t) == 7 for t in procs.values()) and all(len(t) == 7 for t in recv.values()), procs)
 check("...placed on the right days", procs["steady.exe"][-1] == 100 and procs["steady.exe"][-3] == 100
       and procs["steady.exe"][-2] == 0 and procs["burst.exe"] == [0, 0, 0, 0, 5000, 0, 0], procs)
-hosts = {r["host"]: r["trend"] for r in h.by_host(7)}
+check("...received kept apart from sent",
+      recv["steady.exe"] == [0, 0, 0, 0, 0, 0, 40] and recv["burst.exe"] == [0] * 7, recv)
+hosts = {r["host"]: r["trend_out"] for r in h.by_host(7)}
 check("hosts carry them too, unattributed traffic included",
       hosts["b.example"][-1] == 7 and hosts["b.example"][-3] == 5000, hosts)
+check("...received as well",
+      {r["host"]: r["trend_in"][-1] for r in h.by_host(7)}["a.example"] == 40)
 check("an adapter filter narrows the trend as it does the total",
-      {r["name"]: r["trend"][-3] for r in h.by_process(7, iface="VR")} == {"burst.exe": 5000})
-check("a 30-day range gives 30 figures", len(h.by_process(30)[0]["trend"]) == 30)
+      {r["name"]: r["trend_out"][-3] for r in h.by_process(7, iface="VR")} == {"burst.exe": 5000})
+check("a 30-day range gives 30 figures", len(h.by_process(30)[0]["trend_out"]) == 30)
 
 # -- a day opened ------------------------------------------------------------------------
 day = noon.strftime("%Y-%m-%d")

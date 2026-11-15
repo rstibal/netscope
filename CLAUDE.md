@@ -446,6 +446,23 @@ blue up / orange down, one row per adapter on its own scale, not one line
 per adapter: only two hues pass the deuteranope check. By adapter counts the
 VPN copy (it is on that wire), unlike every total, and says how much of it was.
 
+**History's By program and By host are lanes under the daily chart (1.51).**
+Each row is its bytes per day (`trend_in`/`trend_out` from `_with_trend`) on
+the daily chart's own columns: `laneSVG` and `dailyChart` share `CH_PADL`,
+`CH_PADR` and the bar-width rule, and `refitHistCharts` redraws both. The
+bar-plus-64px-trend rows they replaced said how much but not which days, and
+Rob found them "almost, but not quite"; he picked this from a mock, with the
+log scale. The scale is one per section, four decades (`LANE_DECADES`) under
+its busiest day with a 1px floor: six decades made every lane the same
+height. Stacking the daily chart by program was ruled out (only two hues pass
+the deuteranope check) and so was a heatmap. `histHot()` marks a day through
+the chart and every lane; the tab's refresh waits while one is marked, as it
+does for the chart's tooltip. An opened row's Talked to / Contacted by are
+lanes too (`detail()` rows carry the same per-day figures, for that pair
+only), pulled back over the detail's 24px indent so their days still line
+up, on a scale of their own. The plain `hbars` (and the outlier cut) remain
+only inside an opened day, which has no days to draw.
+
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
 Tests change alert rules, mutes and history exclusions through the real API,

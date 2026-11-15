@@ -17,15 +17,17 @@ const history = {
 };
 const hours = Array.from({length:72},(_, i)=>({day:'2026-10-10', hour:i%24,
   bytes_in: i===60 ? 40*MB : 0, bytes_out: 0}));
+// 1.51: the rows inside an opened program or host are lanes too.
+const days30 = (i, v) => Array.from({length:30}, (_, k) => k === i ? v : 0);
 const detail = {
   program: {kind:'program', name:'mystery.exe', days:30, pairs_since:'2026-10-10',
     total:100*MB, unlisted:60*MB, hours,
-    rows:[{name:'cdn.example', bytes_in:35*MB, bytes_out:1*MB, packets:50},
-          {name:'api.example', bytes_in:3*MB, bytes_out:1*MB, packets:9}],
+    rows:[{name:'cdn.example', bytes_in:35*MB, bytes_out:1*MB, packets:50, trend_in:days30(5, 35*MB), trend_out:days30(5, 1*MB)},
+          {name:'api.example', bytes_in:3*MB, bytes_out:1*MB, packets:9, trend_in:days30(6, 3*MB), trend_out:days30(6, 1*MB)}],
     busiest:[{day:'2026-10-10', hour:12, bytes_in:40*MB, bytes_out:0, host:'cdn.example'}]},
   host: {kind:'host', name:'cdn.example', days:30, pairs_since:'2026-10-10', total:36*MB,
     unlisted:0, hours:[], busiest:[],
-    rows:[{name:'mystery.exe', bytes_in:35*MB, bytes_out:1*MB, packets:50}]},
+    rows:[{name:'mystery.exe', bytes_in:35*MB, bytes_out:1*MB, packets:50, trend_in:days30(10, 35*MB), trend_out:days30(10, 1*MB)}]},
 };
 
 (async () => {
@@ -58,6 +60,32 @@ const detail = {
         await det.locator('.hstrip i.on').count() === 1);
   check('names the busiest hour and its host', /busiest hours/i.test(text) && /cdn\.example/.test(text.split(/busiest hours/i)[1] || ''), text);
 
+  // Its hosts are lanes on the daily chart's days, not bars.
+  const sub = sel => p.evaluate(sel => {
+    const cx = e => { const b = e.getBoundingClientRect(); return b.left + b.width / 2; };
+    const cols = [...document.querySelectorAll('#cw-daily .hitrect')].map(cx);
+    const box = document.querySelector(sel);
+    return {cols, track: box.querySelectorAll('.track').length,
+            rows: [...box.querySelectorAll('.hbar.lane')].map(r => ({
+              n: r.querySelector('.nm').textContent, tot: r.querySelector('.tot').textContent,
+              button: r.hasAttribute('data-k') || r.getAttribute('role') === 'button',
+              bars: [...r.querySelectorAll('.lb.in')].map(b => ({i: +b.dataset.i, cx: cx(b)}))}))};
+  }, sel);
+  let sp = await sub('.hdet[data-for="program|mystery.exe"]');
+  check('the hosts it talked to are lanes, not bars',
+        sp.rows.length === 2 && sp.track === 0 && sp.rows.every(r => r.bars.length === 1), JSON.stringify(sp.rows));
+  check('...each day under the same day of the chart, indent and all',
+        sp.rows[0].bars[0].i === 5 && Math.abs(sp.rows[0].bars[0].cx - sp.cols[5]) <= 1 &&
+        sp.rows[1].bars[0].i === 6 && Math.abs(sp.rows[1].bars[0].cx - sp.cols[6]) <= 1, JSON.stringify([sp.rows, sp.cols.slice(4, 8)]));
+  check('...with the total and split, and not drill-downs themselves',
+        /^36\.0 MB/.test(sp.rows[0].tot) && /▼ 35\.0 MB/.test(sp.rows[0].tot) && sp.rows.every(r => !r.button), JSON.stringify(sp.rows));
+  const at = await p.$eval('#cw-daily .hitrect[data-i="5"]', r => { const b = r.getBoundingClientRect(); return [b.x + b.width/2, b.y + b.height/2]; });
+  await p.mouse.move(at[0], at[1]);
+  sp = await sub('.hdet[data-for="program|mystery.exe"]');
+  check('...and pointing at a day gives that day in them too',
+        /09-06/.test(sp.rows[0].tot) && /▼ 35\.0 MB/.test(sp.rows[0].tot) && /nothing/.test(sp.rows[1].tot), JSON.stringify(sp.rows));
+  await p.mouse.move(5, 5);
+
   // A redraw (the page re-polls) keeps it open.
   await p.evaluate(() => { histSeen = null; return loadHistory(false); });
   await p.waitForTimeout(400);
@@ -82,6 +110,10 @@ const detail = {
   await hd.locator('.hbar').first().waitFor({timeout: 5000});
   check('a host lists the programs that contacted it', /mystery\.exe/.test(await hd.innerText()));
   check('...and has no hourly strip', await hd.locator('.hstrip').count() === 0);
+  const sh = await sub('.hdet[data-for="host|cdn.example"]');
+  check('...as a lane on the days of the chart, not a bar',
+        sh.rows.length === 1 && sh.track === 0 && sh.rows[0].bars.length === 1 &&
+        sh.rows[0].bars[0].i === 10 && Math.abs(sh.rows[0].bars[0].cx - sh.cols[10]) <= 1, JSON.stringify(sh.rows));
 
   check('no page errors', errs.length===0, errs.join(' | '));
   console.log('\nFAILED:', fails.length?fails:'none');

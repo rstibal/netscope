@@ -764,10 +764,15 @@ only.
 The tab shows the totals, the daily chart, By program, By host and first
 contacts. **Click a day** in the daily chart (or focus it and press Enter) to
 open it underneath: its 24 hours, and the programs and hosts that made it.
-Click it again, or **Close**, to shut it. Each bar in **By program** and **By
-host** has a small line beside its total: its traffic per day across the
-period, so a program used a little every day looks flat and one big download
-shows as a spike. Hover it for the busiest day. **More**, folded at the bottom, holds how
+Click it again, or **Close**, to shut it. Each row in **By program** and **By
+host** is a lane of its traffic per day, drawn under the daily chart on the
+same day columns: sent above, received below. A program used a little every
+day is a low, even row; one big download is a single tall day, directly under
+the tall bar it caused. Point at a day, in the chart or in any lane, and it is
+marked through all of them while each row shows that day's figures. The lanes
+share one log scale, so a bar twice as tall is not twice the bytes: read
+amounts from the figures, and days from the lanes. Anything less than a
+ten-thousandth of the busiest day is drawn at the smallest height. **More**, folded at the bottom, holds how
 many alerts were logged (the alerts themselves are on the Alerts tab),
 **Not recorded**, **Storage** and **Start with Windows**. Every chart has a table view underneath it, so no value is
 only reachable by hovering. While it's showing it refreshes itself every 10
@@ -781,12 +786,12 @@ per-host breakdown and sessions are erased. Known programs and hosts, check-ins,
 the alert log, DHCP leases and saved program paths are kept, so nothing counts
 as new again.
 
-**Why a program or host has that many bytes.** Click a bar under **By program**
+**Why a program or host has that many bytes.** Click a row under **By program**
 or **By host** (or focus it and press Enter) to open it. A program shows the
-hosts it talked to with received and sent bytes, its last 72 hours as a strip
+hosts it talked to, each as a lane of its own on the same days, its last 72 hours as a strip
 of hourly cells (hover one for the hour and amount), and its five busiest
 hours with the host that moved most in each. A host shows the programs that
-contacted it. Any traffic with no host detail is listed as **not broken
+contacted it, as lanes in the same way. Any traffic with no host detail is listed as **not broken
 down** and the parts always add up to the program's total. This comes from a
 `usage_pairs` table, one row per hour, program and host, kept for the same
 retention as the rest of the usage. It is recorded from 1.32.0 on: traffic
@@ -1152,6 +1157,14 @@ names.
 ---
 
 ## Version history
+
+**1.51.0** — History's **By program** and **By host** are now lanes. Each row
+shows its traffic per day under the daily chart, on the same day columns, sent
+above and received below, so you can see which program a tall day was without
+opening it. Pointing at a day marks it through the chart and every lane, and
+each row shows that day's figures. This replaces the bar and the small trend
+line beside each name. The lists inside an opened program or host (**Talked
+to**, **Contacted by**) are lanes too; an opened day keeps its plain bars.
 
 **1.50.0** — New: **Lookups**, a seventh view. Name lookups (DNS) across the
 last minute to hour as bars, answered with failed stacked on top, and under

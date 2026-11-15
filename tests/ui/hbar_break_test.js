@@ -1,8 +1,9 @@
 const { chromium } = require('playwright');
 const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
 
-// History's By program chart. One program that streams VR can dwarf the rest;
-// its bar is cut short with a visible break so the others stay readable.
+// The plain bars of an opened day (By program itself is lanes since 1.51).
+// One program that streams VR can dwarf the rest; its bar is cut short with a
+// visible break so the others stay readable.
 const G = Math.pow(1024,3);
 function history(processes, hosts){
   const daily = [];
@@ -20,16 +21,27 @@ let current = history([proc('vrstreamer.exe',231), proc('chrome.exe',25), proc('
   const b = await chromium.launch({ executablePath: process.env.NETSCOPE_CHROMIUM || undefined });
   const p = await b.newPage({ viewport:{width:1680,height:900} });
   const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
-  await p.route('**/api/history*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(current)}));
+  await p.route('**/api/history?*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(current)}));
+  await p.route('**/api/history/day?*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(
+    {day: new URL(r.request().url()).searchParams.get('day'), iface:'',
+     hours: Array.from({length:24}, (_, h) => ({hour:h, bytes_in: h === 0 ? G : 0, bytes_out:0})),
+     programs: current.processes, hosts: []})}));
   await p.goto(process.argv[2]);
-  await p.waitForSelector('.hbar', {timeout: 30000});
+  // Open a day: its programs are the bars under test.
+  const open = async () => {
+    await p.evaluate(() => showTab('history'));
+    await p.waitForSelector('#cw-daily .hitrect', {timeout: 30000});
+    await p.evaluate(() => openDay(histData.daily[3].day));
+    await p.waitForSelector('#histDay .hbar', {timeout: 30000});
+  };
+  await open();
 
   const read = () => p.evaluate(()=>{
-    const sec = [...document.querySelectorAll('.sec')].find(s=>/By program/.test(s.querySelector('h4').textContent));
+    const sec = document.querySelector('#histDay');
     const rows = [...sec.querySelectorAll('.hbar')].map(r=>{
       const t = r.querySelector('.track'), w = t.getBoundingClientRect().width;
       const fill = [...t.querySelectorAll('i')].reduce((a,i)=>a+i.getBoundingClientRect().width,0);
-      return {name: r.querySelector('.nm').textContent, label: r.children[2].textContent,
+      return {name: r.querySelector('.nm').textContent, label: r.children[1].textContent,
               pct: fill/w*100, brk: !!t.querySelector('b.brk'), title: t.getAttribute('title')||''};
     });
     return {rows, note: /cut short/.test(sec.textContent)};
@@ -48,19 +60,18 @@ let current = history([proc('vrstreamer.exe',231), proc('chrome.exe',25), proc('
 
   // Without an outlier nothing changes.
   current = history([proc('a.exe',20), proc('b.exe',12), proc('c.exe',6)]);
-  await p.reload();
-  await p.waitForSelector('.hbar', {timeout: 30000});
+  await p.reload(); await open();
   g = await read();
   check('a balanced list has no cut and no note', g.rows.every(r=>!r.brk) && !g.note, JSON.stringify(g));
   check('...and the biggest fills the track', Math.abs(g.rows[0].pct - 100) < 1, g.rows[0].pct);
 
   // Exactly at the limit is not an outlier; a single program never is.
   current = history([proc('a.exe',30), proc('b.exe',10)]);
-  await p.reload(); await p.waitForSelector('.hbar', {timeout: 30000});
+  await p.reload(); await open();
   g = await read();
   check('3x the next is not yet cut', g.rows.every(r=>!r.brk), JSON.stringify(g.rows));
   current = history([proc('solo.exe',200)]);
-  await p.reload(); await p.waitForSelector('.hbar', {timeout: 30000});
+  await p.reload(); await open();
   g = await read();
   check('a lone program is not cut', g.rows.length===1 && !g.rows[0].brk && g.rows[0].pct > 95, JSON.stringify(g.rows));
 
