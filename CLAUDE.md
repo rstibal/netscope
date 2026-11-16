@@ -463,6 +463,18 @@ only), pulled back over the detail's 24px indent so their days still line
 up, on a scale of their own. The plain `hbars` (and the outlier cut) remain
 only inside an opened day, which has no days to draw.
 
+**History's charts start at the first recorded day (1.51.1).**
+`HistoryStore._shown_days()` is the range cut to begin no earlier than the
+first day in `usage` (for one adapter, its own first day); `daily` and
+`_with_trend` both take their columns from it, so the chart and every lane
+agree. Rob asked for it: a week-old install showed seven bars at the right
+of 83 empty columns on the 90-day view. Only the lead-in is cut. A day with
+nothing after the first stays as a gap, and it is the first day of *all*
+history, not of the range: a quiet start to a range that history reaches
+back past is real. The totals still filter on `_range_days`, which gives the
+same sums. The page counts columns from `daily.length`, never from `days`,
+and `histSpan()` words the headings ("7 days so far").
+
 **UI tests run against a scratch settings folder.** `run_tests.py` points each
 demo server's `LOCALAPPDATA` (`HOME` elsewhere) at a fresh temp directory.
 Tests change alert rules, mutes and history exclusions through the real API,

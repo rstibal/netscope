@@ -585,8 +585,16 @@ code.k{color:var(--accent);font-family:var(--mono)}
     --grid:#242c37; --band:rgba(219,227,238,.055); }
 }
 
-.kpirow{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));
-  gap:8px;margin-bottom:14px}
+/* Four cards: four across, or two by two, never three and one (1.51.1).
+   `auto-fit` with a 96px minimum fitted three in the 429px side panel and
+   left Programs alone on a second line. The column's minimum is a quarter of
+   the row while the row is at least 472px (four 112px cards and their gaps),
+   and half of it below that: the huge product is positive only under 472px,
+   which is what switches the min() from nothing to a half. */
+.kpirow{display:grid;gap:8px;margin-bottom:14px;
+  grid-template-columns:repeat(auto-fit,minmax(
+    max(calc(25% - 6px), min(calc(50% - 4px), calc((472px - 100%) * 9999))),1fr))}
+.kpi{min-width:0}
 .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
   padding:8px 10px}
 .kpi .k{color:var(--dim);font:600 9.5px var(--sans);letter-spacing:.5px;
@@ -1973,6 +1981,14 @@ function previewObject(id){
    reachable in the table view underneath. */
 
 let histDays = 30, histData = null;
+/* What the headings call the period. The server sends only the days from the
+   first recorded one (1.51.1), so a week-old install on the 30-day view has
+   seven columns filling the chart, and "last 30 days" over them would be
+   wrong. */
+function histSpan(){
+  const n = histData && histData.daily ? histData.daily.length : 0, want = histData ? histData.days : histDays;
+  return n && n < want ? n + (n === 1 ? ' day' : ' days') + ' so far' : 'last ' + want + ' days';
+}
 
 /* Round the axis top in binary units, not decimal ones. A "nice" 3,000,000
    renders as 2.9 MB and its quarters as 732.4 KB — the ticks have to be round
@@ -2267,7 +2283,7 @@ function detailHtml(d){
   let h = '';
   if (d.rows.length){
     const rows = prog ? d.rows : d.rows.map(r => r.name === '-' ? Object.assign({}, r, {name: '(no program)'}) : r);
-    h += '<h5>' + (prog ? 'Talked to' : 'Contacted by') + ' · last ' + d.days + ' days</h5>' +
+    h += '<h5>' + (prog ? 'Talked to' : 'Contacted by') + ' · ' + histSpan() + '</h5>' +
          '<div class="lanebox" data-det="' + esc(d.kind + '|' + d.name) + '">' +
          lanes(rows, 'name', histChartsAt || histChartW(), true) + '</div>';
   }
@@ -2292,7 +2308,7 @@ function detailHtml(d){
              ' title="' + esc(hourLabel(x.day, x.hour) + ' · ' + hb(t)) + '"></i>';
     }).join('') + '</div><div class="hstripl"><span>72 h ago</span><span>now</span></div>';
     if (d.busiest.length){
-      h += '<h5>Busiest hours · last ' + d.days + ' days</h5>' + d.busiest.map(b =>
+      h += '<h5>Busiest hours · ' + histSpan() + '</h5>' + d.busiest.map(b =>
         '<div class="hr"><span>' + esc(hourLabel(b.day, b.hour)) +
         (b.host ? ' · ' + esc(b.host) : '') + '</span><span>' +
         esc(hb(b.bytes_in + b.bytes_out)) + '</span></div>').join('');
@@ -2444,7 +2460,7 @@ function renderHistory(d){
   const tot = (rg.bytes_in || 0) + (rg.bytes_out || 0);
   const ex = d.exclude || {programs: [], hosts: []};
   const exN = ex.programs.length + ex.hosts.length;
-  const per = ' · last ' + d.days + ' days' + (d.iface ? ' · ' + d.iface.slice(0, 40) : '');
+  const per = ' · ' + histSpan() + (d.iface ? ' · ' + d.iface.slice(0, 40) : '');
   // Everything on the tab is for the chosen range; the all-time counters are
   // only how NetScope knows what is new, and no longer shown.
 

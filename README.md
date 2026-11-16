@@ -762,7 +762,9 @@ Usage recorded before 1.41 has no adapter, so it counts under **All adapters**
 only.
 
 The tab shows the totals, the daily chart, By program, By host and first
-contacts. **Click a day** in the daily chart (or focus it and press Enter) to
+contacts. While the history is shorter than the period chosen, the charts
+start at the first recorded day and the headings say how many days there are
+("12 days so far") rather than leaving the earlier part empty. **Click a day** in the daily chart (or focus it and press Enter) to
 open it underneath: its 24 hours, and the programs and hosts that made it.
 Click it again, or **Close**, to shut it. Each row in **By program** and **By
 host** is a lane of its traffic per day, drawn under the daily chart on the
@@ -1157,6 +1159,15 @@ names.
 ---
 
 ## Version history
+
+**1.51.1** — A history shorter than the chosen period fills the charts. A
+week after installing, the 30- and 90-day views drew seven bars pushed to the
+right of 23 or 83 empty columns. The daily chart and the lanes now start at
+the first recorded day, so what there is spreads across the width, and the
+headings say **7 days so far** until the period is full. Days with nothing
+recorded after the first are still shown as gaps. Also: the four cards at the
+top of History (Total, Received, Sent, Programs) are four across or two by
+two at every width; they used to sit three and one in the side panel.
 
 **1.51.0** — History's **By program** and **By host** are now lanes. Each row
 shows its traffic per day under the daily chart, on the same day columns, sent

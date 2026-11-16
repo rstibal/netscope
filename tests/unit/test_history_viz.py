@@ -29,6 +29,9 @@ h.record(pkt("steady.exe", "a.example", 40, today, out=False))
 four_ago = (noon - timedelta(days=4)).timestamp()
 h.record(pkt("two.exe", "x.example", 11, two_ago))
 h.record(pkt("two.exe", "y.example", 22, four_ago))
+# Recording began ten days ago: the 7-day range is full, the 30-day one is not.
+ten_ago_d = noon - timedelta(days=10)
+h.record(pkt("old.exe", "o.example", 3, ten_ago_d.timestamp()))
 h.flush()
 
 # -- an opened row's own rows have their days too ----------------------------------------
@@ -65,7 +68,27 @@ check("...received as well",
       {r["host"]: r["trend_in"][-1] for r in h.by_host(7)}["a.example"] == 40)
 check("an adapter filter narrows the trend as it does the total",
       {r["name"]: r["trend_out"][-3] for r in h.by_process(7, iface="VR")} == {"burst.exe": 5000})
-check("a 30-day range gives 30 figures", len(h.by_process(30)[0]["trend_out"]) == 30)
+
+# -- a history shorter than the range fills it (1.51.1) ---------------------------------
+# The columns start at the first recorded day, not at an empty stretch before it.
+d30 = h.daily(30)
+check("a range longer than the history starts at the first recorded day",
+      len(d30) == 11 and d30[0]["day"] == ten_ago_d.strftime("%Y-%m-%d")
+      and d30[-1]["day"] == noon.strftime("%Y-%m-%d"), [r["day"] for r in d30])
+check("...days with nothing after that are still there, as zeros",
+      d30[1]["bytes_in"] + d30[1]["bytes_out"] == 0 and d30[0]["bytes_out"] == 3, d30[:2])
+check("...and every row has a figure for exactly those days",
+      all(len(r["trend_out"]) == 11 and len(r["trend_in"]) == 11 for r in h.by_process(30) + h.by_host(30))
+      and {r["name"]: r["trend_out"] for r in h.by_process(30)}["old.exe"] == [3] + [0] * 10)
+check("...an opened row's rows too",
+      [len(r["trend_out"]) for r in h.detail("program", "two.exe", 30)["rows"]] == [11, 11])
+check("a range the history covers is unchanged", len(h.daily(7)) == 7 and len(h.daily(90)) == 11)
+check("one adapter starts at its own first day",
+      [r["day"] for r in h.daily(30, iface="VR")][0] == (noon - timedelta(days=2)).strftime("%Y-%m-%d")
+      and len(h.by_process(30, iface="VR")[0]["trend_out"]) == 3)
+empty = H.HistoryStore(path=os.path.join(tempfile.mkdtemp(prefix="ns-viz-"), "e.db"))
+check("an empty history is one day, today", [r["day"] for r in empty.daily(30)] == [noon.strftime("%Y-%m-%d")])
+empty.stop()
 
 # -- a day opened ------------------------------------------------------------------------
 day = noon.strftime("%Y-%m-%d")

@@ -13,7 +13,7 @@ function history(){
     daily.push({day:'2026-10-' + String(25 + i).padStart(2,'0'), bytes_in:(i+1)*300*K*K, bytes_out:20*K*K, packets:10});
   return {enabled:true, days:7, iface:'', ifaces:[], daily, hosts:[], new_hosts:[],
           processes:[{name:'a.exe', bytes_in:K, bytes_out:0, packets:1, trend:[0,0,0,0,0,0,K]}],
-          range:{bytes_in:K, bytes_out:K, packets:8, programs:1, hosts:0},
+          range:{bytes_in:138.8*K*K*K, bytes_out:140.2*K*K*K, packets:123456789, programs:1, hosts:0},
           alert_counts:{total:0}, exclude:{programs:[],hosts:[]},
           summary:{since:'2026-10-25', path:'C:\\history.db', size:1, retain_days:90, alert_retain_days:30}};
 }
@@ -57,6 +57,23 @@ const day = d => ({day:d, iface:'', programs:[], hosts:[],
   }));
   check('...and the open day keeps its column marked',
         await p.evaluate(() => [...document.querySelectorAll('#cw-daily .colgroup.sel')].map(g => g.dataset.i).join() === '6'));
+
+  // 1.51.1: the four cards (Total, Received, Sent, Programs) are four across
+  // or two by two at every width, never three and one, and never clip a figure.
+  const bad = [];
+  for (const w of [1680, 1500, 1400, 1300, 1200, 1150, 1101, 1099, 1000, 900, 800, 700, 640, 560, 500, 440, 380]){
+    await p.setViewportSize({width: w, height: 1000});
+    await p.waitForTimeout(150);
+    const k = await p.evaluate(() => {
+      const cards = [...document.querySelectorAll('#p-history .kpirow .kpi')], rows = {};
+      cards.forEach(c => { const t = Math.round(c.getBoundingClientRect().top); rows[t] = (rows[t] || 0) + 1; });
+      return {rows: Object.keys(rows).sort((a, b) => a - b).map(t => rows[t]).join('/'),
+              clip: cards.filter(c => [...c.children].some(x => x.scrollWidth > x.clientWidth + 1)).length,
+              pane: Math.round($('p-history').getBoundingClientRect().width)};
+    });
+    if ((k.rows !== '4' && k.rows !== '2/2') || k.clip) bad.push(w + 'px (pane ' + k.pane + '): ' + k.rows + (k.clip ? ', ' + k.clip + ' clipped' : ''));
+  }
+  check('the four cards are 4 across or 2 by 2 at every width, nothing clipped', bad.length === 0, bad.join(' | '));
 
   check('no page errors', errs.length===0, errs.join(' | '));
   console.log('\nFAILED:', fails.length?fails:'none');

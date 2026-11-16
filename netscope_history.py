@@ -889,9 +889,26 @@ class HistoryStore:
         """(" AND col = ?", [iface]) for one adapter; nothing for all of them."""
         return (f" AND {col} = ?", [iface]) if iface else ("", [])
 
+    def _shown_days(self, days, iface=""):
+        """
+        The days the charts draw: the range, starting no earlier than the
+        first day with anything recorded (for one adapter, its first day).
+        A week-old install drew 7 bars pushed to the right of 83 empty
+        columns on the 90-day view; now what there is fills the width
+        (1.51.1). Days with nothing after the first stay, as zeros. The daily
+        chart and every lane take their columns from here, so they agree.
+        """
+        wanted = self._range_days(days)
+        w, a = self._on(iface)
+        # The first day of all, not of the range: a quiet start to a range
+        # that history does reach back past is a real gap, and stays.
+        r = self._q("SELECT MIN(day) AS d FROM usage WHERE 1=1" + w, a)
+        first = r[0]["d"] if r and r[0]["d"] else wanted[-1]
+        return [d for d in wanted if d >= first] or wanted[-1:]
+
     def daily(self, days=30, iface=""):
         """Per-day totals, zero-filled so the chart has no missing columns."""
-        wanted = self._range_days(days)
+        wanted = self._shown_days(days, iface)
         w, a = self._on(iface)
         rows = {r["day"]: r for r in self._q(
             "SELECT day, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, "
@@ -913,7 +930,7 @@ class HistoryStore:
     def _with_trend(self, rows, key, table, col, days, iface="", only=None):
         """
         Each row's bytes per day across the range, as `trend_in` and
-        `trend_out`, one number per day of _range_days(days). A total alone
+        `trend_out`, one number per day of _shown_days(days, iface). A total alone
         can't say whether 40 GB was steady use or one download; the page draws
         these as a lane under the daily chart, on its day columns (1.51).
         `only` is a (column, value) the rows are within: a host's programs
@@ -922,7 +939,7 @@ class HistoryStore:
         names = [r[key] for r in rows]
         if not names:
             return rows
-        wanted = self._range_days(days)
+        wanted = self._shown_days(days, iface)
         pos = {d: i for i, d in enumerate(wanted)}
         w, a = self._on(iface)
         if only:
