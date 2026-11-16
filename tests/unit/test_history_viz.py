@@ -97,6 +97,15 @@ check("a day has its 24 hours", len(d["hours"]) == 24 and d["hours"][12]["bytes_
 check("...and the programs and hosts behind it",
       [r["name"] for r in d["programs"]] == ["steady.exe"]
       and sorted(r["host"] for r in d["hosts"]) == ["a.example", "b.example"], d)
+# 1.51.2: its programs and hosts carry their 24 hours, for lanes under the hours chart.
+sp = {r["name"]: r for r in d["programs"]}["steady.exe"]
+check("...each with its bytes hour by hour, received and sent apart",
+      len(sp["trend_out"]) == 24 and sp["trend_out"][12] == 100 and sum(sp["trend_out"]) == 100
+      and sp["trend_in"][12] == 40 and sum(sp["trend_in"]) == 40, sp)
+hb_ = {r["host"]: r for r in d["hosts"]}
+check("...hosts too, unattributed traffic included",
+      hb_["b.example"]["trend_out"][12] == 7 and hb_["a.example"]["trend_in"][12] == 40
+      and len(hb_["a.example"]["trend_in"]) == 24, hb_)
 two = h.day_detail((noon - timedelta(days=2)).strftime("%Y-%m-%d"), iface="VR")
 check("...for one adapter, only its traffic",
       [r["name"] for r in two["programs"]] == ["burst.exe"] and two["hours"][12]["bytes_out"] == 5000, two)

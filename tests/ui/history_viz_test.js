@@ -23,10 +23,11 @@ function history(){
           alert_counts:{total:0}, exclude:{programs:[],hosts:[]},
           summary:{since:'2026-10-25', path:'C:\\history.db', size:1, retain_days:90, alert_retain_days:30}};
 }
+const at0 = v => Array.from({length:24}, (_, h) => h === 0 ? v : 0);
 function dayData(day){
   return {day, iface:'', hours:Array.from({length:24}, (_, h) => ({hour:h, bytes_in: h === 0 ? 5*K : 0, bytes_out: h === 0 ? K : 0})),
-          programs:[{name:'burst.exe', bytes_in:5*K, bytes_out:K, packets:3}],
-          hosts:[{host:'b.example', bytes_in:5*K, bytes_out:K, packets:3}]};
+          programs:[{name:'burst.exe', bytes_in:5*K, bytes_out:K, packets:3, trend_in:at0(5*K), trend_out:at0(K)}],
+          hosts:[{host:'b.example', bytes_in:5*K, bytes_out:K, packets:3, trend_in:at0(5*K), trend_out:at0(K)}]};
 }
 
 (async () => {
@@ -53,6 +54,21 @@ function dayData(day){
   await p.waitForSelector('#cw-daily svg', {timeout: 30000});
 
   // -- trends ------------------------------------------------------------------------
+  // 1.51.2: the daily chart's bars are square, with one pixel between sent
+  // and received (they had rounded tops and a 2px gap that read as a border).
+  const sq = await p.evaluate(() => {
+    const groups = [...document.querySelectorAll('#cw-daily .colgroup')].map(g => {
+      const r = [...g.querySelectorAll('rect')].map(x => x.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+      return {n: r.length, gap: r.length === 2 ? r[1].top - r[0].bottom : null,
+              same: r.length === 2 ? Math.abs(r[0].left - r[1].left) + Math.abs(r[0].width - r[1].width) : 0};
+    });
+    return {groups, curved: document.querySelectorAll('#p-history .colgroup path, #p-history rect[rx]').length};
+  });
+  check('the daily bars are plain rectangles, nothing rounded',
+        sq.curved === 0 && sq.groups.length === 7 && sq.groups.every(g => g.n === 2 && g.same < 0.5), JSON.stringify(sq));
+  check('...with one pixel between sent and received',
+        sq.groups.every(g => g.gap > 0.4 && g.gap < 1.6), JSON.stringify(sq.groups.map(g => g.gap)));
+
   // 1.51: each program and host is a lane of per-day bars on the daily chart's
   // own day columns, sent above received, on one log scale.
   const lanes = () => p.evaluate(() => {
@@ -89,6 +105,10 @@ function dayData(day){
   check('...and a single byte still shows', host.outs.length === 1 && host.outs[0].h >= 0.9, JSON.stringify(host.outs));
   check('...the row gives its total and the split', /^10\.0 KB/.test(burst.tot) && /▼ 9\.0 KB/.test(burst.tot) && /▲ 1\.0 KB/.test(burst.tot), burst.tot);
   check('...and says when its busiest day was', /busiest 10\.0 KB on 2026-10-28, active 1 of 7 days/.test(burst.title), burst.title);
+  // What only the removed Table views said is on the name's tooltip (1.51.2).
+  const tips = await p.evaluate(() => [...document.querySelectorAll('#p-history .hbar[data-k] .nm')].map(x => x.title));
+  check('...packets, and when a host was first seen, are on the tooltip of the name',
+        tips[0] === 'steady.exe\n7 packets' && tips[2].startsWith('a.example\n1 packet\nfirst seen '), JSON.stringify(tips));
   check('no bar and no trend line is left beside the name',
         await p.evaluate(() => !document.querySelector('#p-history .hbar[data-k] .track, #p-history svg.trend')));
 
@@ -140,8 +160,36 @@ function dayData(day){
   });
   check('...whose labels do not overlap', clash.length === 0, JSON.stringify(clash));
   check('...and the programs and hosts that made it', day.progs.join() === 'burst.exe,b.example', day.progs.join());
-  check('...which are plain bars, not more drill-downs',
+  check('...which are not more drill-downs',
         await p.evaluate(() => !document.querySelector('#histDay .hbar[data-k]')));
+  // 1.51.2: they are lanes of the day's 24 hours, under the hours chart.
+  const hl = () => p.evaluate(() => {
+    const cx = e => { const q = e.getBoundingClientRect(); return q.left + q.width / 2; };
+    return {cols: [...document.querySelectorAll('#cw-hours .hitrect')].map(cx),
+            rows: [...document.querySelectorAll('#histDay .hbar.lane')].map(r => {
+              const s = r.querySelector('svg.lanes');
+              return {n: s ? +s.dataset.n : 0, axis: s ? s.dataset.axis : '', tot: r.querySelector('.tot').textContent,
+                      hot: s ? s.classList.contains('hot') : false,
+                      ins: s ? [...s.querySelectorAll('.lb.in')].map(q => ({i: +q.dataset.i, cx: cx(q)})) : []};
+            }),
+            dayHot: document.querySelectorAll('#p-history svg.lanes[data-axis="d"].hot').length,
+            hourCol: [...document.querySelectorAll('#cw-hours .colgroup.hot')].map(g => g.dataset.i).join(),
+            track: document.querySelectorAll('#p-history .track, #p-history .hstrip').length};
+  });
+  let hr = await hl();
+  check('...but lanes of its 24 hours, each hour under the hours chart\'s',
+        hr.rows.length === 2 && hr.rows.every(r => r.n === 24 && r.axis === 'h' && r.ins.length === 1 &&
+          r.ins[0].i === 0 && Math.abs(r.ins[0].cx - hr.cols[0]) <= 1), JSON.stringify(hr.rows));
+  check('...with the day\'s total and split', /^6\.0 KB/.test(hr.rows[0].tot) && /▼ 5\.0 KB/.test(hr.rows[0].tot), hr.rows[0].tot);
+  check('no plain bar or hour strip is left on the tab', hr.track === 0, String(hr.track));
+  const h0 = await p.$eval('#cw-hours .hitrect[data-i="0"]', r => { const q = r.getBoundingClientRect(); return [q.x + q.width/2, q.y + q.height/2]; });
+  await p.mouse.move(h0[0], h0[1]);
+  hr = await hl();
+  check('pointing at an hour marks it through the hour lanes, and only those',
+        hr.rows.every(r => r.hot && /^00:00 · 6\.0 KB/.test(r.tot)) && hr.dayHot === 0 && hr.hourCol === '0', JSON.stringify(hr));
+  await p.mouse.move(5, 5);
+  hr = await hl();
+  check('...and moving away puts the day\'s figures back', hr.rows.every(r => !r.hot && /^6\.0 KB/.test(r.tot)) && hr.hourCol === '', JSON.stringify(hr));
 
   // It survives the tab's own refresh.
   await p.mouse.move(5, 5);

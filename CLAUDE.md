@@ -335,7 +335,7 @@ decoded protocol was seen in the window counts under that protocol
 click writes the filter that means the same packets (`kdExpr`), folds
 included, so the table and the drawing never disagree. Multicast is kept
 here, unlike Flows and Balance: it is not a host, but it is a kind. The
-trend line is one ink on the row's own scale, as History's is.
+trend line is one ink on the row's own scale.
 
 **Latency is the handshake time the flow table already measured, kept
 after the flow is gone (1.49).** `FlowTable.on_rtt` fires once per timed
@@ -437,11 +437,12 @@ History's own adapter dropdown is separate from the live one and passes
 every adapter with usage, attached or not.
 
 **The newer charts are drawn from server-side counts (1.43).** By program and
-By host carry a `trend` (bytes per day, `HistoryStore._with_trend`); a
+By host carry their bytes per day (`HistoryStore._with_trend`, drawn as lanes
+since 1.51); a
 clicked day comes from `/api/history/day` (`day_detail`); Talkers' By adapter
 from `/api/adapters` (`PacketStore.adapter_rates`, `IFACE_WINDOW` seconds).
 The page never tallies these from the packets it polls, for the same reason as
-the Timeline. The trend is one ink (it is one series); the adapter rows use
+the Timeline. The adapter rows use
 blue up / orange down, one row per adapter on its own scale, not one line
 per adapter: only two hues pass the deuteranope check. By adapter counts the
 VPN copy (it is on that wire), unlike every total, and says how much of it was.
@@ -460,8 +461,27 @@ the chart and every lane; the tab's refresh waits while one is marked, as it
 does for the chart's tooltip. An opened row's Talked to / Contacted by are
 lanes too (`detail()` rows carry the same per-day figures, for that pair
 only), pulled back over the detail's 24px indent so their days still line
-up, on a scale of their own. The plain `hbars` (and the outlier cut) remain
-only inside an opened day, which has no days to draw.
+up, on a scale of their own.
+
+**Every list on the History tab is lanes; there are no table views (1.51.2).**
+After 1.51 the tab still had three older drawings: plain bars (`hbars`, with
+the outlier cut) inside an opened day, a strip of hourly cells for a
+program's last 72 hours, and a folded Table view under each chart. Rob
+found the tables redundant and the rest "left over", so all three went.
+`lanes()` takes an axis (`laneAxis`): `d` the period's days, `h` an opened
+day's 24 hours (`day_detail` rows carry them via `_by_hour`, drawn under the
+hours chart at its width), `t` a program's last 72 hours. `histHot(i, by,
+axis)` only marks lanes on the same axis. What only the tables said, packets
+and a host's first sighting, is on the row name's tooltip (`laneTip`). Don't
+add a second way to draw a list of programs or hosts here; and if a figure
+seems to need a table, put it on the row.
+
+**Every bar is square (1.51.2).** The daily and hourly charts had 4px
+rounded tops and a 2px gap between sent and received; Rob read the gap as a
+border and asked for square bars everywhere. They are plain `<rect>`s now,
+one empty pixel row between the two colours as in the lanes, and Talkers'
+meters lost their rounded ends. Don't round a bar's data end, whatever a
+chart guideline says.
 
 **History's charts start at the first recorded day (1.51.1).**
 `HistoryStore._shown_days()` is the range cut to begin no earlier than the

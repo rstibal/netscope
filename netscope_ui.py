@@ -308,7 +308,7 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 .bln.lump.hot .nm{text-decoration:none}
 /* Kinds (1.48): a row per kind of traffic, its bytes as a bar and its shape
    over the window as a line. Rows and bars are Balance's; the line is one
-   ink, as History's trend is. */
+   ink. */
 #kdview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
 #kdSvg{display:block;width:100%}
 path.kdt.a{fill:var(--dim);opacity:.22}
@@ -398,7 +398,7 @@ h4{margin:0 0 8px;font:600 11px var(--sans);letter-spacing:.5px;text-transform:u
   background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto}
 .hex .off{color:var(--faint)}
 .hex .as{color:var(--dns)}
-.bar{height:4px;border-radius:2px;background:var(--panel2);overflow:hidden;margin-top:3px}
+.bar{height:4px;background:var(--panel2);overflow:hidden;margin-top:3px}
 .bar i{display:block;height:100%;background:var(--accent)}
 /* ---------- connections ---------- */
 .cfilter{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
@@ -642,15 +642,6 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .hbar{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;
   padding:3px 0;font:11.5px var(--mono)}
 .hbar .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
-.hbar .track{grid-column:1/-1;height:9px;background:var(--panel2);border-radius:2px;
-  overflow:hidden;display:flex;gap:2px;position:relative}
-.hbar .track i{display:block;height:100%}
-.hbar .track i:first-of-type{border-radius:2px 0 0 2px}
-.hbar .track i:last-of-type{border-radius:0 2px 2px 0}
-/* The cut in a bar that was shortened: the track's own colour, slanted, so
-   it reads as a gap in the bar rather than a mark on it. */
-.hbar .track b{position:absolute;top:-1px;bottom:-1px;left:86%;width:7px;
-  background:var(--panel2);transform:skewX(-25deg)}
 .hbar[data-k]{cursor:pointer;border-radius:3px}
 .hbar[data-k]:hover .nm,.hbar[data-k]:focus-visible .nm{text-decoration:underline}
 .hbar[data-k] .nm::before{content:"\25B8";display:inline-block;width:12px;color:var(--faint)}
@@ -675,6 +666,8 @@ svg.lanes.hot .lhot{display:inline}
    so their days still sit under the chart's. */
 .hdet svg.lanes{margin-left:-24px;width:calc(100% + 24px)}
 .hbar.lane.sub .nm{margin-left:22px}
+/* An opened day's lanes sit in its box with nothing to pull back over. */
+.dayx .hbar.lane.sub .nm{margin-left:46px}
 #cw-daily.picked .colgroup:not(.sel){opacity:.4}
 .dayx{margin:4px 0 10px;padding:8px 10px;border:1px solid var(--line);border-radius:4px;
   background:var(--panel)}
@@ -698,10 +691,6 @@ svg.lanes.hot .lhot{display:inline}
 .hdet .hr{display:flex;justify-content:space-between;gap:10px;padding:1px 0}
 .hdet .hr span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .hdet .hr span:last-child{white-space:nowrap}
-.hstrip{display:flex;align-items:flex-end;gap:1px;height:28px;margin:2px 0}
-.hstrip i{flex:1;min-width:2px;background:var(--panel2);display:block}
-.hstrip i.on{background:var(--series-in)}
-.hstripl{display:flex;justify-content:space-between;color:var(--faint);font-size:10px}
 .dayrange{display:flex;gap:6px;align-items:center;margin-bottom:10px}
 .dayrange button{padding:3px 10px;font:600 11px var(--sans)}
 .dayrange button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -717,16 +706,6 @@ svg.lanes.hot .lhot{display:inline}
 .exrow .kind{color:var(--faint);font:10.5px var(--sans);margin-left:8px}
 .exadd{display:flex;gap:6px;margin-top:8px}
 .exadd input{flex:1 1 auto}
-table.tv{width:100%;border-collapse:collapse;font:11px var(--mono);margin-top:6px}
-table.tv th{text-align:left;color:var(--dim);font:600 9.5px var(--sans);
-  letter-spacing:.4px;text-transform:uppercase;padding:4px 6px;
-  border-bottom:1px solid var(--line)}
-table.tv td{padding:3px 6px;border-bottom:1px solid var(--line)}
-table.tv td.n{text-align:right}
-details.tvw{margin-top:8px}
-details.tvw summary{cursor:pointer;color:var(--dim);font-size:11.5px;
-  padding:4px 0;user-select:none}
-details.tvw summary:hover{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -1030,7 +1009,6 @@ const COL_MIN = [34, 56, 60, 60, 26, 70, 70, 74, 44, 90];
 // Time's default was 88px for a 12-character hh:mm:ss.mmm stamp that needs
 // ~103 — the timestamp shipped ellipsised until you resized the column.
 const COL_DEF = [52, 108, 96, 130, 30, 150, 190, 74, 62, 0];  // 0 = take the rest
-const IFACE_COL = 2;
 const INFO_COL = 9;
 let colW = null, colCustom = false;
 
@@ -1976,9 +1954,11 @@ function previewObject(id){
 
 /* ================= history =================
    Two series (received / sent) on every chart, so a legend is always present
-   and the ▼/▲ glyphs repeat in the legend, tooltip and table — identity never
-   depends on colour alone. Values the charts don't label directly are all
-   reachable in the table view underneath. */
+   and the ▼/▲ glyphs repeat in the legend, tooltip and row figures — identity
+   never depends on colour alone. There is no table view under the charts
+   (removed in 1.51.2): each lane's row gives its total and split, a day's
+   figures are on its column (hover or focus), and what only the tables said,
+   packets and a host's first sighting, is on the row name's tooltip. */
 
 let histDays = 30, histData = null;
 /* What the headings call the period. The server sends only the days from the
@@ -2014,12 +1994,6 @@ function niceMax(v){
   return K * unit;
 }
 
-/* Rounded at the data end, square at the baseline — never a pill. */
-function capPath(x, y, w, h, r){
-  r = Math.max(0, Math.min(r, w / 2, h));
-  return `M${x},${y+h} L${x},${y+r} Q${x},${y} ${x+r},${y} `
-       + `L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
-}
 
 // Charts are drawn at the pane's real width, one unit to a pixel. Drawn at a
 // fixed 560 and stretched, they doubled every label and bar once the side
@@ -2038,9 +2012,12 @@ function refitHistCharts(){
     cw.querySelector('svg').outerHTML = dailyChart(histData.daily, {sel, width: w});
     wireDailyHover(histData.daily);
   }
-  const ch = $('cw-hours');
-  if (ch && histDayData && histDayData.day === histDayOpen)
-    ch.querySelector('svg').outerHTML = hoursChart(histDayData);
+  // An opened day is redrawn whole: its lanes share its hours chart's width.
+  const dayEl = $('histDay');
+  if (dayEl && histDayData && histDayData.day === histDayOpen){
+    dayEl.outerHTML = dayPanel();
+    wireDayPanel();
+  }
   // The lanes share the daily chart's columns, so they are redrawn with it.
   // (An opened row's own lanes are redrawn with it, by detailHtml.)
   document.querySelectorAll('#p-history .lanebox[data-key]').forEach(box => {
@@ -2084,17 +2061,16 @@ function dailyChart(rows, opt){
     const yTop = y(tot);
     let seg = '';
     if (tot > 0){
-      // Sent sits on top and carries the rounded cap; a 2px surface gap
-      // separates it from received underneath.
+      // Sent sits on top of received, one empty pixel row between them, as
+      // in the lanes. Square, like every bar in the app (1.51.2): the tops
+      // were rounded and the gap 2px, which read as a border round the cap.
       if (hOut > 0.5){
-        seg += `<path d="${capPath(x, yTop, bw, Math.max(1,hOut), 4)}" fill="var(--series-out)"/>`;
+        seg += `<rect x="${x}" y="${yTop}" width="${bw}" height="${Math.max(1,hOut)}" fill="var(--series-out)"/>`;
       }
       if (hIn > 0.5){
-        const yIn = yTop + hOut + (hOut > 0.5 ? 2 : 0);
+        const yIn = yTop + (hOut > 0.5 ? Math.max(1,hOut) + 1 : 0);
         const hh = Math.max(1, PADT + plotH - yIn);
-        const d = (hOut > 0.5) ? `<rect x="${x}" y="${yIn}" width="${bw}" height="${hh}" fill="var(--series-in)"/>`
-                               : `<path d="${capPath(x, yIn, bw, hh, 4)}" fill="var(--series-in)"/>`;
-        seg += d;
+        seg += `<rect x="${x}" y="${yIn}" width="${bw}" height="${hh}" fill="var(--series-in)"/>`;
       }
     }
     bars += `<g class="colgroup${opt.sel === i ? ' sel' : ''}" data-i="${i}">${seg}</g>`;
@@ -2124,42 +2100,6 @@ function dailyChart(rows, opt){
        + g + bars + xl + hits + '</svg>';
 }
 
-// One program that streams VR can be ten times everything else, and on a
-// linear scale the rest are slivers. When the biggest is more than BREAK_RATIO
-// times the next, it is drawn at full width with a cut in it and the others
-// are scaled against the next-biggest instead. Its label still gives the true
-// total, and the cut says plainly that the bar is not to scale.
-const BREAK_RATIO = 3;
-function hbarScale(rows){
-  const tots = rows.map(r => r.bytes_in + r.bytes_out).sort((a, b) => b - a);
-  if (tots.length > 1 && tots[1] > 0 && tots[0] > BREAK_RATIO * tots[1])
-    return {max: tots[1] * 1.3, cut: tots[0]};
-  return {max: Math.max(1, tots[0] || 1), cut: 0};
-}
-
-/* The plain bars inside an opened day: a name, its total, and a bar split
-   received/sent. A day has no days to draw; everything else is lanes (below). */
-function hbars(rows, keyName){
-  const sc = hbarScale(rows);
-  return rows.map(r => {
-    const tot = r.bytes_in + r.bytes_out;
-    const broken = sc.cut && tot === sc.cut && tot > sc.max;
-    // A broken bar fills the track, split in the proportion it really has.
-    const denom = broken ? tot : sc.max;
-    const pin = Math.min(100, (r.bytes_in / denom) * 100);
-    const pout = Math.min(100 - pin, (r.bytes_out / denom) * 100);
-    return '<div class="hbar">' +
-      '<span class="nm" title="'+esc(r[keyName])+'">'+esc(r[keyName])+'</span>' +
-      '<span style="color:var(--dim)">'+esc(hb(tot))+'</span>' +
-      '<span class="track"'+(broken ? ' title="Shortened to fit: this bar is not to scale. '+
-        esc(hb(tot))+' in total."' : '')+'>' +
-        (pin  > 0 ? '<i style="width:'+pin.toFixed(2)+'%;background:var(--series-in)"></i>'  : '') +
-        (pout > 0 ? '<i style="width:'+pout.toFixed(2)+'%;background:var(--series-out)"></i>' : '') +
-        (broken ? '<b class="brk"></b>' : '') +
-      '</span></div>';
-  }).join('');
-}
-
 /* By program and By host (1.51): each row is a lane of its bytes per day, on
    the daily chart's day columns, from the server's `trend_in`/`trend_out`.
    A bar and a 64px trend line said how much and roughly when; a lane under
@@ -2169,7 +2109,16 @@ function hbars(rows, keyName){
    download flattens every other lane, and the small daily habit is what the
    lanes are for. The scale covers LANE_DECADES below the section's busiest
    day and anything under that is the floor: from 10 KB up (six decades under
-   a 40 GB day) every lane came out nearly the same height. */
+   a 40 GB day) every lane came out nearly the same height.
+
+   Since 1.51.2 every list of programs or hosts on the tab is lanes, on one of
+   three time axes:
+     d  the days of the period, under the daily chart (By program, By host,
+        and Talked to / Contacted by inside an opened row)
+     h  the 24 hours of an opened day, under its hours chart
+     t  a program's last 72 hours, on its own
+   The plain bar with its outlier cut, and the strip of hourly cells, are
+   gone: two more ways of drawing the same thing, left over from before. */
 const LANE_H = 30, LANE_HALF = 13, LANE_DECADES = 4;
 function laneScale(rows){
   let hi = 1;
@@ -2177,7 +2126,19 @@ function laneScale(rows){
   const lo = hi / Math.pow(10, LANE_DECADES), span = Math.log(hi / lo);
   return v => v <= 0 ? 0 : Math.max(1, Math.log(Math.max(v, lo) / lo) / span * LANE_HALF);
 }
-function laneSVG(r, days, W, ht){
+/* An axis: what each column is called. `src` is the 72 hours for axis t. */
+function laneAxis(axis, src){
+  if (axis === 'h')
+    return {axis, unit: 'hour', at: ' at ', span: 'Per hour of the day',
+            labels: Array.from({length: 24}, (_, h) => String(h).padStart(2, '0') + ':00')};
+  if (axis === 't')
+    return {axis, unit: 'hour', at: ' at ', span: 'Per hour over 72 hours',
+            labels: (src || []).map(x => hourLabel(x.day, x.hour))};
+  const days = histData && histData.daily ? histData.daily.map(d => d.day) : [];
+  return {axis: 'd', unit: 'day', at: ' on ', span: 'Per day over the period',
+          labels: days, short: days.map(d => d.slice(5))};
+}
+function laneSVG(r, ax, W, ht){
   const tin = r.trend_in || [], tout = r.trend_out || [], n = Math.max(tin.length, tout.length);
   if (!n) return '';
   const band = (W - CH_PADL - CH_PADR) / n, bw = Math.min(24, Math.max(3, band - 4)), mid = LANE_H / 2;
@@ -2194,80 +2155,116 @@ function laneSVG(r, days, W, ht){
     if (dn) bars += '<rect class="lb in" data-i="'+i+'" x="'+x+'" y="'+(mid + 0.5).toFixed(1)+
                     '" width="'+w+'" height="'+dn.toFixed(1)+'"/>';
   }
-  const said = 'busiest ' + hb(tot(peak)) + (days && days[peak] ? ' on ' + days[peak] : '');
-  return '<svg class="lanes" viewBox="0 0 ' + W + ' ' + LANE_H + '" data-n="' + n + '" data-w="' + W +
-    '" role="img" aria-label="Per day: ' + esc(said) + '">' +
-    '<title>Per day over the period: ' + esc(said) + ', active ' + active + ' of ' + n + ' days</title>' +
+  const said = 'busiest ' + hb(tot(peak)) + (ax.labels[peak] ? ax.at + ax.labels[peak] : '');
+  return '<svg class="lanes" viewBox="0 0 ' + W + ' ' + LANE_H + '" data-axis="' + ax.axis + '" data-n="' + n +
+    '" data-w="' + W + '" role="img" aria-label="Per ' + ax.unit + ': ' + esc(said) + '">' +
+    '<title>' + ax.span + ': ' + esc(said) + ', active ' + active + ' of ' + n + ' ' + ax.unit + 's</title>' +
     '<rect class="lhot" x="0" y="0" width="' + band.toFixed(1) + '" height="' + LANE_H + '"/>' +
     bars + '</svg>';
 }
-/* A lane row's figures: the period's, or one day's while that day is pointed at. */
-function laneTotal(r, i){
+/* A lane row's figures: the whole axis's, or one column's while it is pointed at. */
+function laneTotal(r, i, ax){
   const split = (a, b) => hb(a + b) + ' · ▼ ' + hb(a) + ' ▲ ' + hb(b);
   if (i < 0) return split(r.bytes_in, r.bytes_out);
   const a = (r.trend_in || [])[i] || 0, b = (r.trend_out || [])[i] || 0;
-  const day = histData && histData.daily && histData.daily[i] ? histData.daily[i].day.slice(5) + ' · ' : '';
-  return day + (a + b ? split(a, b) : 'nothing');
+  const what = (ax.short || ax.labels)[i];
+  return (what ? what + ' · ' : '') + (a + b ? split(a, b) : 'nothing');
 }
+/* The name's tooltip: the full name (it may be cut short), and what only the
+   old table views said. */
+function laneTip(r, keyName){
+  const n = Number(r.packets || 0);
+  return r[keyName] + '\n' + n.toLocaleString() + (n === 1 ? ' packet' : ' packets') +
+    (keyName === 'host' && r.first_seen ? '\nfirst seen ' + new Date(r.first_seen * 1000).toLocaleDateString() : '');
+}
+/* A program's last 72 hours as one lane row. */
+function stripRow(d){
+  const hrs = (d && d.hours) || [];
+  return {name: '72 h ago to now', bytes_in: hrs.reduce((a, x) => a + x.bytes_in, 0),
+          bytes_out: hrs.reduce((a, x) => a + x.bytes_out, 0),
+          trend_in: hrs.map(x => x.bytes_in), trend_out: hrs.map(x => x.bytes_out)};
+}
+/* The rows a box of lanes was drawn from, and its axis: a redraw on resize and
+   the pointed-at column both need them again. */
 function laneRows(box){
-  if (box.dataset.det) return (histDet[box.dataset.det] || {}).rows || [];
-  return (histData && (box.dataset.key === 'name' ? histData.processes : histData.hosts)) || [];
+  const ds = box.dataset;
+  if (ds.strip) return [stripRow(histDet[ds.strip])];
+  if (ds.day) return (histDayData && histDayData[ds.day]) || [];
+  if (ds.det) return (histDet[ds.det] || {}).rows || [];
+  return (histData && (ds.key === 'name' ? histData.processes : histData.hosts)) || [];
 }
-/* `sub` is the rows inside an opened program or host (Talked to, Contacted
-   by): the same lanes on a scale of their own, but not drill-downs. */
-function lanes(rows, keyName, W, sub){
+function boxAxis(box){
+  return laneAxis(box.dataset.axis, box.dataset.strip ? (histDet[box.dataset.strip] || {}).hours : null);
+}
+/* `sub` rows are the lists inside something opened (Talked to, Contacted by,
+   a day's programs and hosts, the 72 hours): the same lanes on a scale of
+   their own, but not drill-downs. */
+function lanes(rows, keyName, W, sub, ax){
+  ax = ax || laneAxis('d');
   const ht = laneScale(rows), kind = keyName === 'name' ? 'program' : 'host';
-  const days = histData && histData.daily ? histData.daily.map(d => d.day) : null;
   return rows.map((r, k) => {
     const key = kind + '|' + r[keyName];
     if (sub)
       return '<div class="hbar lane sub' + (k % 2 ? ' alt' : '') + '" data-row="'+k+'">' +
         '<span class="nm" title="'+esc(r[keyName])+'">'+esc(r[keyName])+'</span>' +
-        '<span class="tot">'+esc(laneTotal(r, -1))+'</span>' + laneSVG(r, days, W, ht) + '</div>';
+        '<span class="tot">'+esc(laneTotal(r, -1, ax))+'</span>' + laneSVG(r, ax, W, ht) + '</div>';
     return '<div class="hbar lane' + (k % 2 ? ' alt' : '') + '" data-k="'+kind+'" data-n="'+esc(r[keyName])+
         '" data-row="'+k+'" tabindex="0" role="button" aria-expanded="'+histOpen.has(key)+'">' +
-      '<span class="nm" title="'+esc(r[keyName])+'">'+esc(r[keyName])+'</span>' +
-      '<span class="tot">'+esc(laneTotal(r, -1))+'</span>' +
-      laneSVG(r, days, W, ht) + '</div>' +
+      '<span class="nm" title="'+esc(laneTip(r, keyName))+'">'+esc(r[keyName])+'</span>' +
+      '<span class="tot">'+esc(laneTotal(r, -1, ax))+'</span>' +
+      laneSVG(r, ax, W, ht) + '</div>' +
       '<div class="hdet" data-for="'+esc(key)+'"'+(histOpen.has(key) ? '' : ' hidden')+'>'+
         (histOpen.has(key) ? detailHtml(histDet[key]) : '')+'</div>';
   }).join('');
 }
 function laneBox(rows, keyName){
-  return '<div class="lanebox" data-key="'+keyName+'">' + lanes(rows, keyName, histChartsAt || histChartW()) + '</div>';
+  return '<div class="lanebox" data-axis="d" data-key="'+keyName+'">' +
+    lanes(rows, keyName, histChartsAt || histChartW()) + '</div>';
 }
-/* One day marked through the chart and every lane, each row giving that day's
-   figures; -1 puts the period back. `by` is who asked: the lanes' own pointer
-   handler only clears what a lane set, not the daily chart's hover. */
-let laneHotBy = '';
-function histHot(i, by){
-  laneHotBy = i < 0 ? '' : by;
-  document.querySelectorAll('#p-history svg.lanes').forEach(s => {
+/* One column marked through its chart and every lane on the same axis, each
+   row giving that column's figures; -1 puts the totals back. `by` is who
+   asked: the pane's own pointer handler only clears what it set, not the
+   daily chart's hover (which marks its own column). */
+const laneHotBy = {d: '', h: '', t: ''};
+function histHot(i, by, axis){
+  axis = axis || 'd';
+  laneHotBy[axis] = i < 0 ? '' : by;
+  document.querySelectorAll('#p-history svg.lanes[data-axis="' + axis + '"]').forEach(s => {
     const n = +s.dataset.n, on = i >= 0 && i < n;
     s.classList.toggle('hot', on);
     if (on) s.querySelector('.lhot').setAttribute('x',
       (CH_PADL + (+s.dataset.w - CH_PADL - CH_PADR) / n * i).toFixed(1));
   });
-  document.querySelectorAll('#p-history .lanebox').forEach(box => {
-    const rows = laneRows(box);
+  document.querySelectorAll('#p-history .lanebox[data-axis="' + axis + '"]').forEach(box => {
+    const rows = laneRows(box), ax = boxAxis(box);
     box.querySelectorAll(':scope > .hbar.lane').forEach(el => {
       const r = rows[+el.dataset.row], t = el.querySelector('.tot');
-      if (r && t) t.textContent = laneTotal(r, i);
+      if (r && t) t.textContent = laneTotal(r, i, ax);
     });
   });
-  if (by === 'lane' || i < 0)
-    document.querySelectorAll('#cw-daily .colgroup').forEach(g =>
-      g.classList.toggle('hot', by === 'lane' && +g.dataset.i === i));
+  const chart = $(axis === 'd' ? 'cw-daily' : axis === 'h' ? 'cw-hours' : '');
+  if (chart && (by !== 'chart' || i < 0))
+    chart.querySelectorAll('.colgroup').forEach(g => g.classList.toggle('hot', i >= 0 && +g.dataset.i === i));
 }
 $('p-history').addEventListener('pointermove', e => {
-  const s = e.target.closest && e.target.closest('svg.lanes');
-  if (!s){ if (laneHotBy === 'lane') histHot(-1, 'lane'); return; }
-  const b = s.getBoundingClientRect(), n = +s.dataset.n, W = +s.dataset.w;
-  const i = Math.floor(((e.clientX - b.left) * W / b.width - CH_PADL) / ((W - CH_PADL - CH_PADR) / n));
-  if (i >= 0 && i < n) histHot(i, 'lane');
-  else if (laneHotBy === 'lane') histHot(-1, 'lane');
+  const t = e.target, s = t.closest && t.closest('svg.lanes');
+  let axis = '', i = -1;
+  if (s){
+    const b = s.getBoundingClientRect(), n = +s.dataset.n, W = +s.dataset.w;
+    axis = s.dataset.axis;
+    i = Math.floor(((e.clientX - b.left) * W / b.width - CH_PADL) / ((W - CH_PADL - CH_PADR) / n));
+    if (i >= n) i = -1;
+  } else if (t.classList && t.classList.contains('hitrect') && t.closest('#cw-hours')){
+    // The hours chart has no tooltip of its own; its lanes give the figures.
+    axis = 'h'; i = +t.dataset.i;
+  }
+  for (const a in laneHotBy)
+    if (laneHotBy[a] === 'pane' && (a !== axis || i < 0)) histHot(-1, 'pane', a);
+  if (axis && i >= 0) histHot(i, 'pane', axis);
 });
-$('p-history').addEventListener('pointerleave', () => { if (laneHotBy === 'lane') histHot(-1, 'lane'); });
+$('p-history').addEventListener('pointerleave', () => {
+  for (const a in laneHotBy) if (laneHotBy[a] === 'pane') histHot(-1, 'pane', a);
+});
 
 /* Click a program or host bar to see why it has that many bytes. The detail is
    fetched when asked for, not shipped with every poll, and an open one is
@@ -2284,7 +2281,7 @@ function detailHtml(d){
   if (d.rows.length){
     const rows = prog ? d.rows : d.rows.map(r => r.name === '-' ? Object.assign({}, r, {name: '(no program)'}) : r);
     h += '<h5>' + (prog ? 'Talked to' : 'Contacted by') + ' · ' + histSpan() + '</h5>' +
-         '<div class="lanebox" data-det="' + esc(d.kind + '|' + d.name) + '">' +
+         '<div class="lanebox" data-axis="d" data-det="' + esc(d.kind + '|' + d.name) + '">' +
          lanes(rows, 'name', histChartsAt || histChartW(), true) + '</div>';
   }
   if (prog && d.unlisted > 0){
@@ -2301,12 +2298,8 @@ function detailHtml(d){
     h += '<div class="note">Recorded since ' + esc(d.pairs_since) + '.</div>';
   }
   if (prog){
-    const peak = Math.max(1, ...d.hours.map(x => x.bytes_in + x.bytes_out));
-    h += '<h5>Last 72 hours</h5><div class="hstrip">' + d.hours.map(x => {
-      const t = x.bytes_in + x.bytes_out;
-      return '<i' + (t ? ' class="on" style="height:' + Math.max(8, Math.round(t / peak * 100)) + '%"' : ' style="height:6%"') +
-             ' title="' + esc(hourLabel(x.day, x.hour) + ' · ' + hb(t)) + '"></i>';
-    }).join('') + '</div><div class="hstripl"><span>72 h ago</span><span>now</span></div>';
+    h += '<h5>Last 72 hours</h5><div class="lanebox" data-axis="t" data-strip="' + esc(d.kind + '|' + d.name) + '">' +
+         lanes([stripRow(d)], 'name', histChartsAt || histChartW(), true, laneAxis('t', d.hours)) + '</div>';
     if (d.busiest.length){
       h += '<h5>Busiest hours · ' + histSpan() + '</h5>' + d.busiest.map(b =>
         '<div class="hr"><span>' + esc(hourLabel(b.day, b.hour)) +
@@ -2364,14 +2357,6 @@ function legend(){
     '<span><i style="background:var(--series-out)"></i>▲ sent</span></div>';
 }
 
-function tableView(rows, cols){
-  return '<details class="tvw"><summary>Table view</summary><table class="tv"><tr>' +
-    cols.map(c => '<th'+(c.n?' style="text-align:right"':'')+'>'+esc(c.h)+'</th>').join('') +
-    '</tr>' + rows.map(r => '<tr>' + cols.map(c =>
-      '<td'+(c.n?' class="n"':'')+'>'+esc(c.f(r))+'</td>').join('') + '</tr>').join('') +
-    '</table></details>';
-}
-
 /* Click a day of the daily chart (or Enter on it) to open it below: its
    24 hours, and the programs and hosts that made it. The open day stays open
    across the tab's refreshes and is re-fetched with them, for the adapter
@@ -2391,8 +2376,12 @@ function dayPanel(){
   if (!d || d.day !== histDayOpen) return h + '<div class="note">Loading…</div></div>';
   if (!d.hours.some(r => r.bytes_in + r.bytes_out)) return h + '<div class="note">Nothing recorded on this day.</div></div>';
   h += '<div class="chartwrap" id="cw-hours">' + hoursChart(d) + '</div>';
-  if (d.programs.length) h += '<h5>Programs</h5>' + hbars(d.programs, 'name');
-  if (d.hosts.length) h += '<h5>Hosts</h5>' + hbars(d.hosts, 'host');
+  // Lanes of the day's 24 hours, on the hours chart's columns (same width,
+  // same insets), so a tall hour has the program that made it underneath.
+  const box = (rows, keyName, which) => '<div class="lanebox" data-axis="h" data-day="' + which + '">' +
+    lanes(rows, keyName, histChartW(22), true, laneAxis('h')) + '</div>';
+  if (d.programs.length) h += '<h5>Programs</h5>' + box(d.programs, 'name', 'programs');
+  if (d.hosts.length) h += '<h5>Hosts</h5>' + box(d.hosts, 'host', 'hosts');
   return h + '</div>';
 }
 function hoursChart(d){
@@ -2493,31 +2482,15 @@ function renderHistory(d){
   h += '<div class="sec"><h4>Daily traffic'+per+'</h4>' + legend() +
        '<div class="chartwrap' + (histDayOpen ? ' picked' : '') + '" id="cw-daily">' +
        dailyChart(daily, {sel: selDay, width: (histChartsAt = histChartW())}) +
-       '<div class="tip" id="tip-daily"></div></div>' + dayPanel() +
-       tableView(daily, [
-         {h:'Day', f:r=>r.day},
-         {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
-         {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)},
-         {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) +
-       '</div>';
+       '<div class="tip" id="tip-daily"></div></div>' + dayPanel() + '</div>';
 
   if (d.processes.length){
     h += '<div class="sec"><h4>By program'+per+'</h4>' +
-         laneBox(d.processes, 'name') +
-         tableView(d.processes, [
-           {h:'Program', f:r=>r.name},
-           {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
-           {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)},
-           {h:'Packets', n:1, f:r=>Number(r.packets).toLocaleString()}]) + '</div>';
+         laneBox(d.processes, 'name') + '</div>';
   }
 
   if (d.hosts.length){
-    h += '<div class="sec"><h4>By host'+per+'</h4>' + laneBox(d.hosts, 'host') +
-         tableView(d.hosts, [
-           {h:'Host', f:r=>r.host},
-           {h:'First seen', f:r=>r.first_seen ? new Date(r.first_seen*1000).toLocaleDateString() : '—'},
-           {h:'▼ received', n:1, f:r=>hb(r.bytes_in)},
-           {h:'▲ sent', n:1, f:r=>hb(r.bytes_out)}]) + '</div>';
+    h += '<div class="sec"><h4>By host'+per+'</h4>' + laneBox(d.hosts, 'host') + '</div>';
   }
 
   if (!d.processes.length && !d.hosts.length)
@@ -5532,8 +5505,8 @@ function refreshTab(name){
    tab is clicked — it used to show the page-load numbers for hours, and a
    failed first fetch left "Loading history…" up for good. A redraw rebuilds
    the whole pane, so the automatic one happens only when the data changed,
-   waits while a column's tooltip is showing, and keeps any Table view you
-   opened, where you had scrolled to, and which control had keyboard focus.
+   waits while a column's tooltip is showing, and keeps More if you
+   opened it, where you had scrolled to, and which control had keyboard focus.
    It also waits while text in the pane is selected — while capturing, the
    data changes on every beat, so otherwise nothing could be copied from it.
    A newer request supersedes an older
@@ -5554,8 +5527,8 @@ function loadHistory(auto){
   }).catch(()=>{}).finally(() => { histInflight--; });
 }
 
-// Table views are remembered by their section's heading, not their position:
-// a section appearing (the first program recorded) would shift every index.
+// An opened <details> (More) is remembered by its section's heading, not its
+// position: a section appearing would shift every index.
 function histSecName(x){
   const h = x.closest('.sec') && x.closest('.sec').querySelector('h4');
   return h ? h.textContent : '';

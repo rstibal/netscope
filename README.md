@@ -765,7 +765,9 @@ The tab shows the totals, the daily chart, By program, By host and first
 contacts. While the history is shorter than the period chosen, the charts
 start at the first recorded day and the headings say how many days there are
 ("12 days so far") rather than leaving the earlier part empty. **Click a day** in the daily chart (or focus it and press Enter) to
-open it underneath: its 24 hours, and the programs and hosts that made it.
+open it underneath: its 24 hours, and the programs and hosts that made it,
+each as a lane of those 24 hours under the hours chart. Point at an hour to
+mark it through them and read that hour's figures.
 Click it again, or **Close**, to shut it. Each row in **By program** and **By
 host** is a lane of its traffic per day, drawn under the daily chart on the
 same day columns: sent above, received below. A program used a little every
@@ -776,8 +778,10 @@ share one log scale, so a bar twice as tall is not twice the bytes: read
 amounts from the figures, and days from the lanes. Anything less than a
 ten-thousandth of the busiest day is drawn at the smallest height. **More**, folded at the bottom, holds how
 many alerts were logged (the alerts themselves are on the Alerts tab),
-**Not recorded**, **Storage** and **Start with Windows**. Every chart has a table view underneath it, so no value is
-only reachable by hovering. While it's showing it refreshes itself every 10
+**Not recorded**, **Storage** and **Start with Windows**. Each row gives its total and its received/sent
+split as text; a day's figures are on its column (hover it, or focus it with
+the keyboard), and a row's packet count, and a host's first sighting, are on
+the tooltip of its name. While it's showing it refreshes itself every 10
 seconds, holding off while you have text in it selected.
 
 **History started over in 1.40.** Usage recorded before it had no record of
@@ -790,8 +794,8 @@ as new again.
 
 **Why a program or host has that many bytes.** Click a row under **By program**
 or **By host** (or focus it and press Enter) to open it. A program shows the
-hosts it talked to, each as a lane of its own on the same days, its last 72 hours as a strip
-of hourly cells (hover one for the hour and amount), and its five busiest
+hosts it talked to, each as a lane of its own on the same days, its last 72 hours as one more
+lane (point at an hour for its time and amount), and its five busiest
 hours with the host that moved most in each. A host shows the programs that
 contacted it, as lanes in the same way. Any traffic with no host detail is listed as **not broken
 down** and the parts always add up to the program's total. This comes from a
@@ -1159,6 +1163,18 @@ names.
 ---
 
 ## Version history
+
+**1.51.2** — History, tidied after the lanes. The **Table view** links under
+the daily chart, By program and By host are gone: the rows and the chart's
+tooltip already give those figures, and the two things only the tables had, a
+row's packet count and a host's first sighting, are now on the tooltip of its
+name. An opened day's **Programs** and **Hosts** are lanes of its 24 hours
+under the hours chart, and an opened program's **Last 72 hours** is a lane
+too, so the plain bars (with the cut for an outlier) and the strip of hourly
+cells no longer appear anywhere. Pointing at an hour of an opened day marks it
+through its lanes. The bars of the daily and hourly charts are square, with
+one pixel between sent and received; their tops used to be rounded, with a
+wider gap that looked like a border.
 
 **1.51.1** — A history shorter than the chosen period fills the charts. A
 week after installing, the 30- and 90-day views drew seven bars pushed to the

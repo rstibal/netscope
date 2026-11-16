@@ -979,11 +979,38 @@ class HistoryStore:
             "SUM(packets) AS packets FROM usage_pairs WHERE day = ?" + w +
             " GROUP BY host ORDER BY SUM(bytes_in+bytes_out) DESC LIMIT ?",
             [day] + a + [limit])
+        self._by_hour(programs, "name", "usage", "process", day, iface)
+        self._by_hour(hosts, "host", "usage_pairs", "host", day, iface)
         return {"day": day, "iface": iface,
                 "hours": [{"hour": h, "bytes_in": (hours.get(h) or {}).get("bytes_in") or 0,
                            "bytes_out": (hours.get(h) or {}).get("bytes_out") or 0}
                           for h in range(24)],
                 "programs": programs, "hosts": hosts}
+
+    def _by_hour(self, rows, key, table, col, day, iface=""):
+        """
+        Each row's bytes in each of the day's 24 hours, as `trend_in` and
+        `trend_out`: what `_with_trend` gives per day, for the lanes under an
+        opened day's hours chart (1.51.2).
+        """
+        names = [r[key] for r in rows]
+        if not names:
+            return rows
+        w, a = self._on(iface)
+        marks = ",".join("?" * len(names))
+        per_in = {n: [0] * 24 for n in names}
+        per_out = {n: [0] * 24 for n in names}
+        for r in self._q(
+                f"SELECT {col} AS n, hour, SUM(bytes_in) AS bi, SUM(bytes_out) AS bo "
+                f"FROM {table} WHERE day = ? AND {col} IN ({marks})" + w +
+                f" GROUP BY {col}, hour", [day] + names + a):
+            if r["n"] in per_in and 0 <= r["hour"] < 24:
+                per_in[r["n"]][r["hour"]] = r["bi"] or 0
+                per_out[r["n"]][r["hour"]] = r["bo"] or 0
+        for r in rows:
+            r["trend_in"] = per_in.get(r[key], [])
+            r["trend_out"] = per_out.get(r[key], [])
+        return rows
 
     def pairs_since(self):
         """First day with a per-host breakdown, or None if none is recorded."""

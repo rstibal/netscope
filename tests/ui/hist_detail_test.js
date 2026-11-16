@@ -51,13 +51,16 @@ const detail = {
 
   await bar('mystery.exe').click();
   const det = p.locator('.hdet[data-for="program|mystery.exe"]');
-  await det.locator('.hstrip').waitFor({timeout: 5000});
+  await det.locator('svg.lanes[data-axis="t"]').waitFor({timeout: 5000});
   const text = await det.innerText();
   check('opens, and asks for exactly that program', asked.join() === 'program|mystery.exe', asked.join());
   check('lists the hosts it talked to', /cdn\.example/.test(text) && /api\.example/.test(text), text);
   check('says how much has no host detail, and why', /not broken down/.test(text) && /60\.0 MB/.test(text) && /recorded from 2026-10-10/.test(text), text);
-  check('draws 72 hourly cells, the busy one lit', await det.locator('.hstrip i').count() === 72 &&
-        await det.locator('.hstrip i.on').count() === 1);
+  // 1.51.2: the last 72 hours are a lane like the rest, not a strip of cells.
+  const strip = det.locator('svg.lanes[data-axis="t"]');
+  check('draws its last 72 hours as a lane, the busy hour the only bar',
+        await strip.getAttribute('data-n') === '72' && await strip.locator('.lb').count() === 1 &&
+        await strip.locator('.lb.in').getAttribute('data-i') === '60' && await det.locator('.hstrip').count() === 0);
   check('names the busiest hour and its host', /busiest hours/i.test(text) && /cdn\.example/.test(text.split(/busiest hours/i)[1] || ''), text);
 
   // Its hosts are lanes on the daily chart's days, not bars.
@@ -66,7 +69,7 @@ const detail = {
     const cols = [...document.querySelectorAll('#cw-daily .hitrect')].map(cx);
     const box = document.querySelector(sel);
     return {cols, track: box.querySelectorAll('.track').length,
-            rows: [...box.querySelectorAll('.hbar.lane')].map(r => ({
+            rows: [...box.querySelectorAll('.lanebox[data-det] .hbar.lane')].map(r => ({
               n: r.querySelector('.nm').textContent, tot: r.querySelector('.tot').textContent,
               button: r.hasAttribute('data-k') || r.getAttribute('role') === 'button',
               bars: [...r.querySelectorAll('.lb.in')].map(b => ({i: +b.dataset.i, cx: cx(b)}))}))};
@@ -91,7 +94,7 @@ const detail = {
   await p.waitForTimeout(400);
   check('stays open across a redraw',
         await bar('mystery.exe').getAttribute('aria-expanded') === 'true' &&
-        await det.locator('.hstrip i').count() === 72);
+        await det.locator('svg.lanes[data-axis="t"]').getAttribute('data-n') === '72');
 
   // Keyboard.
   await bar('chrome.exe').focus();
@@ -109,7 +112,7 @@ const detail = {
   const hd = p.locator('.hdet[data-for="host|cdn.example"]');
   await hd.locator('.hbar').first().waitFor({timeout: 5000});
   check('a host lists the programs that contacted it', /mystery\.exe/.test(await hd.innerText()));
-  check('...and has no hourly strip', await hd.locator('.hstrip').count() === 0);
+  check('...and has no hourly lane', await hd.locator('svg.lanes[data-axis="t"]').count() === 0);
   const sh = await sub('.hdet[data-for="host|cdn.example"]');
   check('...as a lane on the days of the chart, not a bar',
         sh.rows.length === 1 && sh.track === 0 && sh.rows[0].bars.length === 1 &&

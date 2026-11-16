@@ -44,11 +44,8 @@ function payload(){
   // --- New data shows up by itself, keeping the reader's place.
   await p.evaluate(()=>{
     const pane = document.getElementById('p-history');
-    // Open More and By program's table view, as a reader would.
+    // Open More, as a reader would.
     $('histMore').open = true;
-    const s = [...pane.querySelectorAll('.sec')].find(x=>{
-      const h = x.querySelector('h4'); return h && /^By program/.test(h.textContent); });
-    s.querySelector('details').open = true;
     pane.scrollTop = 300;
   });
   const before = await p.evaluate(()=>document.getElementById('p-history').scrollTop);
@@ -61,8 +58,13 @@ function payload(){
                  .map(d=>d.closest('.sec').querySelector('h4').textContent);
     return {open, top: pane.scrollTop};
   });
-  check('an opened Table view stays open across the refresh',
-        kept.open.join()==='By program · last 30 days,More', JSON.stringify(kept.open));
+  check('an opened More stays open across the refresh',
+        kept.open.join()==='More', JSON.stringify(kept.open));
+  // 1.51.2: the Table views under the charts are gone; the lanes and the
+  // daily chart's tooltip carry the same figures.
+  check('no Table view is left on the tab',
+        await p.evaluate(()=>!document.querySelector('#p-history details.tvw, #p-history table.tv') &&
+                             !/Table view/.test($('p-history').textContent)));
   check('...and the scroll position is kept', before>0 && kept.top===before, before+' -> '+kept.top);
 
   // --- Nothing changed: the pane is not rebuilt at all.
