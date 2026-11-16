@@ -762,7 +762,9 @@ Usage recorded before 1.41 has no adapter, so it counts under **All adapters**
 only.
 
 The tab shows the totals, the daily chart, By program, By host and first
-contacts. While the history is shorter than the period chosen, the charts
+contacts. **By program** and **By host** start folded, each a line naming its
+busiest three; click one to open it. Open only By host and it sits right
+under the daily chart. What you open stays open until the page is reloaded. While the history is shorter than the period chosen, the charts
 start at the first recorded day and the headings say how many days there are
 ("12 days so far") rather than leaving the earlier part empty. **Click a day** in the daily chart (or focus it and press Enter) to
 open it underneath: its 24 hours, and the programs and hosts that made it,
@@ -1163,6 +1165,12 @@ names.
 ---
 
 ## Version history
+
+**1.52.0** — History's **By program** and **By host** start folded. With both
+open the tab was a long run of lanes, and By host sat well below the daily
+chart its days line up with. Each is now one line naming its busiest three;
+click it to open. What you open stays open across refreshes and a change of
+period or adapter, until the page is reloaded.
 
 **1.51.2** — History, tidied after the lanes. The **Table view** links under
 the daily chart, By program and By host are gone: the rows and the chart's

@@ -53,6 +53,9 @@ function dayData(day){
   await p.evaluate(() => showTab('history'));
   await p.waitForSelector('#cw-daily svg', {timeout: 30000});
 
+  // 1.52: By program and By host are folded at first; these checks are of the lanes.
+  await p.evaluate(async () => { document.querySelectorAll('#p-history details[data-fold]:not([open]) > summary').forEach(s => s.click()); await new Promise(r => setTimeout(r, 60)); });
+
   // -- trends ------------------------------------------------------------------------
   // 1.51.2: the daily chart's bars are square, with one pixel between sent
   // and received (they had rounded tops and a 2px gap that read as a border).

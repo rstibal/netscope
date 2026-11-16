@@ -41,7 +41,10 @@ const detail = {
     r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(detail[u.searchParams.get('kind')])});
   });
   await p.goto(process.argv[2]);
-  await p.waitForSelector('.hbar', {timeout: 30000});
+  await p.waitForSelector('#p-history details[data-fold]', {state: 'attached', timeout: 30000});
+
+  // 1.52: By program and By host are folded at first; these checks are of the lanes.
+  await p.evaluate(async () => { document.querySelectorAll('#p-history details[data-fold]:not([open]) > summary').forEach(s => s.click()); await new Promise(r => setTimeout(r, 60)); });
 
   const bar = name => p.locator('.hbar[data-k="program"][data-n="'+name+'"]');
   check('program bars are buttons, closed at first',

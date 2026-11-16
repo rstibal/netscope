@@ -33,7 +33,9 @@ let current = history(3);
      rows:[{name:'a.example', bytes_in:K, bytes_out:0, packets:1, trend_in:[0,0,K], trend_out:[0,0,0]}]})}));
   await p.goto(process.argv[2]);
   await p.evaluate(() => showTab('history'));
-  await p.waitForSelector('#p-history svg.lanes', {timeout: 30000});
+  await p.waitForSelector('#cw-daily svg', {timeout: 30000});
+
+  await p.evaluate(async () => { document.querySelectorAll('#p-history details[data-fold]:not([open]) > summary').forEach(s => s.click()); await new Promise(r => setTimeout(r, 60)); });
 
   const read = () => p.evaluate(() => {
     const box = e => { const q = e.getBoundingClientRect(); return {l: q.left, r: q.right, cx: q.left + q.width / 2}; };
@@ -65,7 +67,9 @@ let current = history(3);
   current = history(1);
   await p.reload();
   await p.evaluate(() => showTab('history'));
-  await p.waitForSelector('#p-history svg.lanes', {timeout: 30000});
+  await p.waitForSelector('#cw-daily svg', {timeout: 30000});
+
+  await p.evaluate(async () => { document.querySelectorAll('#p-history details[data-fold]:not([open]) > summary').forEach(s => s.click()); await new Promise(r => setTimeout(r, 60)); });
   g = await read();
   check('a single day draws, and is called 1 day', g.hits.length === 1 && g.lane.length === 1 &&
         g.heads.includes('Daily traffic · 1 day so far'), JSON.stringify(g.heads));
@@ -74,7 +78,9 @@ let current = history(3);
   current = history(7); current.days = 7;
   await p.reload();
   await p.evaluate(() => showTab('history'));
-  await p.waitForSelector('#p-history svg.lanes', {timeout: 30000});
+  await p.waitForSelector('#cw-daily svg', {timeout: 30000});
+
+  await p.evaluate(async () => { document.querySelectorAll('#p-history details[data-fold]:not([open]) > summary').forEach(s => s.click()); await new Promise(r => setTimeout(r, 60)); });
   g = await read();
   check('a range the history fills says last N days', g.heads.includes('Daily traffic · last 7 days'), JSON.stringify(g.heads));
 

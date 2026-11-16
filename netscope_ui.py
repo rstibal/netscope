@@ -701,6 +701,11 @@ svg.lanes.hot .lhot{display:inline}
 #p-history details.more>summary h4::before{content:'▸ ';color:var(--faint)}
 #p-history details.more[open]>summary h4::before{content:'▾ '}
 #p-history details.more>summary .hint{display:inline;margin-left:6px}
+/* By program / By host, folded: one line, the names cut short rather than wrapped. */
+#p-history details[data-fold]>summary{display:flex;align-items:baseline;white-space:nowrap}
+#p-history details[data-fold]>summary h4{flex:none;margin:0}
+#p-history details[data-fold]>summary .hint{min-width:0;overflow:hidden;text-overflow:ellipsis;margin-top:0}
+#p-history details[data-fold][open]>summary{margin-bottom:8px}
 .exrow{align-items:center}
 .exrow span:first-child{flex:1 1 auto;color:var(--fg);word-break:break-all}
 .exrow .kind{color:var(--faint);font:10.5px var(--sans);margin-left:8px}
@@ -2270,6 +2275,9 @@ $('p-history').addEventListener('pointerleave', () => {
    fetched when asked for, not shipped with every poll, and an open one is
    re-fetched after each redraw so it stays current and stays open. */
 const histOpen = new Set(), histDet = {};
+// Which of By program / By host is unfolded. Kept here, not read back from the
+// headings as More is: theirs carry the range, and change with it.
+const histFold = {prog: false, host: false};
 function hourLabel(day, hour){
   return new Date(day + 'T' + String(hour).padStart(2, '0') + ':00').toLocaleString([],
     {month: 'short', day: 'numeric', hour: 'numeric'});
@@ -2484,14 +2492,19 @@ function renderHistory(d){
        dailyChart(daily, {sel: selDay, width: (histChartsAt = histChartW())}) +
        '<div class="tip" id="tip-daily"></div></div>' + dayPanel() + '</div>';
 
-  if (d.processes.length){
-    h += '<div class="sec"><h4>By program'+per+'</h4>' +
-         laneBox(d.processes, 'name') + '</div>';
-  }
-
-  if (d.hosts.length){
-    h += '<div class="sec"><h4>By host'+per+'</h4>' + laneBox(d.hosts, 'host') + '</div>';
-  }
+  // Folded until asked for (1.52): with both lists open the tab was all
+  // lanes, and By host sat a screen below the chart its columns line up with.
+  // The folded line names the busiest few, so it still says something.
+  const fold = (id, title, rows, keyName) => {
+    const top = rows.slice(0, 3).map(r => String(r[keyName]));
+    return '<div class="sec"><details class="more" data-fold="' + id + '"' + (histFold[id] ? ' open' : '') +
+      '><summary><h4>' + title + per + '</h4><span class="hint">' +
+      esc(top.map(n => n.length > 28 ? n.slice(0, 27) + '…' : n).join(', ')) +
+      (rows.length > top.length ? ', …' : '') + '</span></summary>' +
+      laneBox(rows, keyName) + '</details></div>';
+  };
+  if (d.processes.length) h += fold('prog', 'By program', d.processes, 'name');
+  if (d.hosts.length) h += fold('host', 'By host', d.hosts, 'host');
 
   if (!d.processes.length && !d.hosts.length)
     h += '<div class="sec"><div class="hint">Nothing recorded in this period yet.</div></div>';
@@ -2571,6 +2584,8 @@ function renderHistory(d){
        ', storage, start with Windows</span></summary>' + more + '</details></div>';
 
   $('p-history').innerHTML = h;
+  $('p-history').querySelectorAll('details[data-fold]').forEach(x =>
+    x.ontoggle = () => { histFold[x.dataset.fold] = x.open; });
 
   document.querySelectorAll('#p-history [data-days]').forEach(b =>
     b.onclick = () => { histDays = Number(b.dataset.days); forgetDetails(); refreshTab('history'); });

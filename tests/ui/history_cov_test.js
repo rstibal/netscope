@@ -47,6 +47,10 @@ function history(iface){
     text: $('p-history').textContent,
     reset: !!$('histReset'),
     moreOpen: $('histMore') && $('histMore').open,
+    folds: [...document.querySelectorAll('#p-history details[data-fold]')].map(x => ({
+      id: x.dataset.fold, open: x.open, said: x.querySelector('summary .hint').textContent,
+      lanes: x.querySelectorAll('.hbar[data-k]').length,
+      h: x.getBoundingClientRect().height})),
   }));
   check('totals are the range\'s, not all time', t.kpi[0].includes('4.0 GB'), t.kpi[0]);
   check('...and so is the program count', /Programs3/.test(t.kpi[3]) && /7 hosts/.test(t.kpi[3]), t.kpi[3]);
@@ -57,6 +61,11 @@ function history(iface){
   check('nothing on the tab mentions capture time', !/Captured|of 1d/.test(t.text));
   check('the reset is explained', t.reset);
   check('More is folded at first', t.moreOpen === false);
+  // 1.52: so are By program and By host, each a line naming its busiest.
+  check('By program and By host are folded at first',
+        t.folds.map(f => f.id).join() === 'prog,host' && t.folds.every(f => !f.open && f.lanes > 0 && f.h < 40),
+        JSON.stringify(t.folds));
+  check('...each naming its busiest while folded', t.folds.every(f => f.said.length > 0), JSON.stringify(t.folds));
   check('the alert count is inside it; busy hours and sessions are gone (1.44)',
         await p.evaluate(() => $('histMore').contains($('alertsJump')) && !$('cw-week') &&
           ![...$('p-history').querySelectorAll('h4')].some(h => /Busy hours|Recent sessions/.test(h.textContent)) &&
@@ -81,6 +90,24 @@ function history(iface){
   await p.evaluate(() => { histSeen = ''; return loadHistory(true); });
   await p.waitForTimeout(300);
   check('More stays open across a refresh', await p.evaluate(() => $('histMore').open));
+  // By host opened alone sits right under the daily chart, and stays open
+  // across a refresh and a change of range (its heading changes with it).
+  await p.click('#p-history details[data-fold="host"] > summary');
+  const foldState = () => p.evaluate(() => [...document.querySelectorAll('#p-history details[data-fold]')].map(x => x.dataset.fold + ':' + x.open).join());
+  check('opening By host leaves By program folded', await foldState() === 'prog:false,host:true', await foldState());
+  check('...and its lanes can be seen', await p.locator('#p-history details[data-fold="host"] .hbar[data-k]').first().isVisible());
+  await p.evaluate(() => { histSeen = ''; return loadHistory(true); });
+  await p.waitForTimeout(300);
+  check('...across a refresh', await foldState() === 'prog:false,host:true', await foldState());
+  await p.click('#p-history [data-days="30"]');
+  await p.waitForFunction(() => document.querySelector('#p-history [data-days="30"].on'));
+  await p.waitForTimeout(300);
+  check('...and across a change of range', await foldState() === 'prog:false,host:true', await foldState());
+  await p.click('#p-history details[data-fold="host"] > summary');
+  await p.click('#p-history [data-days="7"]');
+  await p.waitForFunction(() => document.querySelector('#p-history [data-days="7"].on'));
+  await p.waitForTimeout(300);
+  check('folded again, it stays folded', await foldState() === 'prog:false,host:false', await foldState());
   check('the VPN erase button is gone', !(await p.$('#histVpn')));
 
   // History's own adapter filter: every adapter by default, one when picked.

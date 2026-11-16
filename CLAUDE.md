@@ -463,6 +463,17 @@ lanes too (`detail()` rows carry the same per-day figures, for that pair
 only), pulled back over the detail's 24px indent so their days still line
 up, on a scale of their own.
 
+**By program and By host start folded (1.52).** Rob liked the lanes but found
+the tab busy with both lists open, and wanted By host readable against the
+daily chart without By program between them. Each is a `<details data-fold>`
+whose folded line names its busiest three. Which are open is `histFold`, not
+read back from the headings the way More's state is: these headings carry
+the range and adapter, so a change of either would fold them again. It is
+per page load, like More, not saved: folded is the default he asked for. UI
+tests that touch the lanes unfold them first; a closed `<details>` still has
+layout boxes in Chrome, so geometry checks pass folded and only the pointer
+ones fail.
+
 **Every list on the History tab is lanes; there are no table views (1.51.2).**
 After 1.51 the tab still had three older drawings: plain bars (`hbars`, with
 the outlier cut) inside an opened day, a strip of hourly cells for a
