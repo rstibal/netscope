@@ -1,8 +1,9 @@
 const { chromium } = require('playwright');
 const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
 
-// The Flows view (1.46): programs left, hosts right, one band per pair as
-// thick as its bytes. Drawn from /api/timeline, answered here with a fixed
+// The Flows view (1.46; strings since 1.54): programs left, hosts right, one
+// thin string per pair, 1-5 px by the square root of its bytes, every host on
+// a row of its own. Drawn from /api/timeline, answered here with a fixed
 // minute so sizes and order are deterministic.
 const NOW = Math.floor(Date.now()/1000);
 const KEYS = [
@@ -18,6 +19,15 @@ const KEYS = [
 for (let i = 0; i < 20; i++)
   KEYS.push(['small' + String(i).padStart(2, '0') + '.exe', 'h' + i + '.example.net', '203.0.113.' + (i + 1),
              '10.0.0.2', 'out', 'TLS', 443, 'eth0', 0]);
+// More hosts than FL_MAX (150), all from one program.
+function crowd(){
+  const keys = [], buckets = [];
+  for (let i = 0; i < 160; i++){
+    keys.push(['crowd.exe', 'c' + i + '.example.org', '198.51.100.' + (i % 250), '10.0.0.2', 'out', 'TLS', 443, 'eth0', 0]);
+    buckets.push([NOW - 160 + i, [[i, 1000 + i, 1, 1]]]);
+  }
+  return {gen: 4, full: true, kfrom: 0, keys, now: NOW + 0.5, newest: NOW, offline: false, retain: 3600, buckets};
+}
 function payload(){
   const secs = new Map();
   const add = (t, k, b, p) => { if (!secs.has(t)) secs.set(t, []); secs.get(t).push([k, b, p, 1]); };
@@ -40,7 +50,8 @@ function payload(){
   const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
   await p.goto(process.argv[2]);
   await p.waitForFunction(()=>document.querySelectorAll('#rows tr').length>5,null,{timeout:90000});
-  await p.route('**/api/timeline*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(payload())}));
+  let feed = payload;
+  await p.route('**/api/timeline*', r => r.fulfill({status:200, contentType:'application/json', body: JSON.stringify(feed())}));
 
   await p.click('#vFlow');
   await p.click('#flWin button[data-w="60"]');
@@ -58,39 +69,50 @@ function payload(){
   const read = () => p.evaluate(() => {
     const side = s => [...document.querySelectorAll('#flSvg .fln[data-s="' + s + '"]')].map(g => ({
       name: FL.nodes[s][Number(g.dataset.i)].name, lump: g.classList.contains('lump'),
-      h: Number(g.querySelector('rect').getAttribute('height'))}));
+      y: g.getBBox().y + g.getBBox().height / 2}));
+    const strings = [...document.querySelectorAll('#flSvg .flb:not(.hit)')];
     return {p: side('p'), h: side('h'), note: $('flNote').textContent,
             svgH: $('flSvg').getBoundingClientRect().height, wrapH: $('flWrap').clientHeight,
+            scrollH: $('flWrap').scrollHeight,
+            strings: strings.length, hits: document.querySelectorAll('#flSvg .flb.hit').length,
+            widths: Object.fromEntries(strings.map(e => { const m = FL.pairs[Number(e.dataset.m)];
+              return [FL.nodes.p[m.a].name + '>' + FL.nodes.h[m.b].name, parseFloat(e.style.strokeWidth)]; })),
             pairs: FL.pairs.map(m => FL.nodes.p[m.a].name + '>' + FL.nodes.h[m.b].name + ':' + (m.out + m.in))};
   });
   let r = await read();
   check('programs busiest first', r.p[0].name === 'chrome.exe' && r.p[1].name === 'Code.exe', JSON.stringify(r.p.slice(0, 3)));
-  check('hosts busiest first', r.h[0].name === 'github.com' && r.h[1].name === 'example.com', JSON.stringify(r.h.slice(0, 3)));
+  check('hosts are grouped under the program that sends them most, busiest first',
+        r.h[0].name === 'github.com' && r.h[1].name === 'example.com' &&
+        r.h.slice(2).every((n, i) => n.name === 'h' + (19 - i) + '.example.net'), JSON.stringify(r.h.map(n => n.name)));
   check('the VPN\'s encrypted copy is left out, and the note says how much',
         !r.p.some(n => n.name === 'vpnclient.exe') && /VPN copy left out: 2\.9 MB/.test(r.note), r.note);
   check('multicast is not a host being talked to', !r.h.some(n => /239\./.test(n.name)) &&
         !r.p.some(n => n.name === 'svchost.exe'), JSON.stringify(r.h.map(n => n.name)));
-  const lump = r.p[r.p.length - 1];
-  check('programs that don\'t fit are one "other" node, at the end', lump.lump && /^\d+ other programs$/.test(lump.name), JSON.stringify(lump));
-  check('...and the drawing fits the height', r.svgH <= r.wrapH + 1, JSON.stringify([r.svgH, r.wrapH]));
-  // Linear in bytes: chrome (720 KB) against Code (300 KB).
-  const ratio = r.p[0].h / r.p[1].h;
-  check('node height follows bytes, linearly', Math.abs(ratio - 720 / 300) < 0.1, String(ratio));
-  const tiny = await p.evaluate(() => Math.min(...[...document.querySelectorAll('#flSvg .flb')].map(e => e.getBBox().height)));
-  check('...and the smallest band is still drawn', tiny >= 1.4, String(tiny));
-  const two = await p.evaluate(() => [...document.querySelectorAll('#flSvg .flb')]
-    .filter(e => { const m = FL.pairs[Number(e.dataset.m)]; return FL.nodes.p[m.a].name === 'chrome.exe' && FL.nodes.h[m.b].name === 'github.com'; })
-    .map(e => e.classList.contains('out') ? 'out' : 'in').join());
-  check('a pair is drawn sent then received', two === 'out,in', two);
+  check('every program and every host has a row of its own, no "other" node',
+        r.p.length === 22 && r.h.length === 22 && !r.p.some(n => n.lump) && !r.h.some(n => n.lump),
+        JSON.stringify([r.p.length, r.h.length]));
+  check('one string per pair, each with a wider copy to point at',
+        r.strings === r.pairs.length && r.hits === r.pairs.length && r.strings === 23, JSON.stringify([r.strings, r.hits]));
+  // Square root of the bytes, 1 to 5 px: chrome>github (600 KB) is the
+  // busiest; Code>github (300 KB) is 1 + 4*sqrt(1/2).
+  const w = r.widths;
+  check('the busiest string is 5 px', Math.abs(w['chrome.exe>github.com'] - 5) < 0.01, JSON.stringify(w));
+  check('...others by the square root of their bytes',
+        Math.abs(w['Code.exe>github.com'] - (1 + 4 * Math.sqrt(0.5))) < 0.02, String(w['Code.exe>github.com']));
+  check('...and the smallest is still at least 1 px', Math.min(...Object.values(w)) >= 1, JSON.stringify(w));
+  const progY = Object.fromEntries(r.p.map(n => [n.name, n.y])), hostY = Object.fromEntries(r.h.map(n => [n.name, n.y]));
+  check('a program sits level with the middle of its hosts',
+        Math.abs(progY['chrome.exe'] - (hostY['github.com'] + hostY['example.com']) / 2) < 2 &&
+        Math.abs(progY['small05.exe'] - hostY['h5.example.net']) <= 10, JSON.stringify([progY, hostY]));
 
   // Hover: highlight, a tip, and no redraw underneath the pointer.
   const node = p.locator('#flSvg .fln[data-s="p"]').first();
   await node.hover();
   const hv = await p.evaluate(() => ({focus: $('flSvg').classList.contains('focus'),
-    hot: document.querySelectorAll('#flSvg .flb.hot').length,
+    hot: document.querySelectorAll('#flSvg .flb.hot:not(.hit)').length,
     tip: $('flTip').classList.contains('on') ? $('flTip').textContent : ''}));
-  check('hovering a program lights its bands and names its hosts',
-        hv.focus && hv.hot === 3 && /chrome\.exe/.test(hv.tip) && /Hosts: github\.com 83%, example\.com 17%/.test(hv.tip), JSON.stringify(hv));
+  check('hovering a program lights its strings and names its hosts',
+        hv.focus && hv.hot === 2 && /chrome\.exe/.test(hv.tip) && /Hosts: github\.com 83%, example\.com 17%/.test(hv.tip), JSON.stringify(hv));
   const before = await p.evaluate(() => $('flSvg').innerHTML);
   await p.evaluate(() => flDraw(true));
   check('...and the automatic redraw waits while the pointer is on it',
@@ -117,9 +139,18 @@ function payload(){
         await p.inputValue('#find'));
   await p.click('#findClear');
   await p.mouse.move(5, 5);
-  // The lump is not a filter.
-  await p.evaluate(() => document.querySelector('#flSvg .fln.lump').dispatchEvent(new MouseEvent('click', {bubbles: true})));
-  check('the "other" node is not clickable', await p.inputValue('#find') === '');
+  // A 1 px string can be pointed at through its wider copy.
+  const thin = await p.evaluate(() => {
+    const e = [...document.querySelectorAll('#flSvg .flb.hit')].find(e => { const m = FL.pairs[Number(e.dataset.m)];
+      return FL.nodes.p[m.a].name === 'small00.exe'; });
+    e.scrollIntoView({block: 'center'});
+    const l = e.getTotalLength(), pt = e.getPointAtLength(l / 2), m = e.getScreenCTM();
+    return {x: pt.x * m.a + m.e, y: pt.y * m.d + m.f + 3};
+  });
+  await p.mouse.move(thin.x, thin.y);
+  check('pointing 3 px off a thin string still finds it', /small00\.exe ⇄ h0\.example\.net/.test(
+    await p.evaluate(() => $('flTip').classList.contains('on') ? $('flTip').textContent : '')));
+  await p.mouse.move(5, 5);
 
   // A field the totals don't keep.
   await p.fill('#find', 'len > 100');
@@ -128,6 +159,22 @@ function payload(){
         await p.evaluate(() => $('flNote').classList.contains('warn') && !document.querySelector('#flSvg .flb') &&
                                $('flEmpty').style.display === 'block'));
   await p.click('#findClear');
+
+  // Past FL_MAX hosts, the rest are one "other" row, and the pane scrolls.
+  feed = crowd;
+  await p.evaluate(() => { TL.gen = -1; });
+  await p.click('#flWin button[data-w="300"]');
+  await p.waitForFunction(() => FL.nodes.h.length === 150, null, {timeout: 15000}).catch(() => {});
+  r = await read();
+  const last = r.h[r.h.length - 1];
+  check('past 150 hosts the rest are one "other" row, at the end',
+        r.h.length === 150 && last.lump && last.name === '11 other hosts', JSON.stringify([r.h.length, last]));
+  check('...and the pane scrolls rather than squeezing rows', r.scrollH > r.wrapH + 100 &&
+        Math.abs((r.h[1].y - r.h[0].y) - 18) < 0.5, JSON.stringify([r.scrollH, r.wrapH]));
+  await p.evaluate(() => document.querySelector('#flSvg .fln.lump').dispatchEvent(new MouseEvent('click', {bubbles: true})));
+  check('the "other" row is not clickable', await p.inputValue('#find') === '');
+  feed = payload;
+  await p.evaluate(() => { TL.gen = -1; });
 
   // One window for both views; the view is remembered.
   await p.click('#flWin button[data-w="900"]');

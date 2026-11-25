@@ -276,11 +276,10 @@ body.tlmode #colsBtn,body.tlmode #resetCols,body.tlmode #searchAll{display:none 
 #flview{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
 .flwrap{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;position:relative}
 #flSvg{display:block;width:100%}
-.flb{opacity:.42;cursor:pointer;transition:opacity .08s}
-.flb.out{fill:var(--series-out)}
-.flb.in{fill:var(--series-in)}
-#flSvg.focus .flb{opacity:.1}
-#flSvg.focus .flb.hot,.flb:hover{opacity:.85}
+.flb{fill:none;stroke:var(--accent);opacity:.5;cursor:pointer;transition:opacity .08s}
+.flb.hit{stroke:transparent;stroke-width:9px;opacity:1}
+#flSvg.focus .flb:not(.hit){opacity:.08}
+#flSvg.focus .flb.hot:not(.hit){opacity:1}
 .fln rect{fill:var(--fg);opacity:.5}
 .fln{cursor:pointer;outline:none}
 .fln.lump{cursor:default}
@@ -909,7 +908,7 @@ back through the table while the capture continues."><input type="checkbox"
         </span>
         <span class="tlnote" id="flNote"></span>
         <span class="spacer"></span>
-        <div class="legend"><span><i style="background:var(--series-out)"></i>▲ sent</span><span><i style="background:var(--series-in)"></i>▼ received</span></div>
+        <span class="legend">Busier pairs draw heavier · point at one for sent and received</span>
       </div>
       <div class="flwrap" id="flWrap"><svg id="flSvg" role="img" aria-label="Traffic between programs and hosts"></svg>
         <div class="empty" id="flEmpty" style="display:none"></div></div>
@@ -4341,19 +4340,22 @@ $('tlCanvas').addEventListener('mousemove', e => {
 $('tlCanvas').addEventListener('mouseleave', () => $('tlTip').classList.remove('on'));
 try { new ResizeObserver(() => tlDraw()).observe($('tlScroll')); } catch (e){}
 
-/* ---------------- flows (1.46) ----------------
-   Programs on the left, hosts on the right, one band per pair as thick as
-   the bytes between them in the window, the sent part above the received.
-   Drawn from the Timeline's totals, which the server keeps per second, so
-   it follows the same window, filter and adapter.
+/* ---------------- flows (1.46, strings since 1.54) ----------------
+   Programs on the left, hosts on the right, one string per pair: which
+   program talks to which host. Drawn from the Timeline's totals, which the
+   server keeps per second, so it follows the same window, filter and
+   adapter.
 
-   Bytes are linear here, unlike the Timeline: the question is where the
-   traffic goes, and a log scale would make a download and a check-in look
-   alike. Every band still gets a hairline, so nothing that moved vanishes.
+   A string is 1 to FL_THICK px by the square root of its bytes. Until 1.54
+   a band was as thick as its bytes, linearly, and the browser's band took
+   most of the height while a dozen hosts fit and the rest were one "other"
+   row. Every host gets a row now (up to FL_MAX, then scrolling stops being
+   useful), grouped under the program that sends it most, so the strings fan
+   out instead of crossing. Sent and received are on the tip, not the string.
    The VPN's encrypted copy is left out, as from every total: otherwise the
-   VPN client would be the biggest band, carrying everything twice.
-   Multicast and broadcast are not a host being talked to. */
-const FL_ROW = 18, FL_GAP = 4, FL_PAD = 10, FL_NODE = 10, FL_MIN = 1.5;
+   VPN client would carry everything twice. Multicast and broadcast are not
+   a host being talked to. */
+const FL_ROW = 18, FL_PAD = 10, FL_NODE = 10, FL_MAX = 150, FL_THICK = 5;
 var FL = {nodes: {p: [], h: []}, pairs: [], order: {p: [], h: []}, sig: '', at: 0,
           hovering: false, stale: false, tunnel: 0, total: 0};
 
@@ -4387,14 +4389,14 @@ function flBuild(N){
   const sig = TL.win + '|' + $('find').value + '|' + ifaceTab + '|' + N;
   const keep = sig === FL.sig && Date.now() - FL.at < 10000;
   if (!keep){ FL.sig = sig; FL.at = Date.now(); }
-  const side = (m, s, what) => {
+  // group, if given, comes first (hosts under their program); within it the
+  // held order, then bytes.
+  const side = (m, s, what, group) => {
     const all = [...m.values()].sort((a, b) => tot(b) - tot(a));
-    const top = all.length > N ? all.slice(0, N - 1) : all;
-    if (keep){
-      const rank = new Map(FL.order[s].map((n, i) => [n, i]));
-      const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + all.indexOf(n);
-      top.sort((a, b) => at(a) - at(b));
-    }
+    const top = all.length > N ? all.slice(0, N - 1) : all.slice();
+    const rank = keep ? new Map(FL.order[s].map((n, i) => [n, i])) : new Map();
+    const at = n => rank.has(n.name) ? rank.get(n.name) : 1e9 + all.indexOf(n);
+    top.sort((a, b) => (group ? group(a) - group(b) : 0) || at(a) - at(b));
     FL.order[s] = top.map(n => n.name);
     const rest = all.slice(top.length);
     if (rest.length){
@@ -4406,7 +4408,16 @@ function flBuild(N){
     top.forEach((n, i) => { n.i = i; n.side = s; if (n.names) for (const x of n.names) idx.set(x, i); else idx.set(n.name, i); });
     return {list: top, idx};
   };
-  const P = side(progs, 'p', 'programs'), H = side(hosts, 'h', 'hosts');
+  const P = side(progs, 'p', 'programs');
+  // Hosts follow the programs: each under the program sending it the most
+  // (by its place on the left), busiest first within that program's group.
+  const lead = new Map();
+  for (const pr of pairs.values()){
+    const a = P.idx.get(pr.p), l = lead.get(pr.h);
+    if (!l || tot(pr) > l.b || (tot(pr) === l.b && a < l.a)) lead.set(pr.h, {a, b: tot(pr)});
+  }
+  const H = side(hosts, 'h', 'hosts', n => lead.get(n.name).a);
+  for (const n of H.list) n.lead = n.lump ? null : lead.get(n.name).a;
   // Pairs folded onto the nodes drawn: two programs in "other" talking to
   // one host are one band.
   const merged = new Map();
@@ -4423,26 +4434,28 @@ function flBuild(N){
   return bad;
 }
 
-// Pixel layout for a bytes-to-pixels scale k. A band is as thick at both
-// ends; a node is as tall as its bands; a node keeps a label's height.
-function flLayout(k, top){
-  const th = m => Math.max(FL_MIN, (m.out + m.in) * k);
-  let bottom = top;
-  for (const s of ['p', 'h']){
-    const other = s === 'p' ? 'b' : 'a', me = s === 'p' ? 'a' : 'b';
-    let y = top;
-    for (const n of FL.nodes[s]){
-      const mine = FL.pairs.filter(m => m[me] === n.i).sort((x, z) => x[other] - z[other]);
-      const h = mine.reduce((a, m) => a + th(m), 0);
-      const room = Math.max(h, FL_ROW);
-      n.y = y + (room - h) / 2; n.h = h;
-      let c = n.y;
-      for (const m of mine){ m[s + 'y'] = c; m.t = th(m); c += m.t; }
-      y += room + FL_GAP;
-    }
-    bottom = Math.max(bottom, y - FL_GAP);
-  }
-  return bottom;
+// Row centres. A host has a row of its own, in order; a program sits at the
+// middle of the hosts it leads (or just below the one before), at least a
+// row from its neighbours, and the column is pushed back up if it ran past
+// the bottom. Returns the drawing's height.
+function flLayout(avail){
+  const P = FL.nodes.p, Hs = FL.nodes.h;
+  Hs.forEach((n, i) => { n.y = FL_PAD + i * FL_ROW + FL_ROW / 2; });
+  const H = Math.max(avail, 2 * FL_PAD + Math.max(P.length, Hs.length) * FL_ROW);
+  // A host's group is the program it was ordered under (flBuild's lead).
+  const mine = P.map(() => []);
+  Hs.forEach(n => { if (n.lead != null && mine[n.lead]) mine[n.lead].push(n.y); });
+  let prev = -Infinity;
+  P.forEach((n, i) => {
+    const g = mine[i];
+    const want = g.length ? (g[0] + g[g.length - 1]) / 2
+      : (prev === -Infinity ? FL_PAD + FL_ROW / 2 : prev + FL_ROW);
+    n.y = Math.max(want, prev + FL_ROW, FL_PAD + FL_ROW / 2);
+    prev = n.y;
+  });
+  let next = H - FL_PAD + FL_ROW / 2;
+  for (let i = P.length - 1; i >= 0; i--){ P[i].y = Math.min(P[i].y, next - FL_ROW); next = P[i].y; }
+  return H;
 }
 
 function flTrunc(s, n){ return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s; }
@@ -4456,8 +4469,7 @@ function flDraw(auto){
   const wrap = $('flWrap'), svg = $('flSvg');
   const W = Math.max(320, Math.floor(wrap.clientWidth));
   const avail = Math.max(200, Math.floor(wrap.clientHeight));
-  const N = Math.max(4, Math.min(15, Math.floor((avail - 2 * FL_PAD) / (FL_ROW + FL_GAP))));
-  const bad = flBuild(N);
+  const bad = flBuild(FL_MAX);
   const span = {60: 'minute', 300: '5 minutes', 900: '15 minutes', 3600: 'hour'}[TL.win];
   const note = $('flNote');
   const np = FL.nodes.p.length, nh = FL.nodes.h.length;
@@ -4481,19 +4493,7 @@ function flDraw(auto){
   svg.classList.remove('focus');
   if (none){ svg.innerHTML = ''; svg.style.height = '0px'; return; }
 
-  // The largest scale at which both columns fit the height; the floors
-  // (hairline bands, label-high nodes) make it a search, not a division.
-  // With only a few nodes, filling the height turned the bands into slabs:
-  // about two label rows per node is plenty.
-  const most = Math.max(FL.nodes.p.length, FL.nodes.h.length);
-  const room = Math.min(avail - 2 * FL_PAD, most * (FL_ROW + FL_GAP) * 2);
-  let lo = 0, hi = room / Math.max(1, FL.total);
-  if (flLayout(hi, FL_PAD) - FL_PAD <= room) lo = hi;
-  else for (let i = 0; i < 24; i++){
-    const mid = (lo + hi) / 2;
-    if (flLayout(mid, FL_PAD) - FL_PAD <= room) lo = mid; else hi = mid;
-  }
-  const H = Math.max(avail, Math.ceil(flLayout(lo, FL_PAD) + FL_PAD));
+  const H = flLayout(avail);
 
   // Labels take up to a quarter each side, the bands what is left.
   const lw = Math.round(Math.min(300, Math.max(120, W * 0.25)));
@@ -4501,27 +4501,29 @@ function flDraw(auto){
   const chars = Math.floor((lw - 14) / 7.2);
   const out = [];
   const f = v => v.toFixed(1);
+  // 1 px to FL_THICK px by the square root of the bytes, so the busiest
+  // pairs read a little heavier without one of them filling the pane.
+  const most = Math.max(1, ...FL.pairs.map(m => m.out + m.in));
+  const curve = m => {
+    const ya = FL.nodes.p[m.a].y, za = FL.nodes.h[m.b].y;
+    return 'M' + x1 + ' ' + f(ya) + 'C' + f(xm) + ' ' + f(ya) + ' ' + f(xm) + ' ' + f(za) + ' ' + x2 + ' ' + f(za);
+  };
   FL.pairs.forEach((m, i) => {
-    const tt = m.out + m.in, so = m.t * m.out / tt;
-    // The sent part, then the received, at both ends.
-    for (const [cls, a, b] of [['out', 0, so], ['in', so, m.t]]){
-      if (b - a <= 0) continue;
-      const ya = m.py + a, yb = m.py + b, za = m.hy + a, zb = m.hy + b;
-      out.push('<path class="flb ' + cls + '" data-m="' + i + '" d="M' + x1 + ' ' + f(ya) +
-        'C' + f(xm) + ' ' + f(ya) + ' ' + f(xm) + ' ' + f(za) + ' ' + x2 + ' ' + f(za) +
-        'L' + x2 + ' ' + f(zb) + 'C' + f(xm) + ' ' + f(zb) + ' ' + f(xm) + ' ' + f(yb) + ' ' + x1 + ' ' + f(yb) + 'Z"/>');
-    }
+    m.w = 1 + (FL_THICK - 1) * Math.sqrt((m.out + m.in) / most);
+    out.push('<path class="flb" data-m="' + i + '" style="stroke-width:' + m.w.toFixed(2) + 'px" d="' + curve(m) + '"/>');
   });
+  // A wider, invisible copy on top of each, so a 1 px string can be pointed at.
+  FL.pairs.forEach((m, i) => out.push('<path class="flb hit" data-m="' + i + '" d="' + curve(m) + '"/>'));
   for (const s of ['p', 'h']){
     for (const n of FL.nodes[s]){
-      const x = s === 'p' ? xl : xr, cy = n.y + n.h / 2;
+      const x = s === 'p' ? xl : xr, cy = n.y, nh = FL_ROW - 8;
       const total = hb(n.out + n.in);
       const name = flTrunc(n.name, chars - total.length - 2);
       const sys = !n.lump && /^[-(]/.test(n.name);
       const tx = s === 'p' ? x - 8 : x + FL_NODE + 8;
       out.push('<g class="fln' + (n.lump ? ' lump' : '') + (sys ? ' sys' : '') + '" data-s="' + s +
         '" data-i="' + n.i + '"' + (n.lump ? '' : ' tabindex="0"') + '>' +
-        '<rect x="' + x + '" y="' + f(n.y) + '" width="' + FL_NODE + '" height="' + f(Math.max(n.h, 1)) + '"/>' +
+        '<rect x="' + x + '" y="' + f(cy - nh / 2) + '" width="' + FL_NODE + '" height="' + nh + '"/>' +
         '<rect x="' + (s === 'p' ? 0 : x) + '" y="' + f(cy - FL_ROW / 2) + '" width="' + (lw + FL_NODE) +
         '" height="' + FL_ROW + '" style="opacity:0"/>' +
         '<text x="' + tx + '" y="' + f(cy) + '" dominant-baseline="central" text-anchor="' +
@@ -4642,8 +4644,8 @@ try { new ResizeObserver(() => flDraw()).observe($('flWrap')); } catch (e){}
 
 /* ---------------- balance (1.47) ----------------
    One row per program (or host): bytes sent to the left of a centre line,
-   received to the right, the biggest sender first. Flows shows where the
-   traffic goes; this shows which way, so a backup, a sync or anything else
+   received to the right, the biggest sender first. Flows shows who talks
+   to whom; this shows which way, so a backup, a sync or anything else
    sending far more than it receives is at the top with its ratio.
 
    Drawn from the Timeline's totals, as Flows is, with the same window,

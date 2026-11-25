@@ -310,16 +310,25 @@ made every lane read as two rows. Every other lane (and its label) is shaded
 instead; the empty pixel row where sent and received meet marks the middle.
 The time lines are drawn under the bands at half strength.
 
-**Flows is drawn from the Timeline's totals, linear, and still under the
-pointer (1.46).** It needs nothing the Timeline's per-second keys don't
-have, so it has no endpoint of its own; the key gained a ninth field, the
-VPN-copy flag, so Flows can leave that copy out as every total does (the
-Timeline still draws it, being on that wire). Bytes are linear, not log as on
-the Timeline: the question is where bandwidth goes. Every band has a 1.5px
-floor and every node a label's height, so the scale is found by a search,
-not a division. Height is capped at about two rows per node: with three
-nodes, filling the pane made slabs. The automatic redraw waits while the
-pointer is over it, for the reason the Alerts pane does.
+**Flows is drawn from the Timeline's totals, and still under the pointer
+(1.46).** It needs nothing the Timeline's per-second keys don't have, so it
+has no endpoint of its own; the key gained a ninth field, the VPN-copy flag,
+so Flows can leave that copy out as every total does (the Timeline still
+draws it, being on that wire). The automatic redraw waits while the pointer
+is over it, for the reason the Alerts pane does.
+
+**Flows answers who talks to whom, not where the bytes go (1.54).** Until
+1.54 a band was as thick as its bytes, linearly; on Rob's machine the
+browser's band filled most of the pane and a dozen hosts fit before "N other
+hosts". He asked for the program-to-host links instead, with bandwidth on
+hover. So a pair is a string, 1 to `FL_THICK` (5) px by the square root of its
+bytes (he picked that over all-alike from a mock), every host has an 18px row
+and the pane scrolls (`FL_MAX` 150, then one "other" row), and sent/received
+are on the tip, not two colours. Hosts are grouped under the program sending
+them most and each program sits level with its group, so the strings fan out
+instead of crossing. Each string has a 9px invisible `.flb.hit` copy on top,
+because a 1px stroke can't be pointed at. Don't go back to thickness-as-bytes
+here; Balance and Talkers answer "how much".
 
 **Balance is sorted by bytes sent, on one scale, and shares the Timeline's
 settings (1.47).** It is drawn from the Timeline's totals the way Flows is,

@@ -408,32 +408,33 @@ table.
 
 ### Flows
 
-**Flows**, beside Timeline, shows where the traffic is going right now:
-programs down the left, hosts down the right, and a band between each program
-and each host it talked to, as thick as the bytes between them. Each band is
-two colours: the **sent** part above, the **received** part below.
+**Flows**, beside Timeline, shows which program is talking to which host right
+now: programs down the left, hosts down the right, and a string between each
+program and each host it talked to.
 
 - **1 min / 5 min / 15 min / 1 hour** sets the span. It is the same setting as
   the Timeline's, and comes from the same per-second totals.
-- Thickness is linear in bytes, unlike the Timeline's log scale: the question
-  here is where the bandwidth goes, and a log scale makes a download and a
-  check-in look alike. Every band still gets a hairline, so nothing that moved
-  disappears.
-- The busiest programs and hosts that fit the height are drawn, busiest at the
-  top; the rest are folded into **N other programs** and **N other hosts** at
-  the bottom. The order holds for ten seconds at a time, as the Timeline's
-  lanes do.
+- A string is thin, 1 to 5 px, growing with the square root of its bytes, so
+  the busiest pairs read a little heavier without one of them filling the
+  view. Each name carries its total; **hover** a string for its bytes sent and
+  received and its packets.
+- Every host gets a row of its own, and the view scrolls when there are more
+  than fit (past 150, the rest are one **N other hosts** row). Hosts are
+  grouped under the program that sends them the most, busiest program first
+  and busiest host first within it, and each program sits level with its
+  hosts, so the strings fan out rather than cross. The order holds for ten
+  seconds at a time, as the Timeline's lanes do.
 - The VPN's encrypted copy is left out, as it is from every total, and the
   note at the top says how much there was. Multicast and broadcast are left
   out too: they aren't a host being talked to.
-- **Hover** a program or host to light up its bands and see its bytes each way
-  and its share with each partner; hover a band for that pair. While the
+- **Hover** a program or host to light up its strings and see its bytes each
+  way and its share with each partner; hover a string for that pair. While the
   pointer is over the drawing it doesn't redraw, so nothing moves under a
   click; it catches up when the pointer leaves.
 - **Click** a program or host to filter to it, and the drawing shows only its
   traffic: everywhere one program goes, or every program behind one host.
-  **Click a band** to filter to that pair. **Right-click** a name for the hide
-  and don't-record menu. The "other" nodes aren't filters.
+  **Click a string** to filter to that pair. **Right-click** a name for the
+  hide and don't-record menu. The "other" rows aren't filters.
 
 The display filter and the adapter dropdown apply as on the Timeline, with
 the same limit on the fields it can use.
@@ -1226,6 +1227,15 @@ names.
 ---
 
 ## Version history
+
+**1.54.0** — **Flows shows who talks to whom.** A band used to be as thick as
+its bytes, so the browser filled most of the view and only a dozen hosts fit
+before the rest became "N other hosts". Each pair is now a thin string, 1 to
+5 px by the square root of its bytes, and every host has a row of its own
+(the view scrolls; past 150 the rest are folded). Hosts are grouped under the
+program that sends them most, with each program level with its hosts, so the
+strings fan out instead of crossing. Sent and received are on the hover, no
+longer drawn as two colours.
 
 **1.53.0** — **The Alerts tab sorts into two piles.** A real month-long log
 was almost all routine alerts (updaters and telemetry checking in, installs,
