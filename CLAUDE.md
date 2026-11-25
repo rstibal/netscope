@@ -14,7 +14,10 @@ netscope_conn.py      connection table: flow accounting joined to the socket tab
 netscope_timeline.py  per-second totals per (program, host, port, ...) for the Timeline view
 netscope_latency.py   an hour of TCP handshake times for the Latency view
 netscope_lookups.py   DNS queries paired with answers, for the Lookups view
-netscope_alerts.py    alert rules, muting, Windows toasts
+netscope_alerts.py    alert rules, muting, Windows toasts, the two piles
+netscope_trust.py     signature check, program classifier, "It's mine" trust list
+netscope_needs.py     Needs you cards, persisted in the `needs_you` table
+netscope_arpwatch.py  ARP binding hold and alternation test
 netscope_history.py   SQLite history and the settings file
 netscope_streams.py   TCP reassembly and HTTP/FTP file extraction
 netscope_smb.py       SMB2 decoding (share paths, filenames)
@@ -137,7 +140,8 @@ shape alone.
 
 **Alert mutes are per (rule, subject) and survive `Clear alerts`.** Disabling a
 whole rule to silence one subject is the wrong grain. Clearing means "I have
-read these", not "forget my tuning".
+read these", not "forget my tuning". Clear alerts empties the Recorded lines
+and settled session alerts; it does not touch mutes or Needs you cards.
 
 **Capture sockets are opened by `CaptureEngine`, not `AsyncSniffer`.** The
 sniffer keeps its sockets local to its run loop, and the drop counter lives on
@@ -389,10 +393,72 @@ on timers, and there is no program to act on.
 holds this session's alerts in memory: repeats folded, dismissable, emptied by
 Clear alerts. The history database logs each one for `alert_retain_days` and
 never forgets on Clear, since it is the security record. They used to be on
-two tabs in identical cards and read as a duplicate. The log view has Mute but
+two tabs in identical cards and read as a duplicate. Since 1.53 the log is
+the **Earlier days** section (today included, Needs-you entries marked) and
+the This session / Past N days switch is gone. The log view has Mute but
 no Dismiss. It pages by id, not timestamp, because alerts can share a
 timestamp. `subject` was added to the `alerts` table in 1.25.1, with an
 `ALTER TABLE` on open; older rows have none and can't be muted.
+
+**Alerts are two piles, Needs you and Recorded (1.53).** Why: a 20-day log of
+a real machine was almost all routine, mostly warn/high, and every rule had
+fired on an ordinary setup; the one ARP "spoof" was a router being swapped.
+The tab was a wall of equal-weight cards. Now every alert has a `pile`: Needs you (cards,
+toasts) or Recorded (one line per kind, never a toast). Rule logic, switches
+and mutes are unchanged; only the class is new.
+- **Program classifier** (`netscope_trust.classify_program`): a never-seen
+  `.exe` name needs you if its file is unsigned and user-writable (outside the
+  admin-only folders; Rob chose this over a stricter test), if it has a
+  Windows component's name outside System32/SysWOW64/WinSxS or directly in
+  %SystemRoot% (explorer.exe's real home; `windows_home`, which also
+  excludes the user-writable System32\Tasks, System32\spool and
+  SysWOW64\Tasks), or if the file is gone/unreadable.
+  Signed is Recorded anywhere (installers run signed from Temp); unsigned in
+  an admin-only folder is Recorded. Names that aren't files (`System`) are
+  Recorded. The signature check is local (no revocation fetch), off the
+  capture thread, cached by (path, size, mtime), capped at a few seconds; a
+  check that can't finish needs you. PowerShell is run by full path.
+- **A card's Block blocks the card's file** (`block_card`,
+  `Blocker.block_program_path`): the path saved with the card, still there
+  and at the judged hash, else 409. Re-resolving by pid and name refused a
+  fake `svchost.exe` in AppData as "part of Windows" and a stale pid on a
+  shared name. On this path a Windows component's name is protected only in
+  Windows' own folders; the pid/name path other callers use is unchanged.
+- **Only Needs you toasts.** On by default; `--toasts` is kept for
+  compatibility and does nothing. Demo's notifier never sends.
+- **ARP**: a changed MAC is held 60 s. Impersonation (a card) needs the
+  address to change hands `REPEATS` (3) times within the hold, any devices:
+  the signature of a poisoning tool fighting the real device. One claim back
+  (during the hold, or within the hour after a replacement) is `contested`,
+  Recorded as "Two devices claimed": a sleep proxy, a MAC-translating
+  extender, a proxy-ARP hotspot or an overlapping router swap all reclaim
+  once, and a single flip-back card put that routine LAN behaviour in Needs
+  you. A third device during the hold is one more change of hands, not an
+  impersonation by itself. Otherwise Recorded as a replacement. Alert keys
+  carry the event kind (`("arp_spoof", kind, iface, ip)`), so an
+  impersonation after a replacement is its own alert. ARP cards come from
+  the 15 s beat (`tick()`), never inline on the capture thread. Tracked (iface, ip) entries are capped (~4096). Imported
+  .pcap records (`rec["offline"]`) never reach the ARP watch or the judge.
+- **Open cards persist** in the `needs_you` table and survive Clear alerts,
+  restarts and history wipes; only Block, It's mine or Dismiss closes one.
+  Acted cards are history: a wipe deletes them, and `prune()` drops them
+  after `alert_retain_days`. Purging a program leaves its card (a finding,
+  like the alert log). "What it talked to" is saved with the card and shown
+  "as of" once the Timeline has forgotten it; hosts excluded from History
+  are left out of it (`NeedsYou.update_talk`), the name being the private
+  part.
+- **History off means no judging**, and **a known program is never
+  re-judged**: the rule fires only on a never-seen name, so an update raises no
+  card, and It's mine only records the file; a later update or replacement
+  of a known program is not re-checked (ruled: say so, don't add
+  re-judging). Baselining is unchanged. A verdict arriving after the rule was
+  switched off is dropped.
+- A file that is gone weeks later (updated, versioned, removed, unmounted)
+  can't be judged after the fact: the live judge checks seconds after first
+  sighting, while the program runs. `scripts/dryrun_needs.py` reads the real
+  history read-only and reports those separately; on a real machine's
+  history almost everything was Recorded and the few needs were unsigned
+  programs in user-writable folders.
 
 **The Alerts pane does not redraw while the pointer is over it.** It is
 rebuilt every 2.5 s, and a new alert arriving slid the cards down just as a

@@ -72,7 +72,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 
   // The Alerts pane waits while the pointer is over it.
   await p.click('.tab[data-p="alerts"]');
-  await p.waitForSelector('#p-alerts [data-rule]', {timeout: 40000});
+  await p.waitForSelector('#p-alerts #rulesSec', {timeout: 40000});   // drawn (its rules are folded)
   await p.hover('#p-alerts');
   await p.evaluate(() => { const m = document.createElement('i'); m.id = 'marker'; $('p-alerts').appendChild(m); });
   await p.waitForTimeout(6000);

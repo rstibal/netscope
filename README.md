@@ -106,7 +106,7 @@ NetScope.exe --demo                    synthetic traffic; no admin, no Npcap
 NetScope.exe --no-browser              don't auto-open a browser
 NetScope.exe --no-extract              capture only; don't rebuild files
 NetScope.exe --read capture.pcap       analyse a saved capture, don't capture
-NetScope.exe --toasts                  Windows desktop notifications for alerts
+NetScope.exe --toasts                  kept for compatibility; toasts are on by default
 NetScope.exe --tray                    run in the tray (NetScopeTray.exe implies this)
 NetScope.exe --db D:\netscope.db       history database somewhere else
 NetScope.exe --no-history              don't record history to disk
@@ -870,7 +870,10 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
 
 - **New program on the network** — with history on, a program that has never
   used the network on this machine before just did; programs the history
-  already knows stay silent. Without history, the first time this session.
+  already knows stay silent. A never-seen program is judged by its file:
+  unsigned and in a folder a user can write to, or wearing a Windows
+  component's name from the wrong place, puts it in Needs you; otherwise it
+  is recorded. Without history, the first time this session, as a note.
   A process whose name could not be read (shown as `pid 1234`) is skipped
   until its name can be. Suppressed for the first few seconds, otherwise
   every program on the machine would fire at once.
@@ -913,9 +916,68 @@ The Alerts tab is both the log and the control panel. Each rule has a switch:
   sees, it catches schedules of up to about 15 minutes. Without history it
   can't remember anything, so each pair is a note once per session.
 
-Repeat alerts fold into a count rather than filling the list. **Windows desktop
-notifications** sends warnings and high-severity alerts as toasts (Windows only,
-rate-limited to one every few seconds).
+The tab sorts everything into two piles (since 1.53):
+
+- **Needs you** — full cards, kept until you act on them, and the only thing
+  that raises a Windows toast. Two things get here:
+  - **A program you probably didn't install.** When the new-program rule fires
+    on a name never seen before, NetScope looks at the program's file, locally
+    (Authenticode, no lookups). It needs you if the file is **unsigned and in a
+    folder a user can write to**, if it **has a Windows component's name
+    (`svchost.exe`, `lsass.exe`...) outside System32, SysWOW64, WinSxS or
+    directly in the Windows folder** (explorer.exe lives there), or if its
+    **file can't be found or read** (names ending in `.exe` only). A signed
+    program is recorded wherever it runs, and so is an unsigned one in an
+    admin-only folder (`Program Files`, `Windows`, `WindowsApps`). A card shows
+    the name, full path, signature, parent process, when it was first seen,
+    and the hosts it talked to (connections and bytes each way, saved with the
+    card, leaving out hosts excluded from History). Buttons: **Block** (a
+    firewall rule on the file at the card's path, refused if that file has
+    changed since; a Windows component's name is only protected in Windows'
+    own folders, so a misplaced `svchost.exe` can be blocked), **It's mine**
+    (records that file, by path and SHA-256, as yours), **Show packets** and
+    **Dismiss**. A program is only judged the first time its name is seen,
+    so later updates or replacements of a known program are not re-checked,
+    trusted or not.
+  - **ARP impersonation.** A different MAC claiming a known address on an
+    adapter is held for 60 seconds. If the address changes hands at least
+    three times within that minute (old, new, old, new; any devices), that is
+    a poisoning tool fighting the real device, and it becomes a card. A single
+    claim back by the old device, during the hold or within an hour of a
+    replacement, is only recorded as "Two devices claimed" with both MACs: a
+    Bonjour sleep proxy, a MAC-translating range extender, a proxy-ARP hotspot
+    or an overlapping router swap all do that once. A third device during the
+    hold counts as one more change of hands, not as impersonation by itself.
+    If the new device simply holds the address, it is recorded as "a
+    different device now" (a swapped router), with an **It's my new router**
+    button. ARP cards appear on the 15-second beat. Records from an imported
+    .pcap never reach this check.
+- **Recorded** — everything else, one line per kind, never a toast: check-ins,
+  bandwidth, DNS resolvers, port scans, DHCP servers, certificate and cleartext
+  findings, block notes, and the new programs that were signed or in an
+  admin-only folder. Click a line to open its entries.
+
+Cards in Needs you are kept in the history database (`needs_you`), so they
+survive **Clear alerts**, a restart and wiping History; only acting on one
+removes it. Purging a program from History leaves its card. A card you have
+acted on is history: **Erase all history** removes it, and it is kept only as
+long as the alert log (`alert_retain_days`).
+
+A program the history already knows is never judged again: the rule fires
+only on a name never seen before, so an update doesn't raise a card. With
+history off nothing is judged, and the new-program rule works as before
+(a note, once per session).
+
+The tab, top to bottom: **Needs you**, **Recorded**, **Earlier days** (the alert
+log by day, today included, newest first, Needs-you entries marked "needed
+you"), **Muted**, **Trusted programs**, and **Rules and settings**. Repeat
+alerts fold into a count. **Windows desktop notifications** are on by default
+and toast Needs you cards only (Windows only, rate-limited to one every few
+seconds); the dashboard toggle turns them off. Upgrading to 1.53 turns them
+on once, even if they were off before, because Needs you is what they are now
+for; untick **Windows desktop notifications** under Rules and settings to turn
+them off again, and that choice is kept. `--toasts` is still accepted but has
+no effect. Demo mode never toasts.
 
 ---
 
@@ -923,7 +985,7 @@ rate-limited to one every few seconds).
 resolver it is about — either indefinitely or for an hour, using the buttons on
 the alert. The rule stays on and keeps watching everything else, which is the
 distinction that matters: a rule is usually right to look and wrong about one
-subject. Muted subjects are listed above the alert list with an Unmute button so
+subject. Muted subjects are listed on the tab with an Unmute button so
 a mute is always visible and always reversible, they persist across restarts, and
 they survive **Clear alerts**. Each alert also carries a **Why did this fire?**
 disclosure stating what its rule compares, and **Dismiss** drops a single alert
@@ -936,17 +998,13 @@ is only used while it still belongs to the program the alert names.
 Blocking leaves a "Blocked …" note in the list with its own **Unblock**
 button; every block is also listed under Connections › Blocked.
 
-**This session / Past 30 days.** The list above is this session's alerts,
-held in memory: repeats fold into a count, and Clear alerts or a restart
-empties it. **Past 30 days** switches to the alert log in the history
-database instead, which keeps every alert from this and earlier sessions for
-30 days (see History), whatever you cleared. It shows the newest 100 first,
-with **Show older** for the rest, and new alerts appear at the top as they
-are logged. You can mute from the log. There's no Dismiss there, since the
-log is the record of what happened. Alerts logged before 1.25.1 don't store
-what they were about, so they can't be muted from the log. The switch only
-appears when history is on. Log rows have the same **Don't record /
-Block…** button.
+**Earlier days.** The alert log in the history database keeps every alert for
+30 days (see History), whatever you cleared, and Earlier days shows it by day.
+You can mute from it. There's no Dismiss there, since the log is the record of
+what happened. Alerts logged before 1.25.1 don't store what they were about,
+so they can't be muted. It appears only when history is on. The old
+"This session / Past 30 days" switch is gone: today's alerts are under Today.
+Old rows keep the severity they were logged with.
 
 Rule switches, the bandwidth threshold and the notification toggle are remembered
 between runs, which matters most when NetScope starts from a logon task and
@@ -1108,7 +1166,10 @@ netscope.py         capture engine, decoders, HTTP API
 netscope_smb.py     SMB2 decoding — share paths, filenames, read/write sizes
 netscope_streams.py TCP reassembly and HTTP file extraction
 netscope_quic.py    QUIC decoding, Initial-packet key derivation, SNI recovery
-netscope_alerts.py  alert rules and Windows toast notifications
+netscope_alerts.py  alert rules, muting, Windows toasts, the two piles
+netscope_trust.py   signature check, program classifier, "It's mine" trust list
+netscope_needs.py   Needs you cards, kept in the history database
+netscope_arpwatch.py ARP binding hold and the alternation test
 netscope_block.py   blocking a host or program through Windows Firewall rules
 netscope_conn.py    connection table — flow accounting joined to the socket table
 netscope_timeline.py per-second totals for the Timeline view
@@ -1165,6 +1226,28 @@ names.
 ---
 
 ## Version history
+
+**1.53.0** — **The Alerts tab sorts into two piles.** A real month-long log
+was almost all routine alerts (updaters and telemetry checking in, installs,
+Windows discovery, a VPN's DNS), which buried the few that mattered. The tab
+now has **Needs you** (cards, and the only alerts that toast) and **Recorded**
+(one line per kind). A new program needs you only when it is unsigned in a
+folder you can write to, wears a Windows component's name from the wrong
+place, or its file can't be found; an ARP change needs you only when the
+address changes hands three times within a minute (one claim back is only
+recorded). A card says where the
+program lives, who signed it, what started it and what it talked to, with
+**Block** (that file, by its path), **It's mine** (records that file by path
+and hash), **Show packets** and **Dismiss**. Open cards persist across Clear
+alerts, restarts and History wipes. **Earlier days** replaces the This session
+/ Past 30 days switch; Muted and Trusted programs are listed on the tab.
+Toasts are on by default and carry Needs you only. **Upgrading turns desktop
+notifications on once, even if they were off**; untick Windows desktop
+notifications under Rules and settings to turn them off again, and that sticks.
+`--toasts` is kept for compatibility. A program is only judged the first time
+its name is seen, so later updates or replacements of a known program are not
+re-checked, and with history off nothing is judged. `scripts/dryrun_needs.py` replays your own alert log against the
+classifier, read-only.
 
 **1.52.0** — History's **By program** and **By host** start folded. With both
 open the tab was a long run of lanes, and By host sat well below the daily

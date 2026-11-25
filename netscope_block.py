@@ -26,6 +26,7 @@ answers NetScope captures (``Blocker.note_dns``).
 from __future__ import annotations
 
 import ipaddress
+import ntpath
 import os
 import re
 import secrets
@@ -39,6 +40,8 @@ try:
     import psutil
 except Exception:
     psutil = None
+
+from netscope_trust import windows_home
 
 IS_WINDOWS = os.name == "nt"
 
@@ -387,6 +390,29 @@ class Blocker:
         if lport:
             entry.update(lport=_port(lport), proto=_proto(proto))
         return self._add(entry)
+
+    def block_program_path(self, path):
+        """
+        Block one file by its path, outbound. For a Needs you card, whose
+        path the server saved when it judged the program (the caller checks
+        the file is still the one judged): resolving by name or pid would
+        find a different file, or refuse a fake svchost.exe as "part of
+        Windows". So the protected check here goes by where the file is: a
+        Windows component's name is protected only in Windows' own folders
+        (windows_home). NetScope itself is always refused.
+        """
+        self._check_allowed()
+        path = str(path or "")
+        if not path or not (os.path.isabs(path) or ntpath.isabs(path)):
+            raise BlockError("Could not find that program's file.")
+        name = re.split(r"[\\/]", path)[-1]
+        if os.path.normcase(path) in self._own:
+            raise BlockError("That is NetScope itself.")
+        if name.lower() in PROTECTED_PROGRAMS and windows_home(path):
+            raise BlockError("%s is part of Windows; blocking it would cut off "
+                             "more than one program." % name)
+        return self._add({"kind": "program", "target": path, "name": name,
+                          "dir": "out"})
 
     @staticmethod
     def _same(a, b):

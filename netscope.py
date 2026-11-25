@@ -19,7 +19,7 @@ Usage:
     NetScope.exe --list                # list interfaces and exit
     NetScope.exe --no-extract          # capture only, don't rebuild files
     NetScope.exe --read capture.pcap   # analyse a saved capture offline
-    NetScope.exe --toasts              # desktop notifications for alerts
+    NetScope.exe --toasts              # kept for compatibility; toasts are on by default
     NetScope.exe --tray                # run in the notification area
     NetScope.exe --install-task        # start in the tray at logon (elevated)
 """
@@ -32,6 +32,7 @@ import ctypes
 import heapq
 import ipaddress
 import json
+import ntpath
 import os
 import queue
 import random
@@ -48,7 +49,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.52.0"
+VERSION = "1.53.0"
 
 # How many packets to keep in the live ring buffer.
 RING_SIZE = 20000
@@ -90,6 +91,8 @@ from netscope_quic import (parse_quic, summarise as quic_summary,
                            build_split_client_initials, InitialReassembler,
                            CRYPTO_OK as QUIC_CRYPTO_OK)
 from netscope_alerts import AlertEngine, DesktopNotifier, RULE_WHY
+from netscope_needs import flows_for, talk_by_host
+from netscope_trust import Sig, SignatureChecker, TrustList, ProgramJudge, file_sha256
 from netscope_block import Blocker, BlockError
 from netscope_conn import FlowTable, SocketTable, build_view
 from netscope_timeline import Timeline
@@ -1537,6 +1540,10 @@ class CaptureEngine:
                 outer = self.tunnel.skip(rec)
                 if outer:
                     rec["tunnel_outer"] = True
+                if self._offline:
+                    # From an imported .pcap: the alert rules that judge
+                    # this machine now (ArpWatch, the program judge) skip it.
+                    rec["offline"] = True
                 self.store.add(rec, raw)
                 if self.alerts is not None:
                     self.alerts.inspect(rec, payload)
@@ -1900,10 +1907,47 @@ class DemoEngine:
     # Programs the demo treats as already known to this machine. Its history
     # is in memory and starts empty, which would read as a first run and keep
     # the "new program" rule in silent baseline mode all session. The late
-    # arrivals in _loop() are left off, so that rule has something to fire on.
+    # arrivals in _loop() and UNTRUSTED are left off, so that rule has
+    # something to fire on.
     KNOWN_PROGRAMS = ("chrome.exe", "php.exe", "olk.exe", "ms-teams.exe",
                       "System", "Code.exe", "explorer.exe", "ftp.exe",
                       "AgentSvc.exe")
+    # Programs that open a Needs you card at start (_seed_untrusted): one
+    # unsigned in a folder anyone can write to, one whose file has gone.
+    UNTRUSTED = (("198.51.100.9", "updates.vendor.example", "SilentUpdater.exe"),
+                 ("203.0.113.77", "dl.example.org", "Vanished.exe"))
+    # Who claims the router's address after a flip (_seed_arp_flip).
+    MAC_IMPOSTOR = "de:ad:be:ef:13:37"
+
+    # The program judge's view of the demo's programs. Nothing here may
+    # touch a real file: the paths are made up, and so are the signatures.
+    @staticmethod
+    def fake_signature(path, timeout=None):
+        name = ntpath.basename(path or "").lower()
+        if name == "silentupdater.exe":
+            return Sig("unsigned", "")
+        if name == "vanished.exe":
+            return Sig("missing", "")
+        if name == "crashreporter.exe":
+            return Sig("valid", "Example Corp")
+        return Sig("valid", "Demo Vendor")
+
+    @staticmethod
+    def program_file(name, pid=None):
+        """(path, parent) for a demo program, as locate_program() answers."""
+        low = (name or "").lower()
+        if low == "silentupdater.exe":
+            return (r"C:\Users\Demo\AppData\Local\Temp\su7\SilentUpdater.exe",
+                    "chrome.exe")
+        if low == "crashreporter.exe":
+            return (r"C:\Program Files\Example\CrashReporter.exe", "services.exe")
+        if low == "vanished.exe":
+            return (r"C:\Users\Demo\Downloads\gone\Vanished.exe", None)
+        return ("C:\\Program Files\\Demo\\" + name, None)
+
+    @staticmethod
+    def hash_file(path):
+        return None if "\\gone\\" in path else "demo:" + path
 
     @classmethod
     def dns_config(cls):
@@ -2579,6 +2623,64 @@ class DemoEngine:
             self._emit_tcp(line, out, "203.0.113.77", 21, cport3, "ftp.exe",
                            "legacy-ftp.example.com", "FTP", seqs3)
 
+    def _seed_untrusted(self):
+        """
+        Two programs the judge sends to Needs you, so the demo opens with
+        cards to act on. Each conversation plays out in real time over
+        several seconds, so on its own thread like the main loop's.
+        """
+        for ip, host, proc in self.UNTRUSTED:
+            def run(ip=ip, host=host, proc=proc):
+                try:
+                    self._emit_conversation(ip, host, proc)
+                except Exception:
+                    pass
+            threading.Thread(target=run, daemon=True, name="demo-conv").start()
+
+    def _emit_arp(self, ip, mac):
+        """One ARP reply, "ip is-at mac", shaped as the decoder makes one."""
+        now = time.time()
+        rec = {
+            "ts": now,
+            "time": datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3],
+            "src": ip, "dst": self.LOCAL, "sport": None, "dport": None,
+            "proto": "ARP", "length": 42,
+            "process": owner_label("ARP", self.MAC_LOCAL, self.LOCAL), "pid": None,
+            "dir": "in", "remote": ip, "rhost": "",
+            "info": f"{ip} is-at {mac}", "ipver": 4, "ttl": None,
+            "payload_len": 0, "stream": None, "iface": "demo0",
+            "transport": None,
+            "decoded": {"arp": {"op": 2, "sender_ip": ip, "sender_mac": mac,
+                                "target_ip": self.LOCAL}},
+        }
+        raw = b""
+        if SCAPY_OK:
+            try:
+                raw = bytes(Ether(src=mac, dst=self.MAC_LOCAL) /
+                            ARP(op=2, hwsrc=mac, psrc=ip,
+                                hwdst=self.MAC_LOCAL, pdst=self.LOCAL))
+                rec["length"] = len(raw)
+            except Exception:
+                raw = b""
+        self.store.add(rec, raw)
+        if self.alerts is not None:
+            self.alerts.inspect(rec, b"")
+        if self.history is not None:
+            self.history.record(rec)
+
+    def _seed_arp_flip(self):
+        """
+        The router's address claimed by the router and another device in
+        turn, changing hands three times within the minute: a fight over one
+        address, which is how ARP cache poisoning looks, so an impersonation
+        card opens at the next alert beat (after a "Two devices claimed"
+        record for the first claim back).
+        """
+        for mac in (self.MAC_GW, self.MAC_IMPOSTOR, self.MAC_GW,
+                    self.MAC_IMPOSTOR):
+            self._emit_arp(self.RESOLVER, mac)
+            self._stop.wait(0.05)
+
     def sockets(self):
         """
         Synthetic sockets for the demo's own conversations.
@@ -2767,15 +2869,16 @@ class DemoEngine:
             self._seeded = True
             for seed in (self._seed_http, self._seed_smb, self._seed_quic,
                          self._seed_dhcp, self._seed_mdns, self._seed_llmnr,
-                         self._seed_nbns, self._seed_insecure):
+                         self._seed_nbns, self._seed_insecure,
+                         self._seed_untrusted, self._seed_arp_flip):
                 try:
                     seed()
                 except Exception:
                     pass
         # A program that only shows up later, so the "new program on the
-        # network" alert has something honest to fire on.
-        late = [("198.51.100.9", "updates.vendor.example", "SilentUpdater.exe"),
-                ("203.0.113.200", "telemetry.example.net", "CrashReporter.exe")]
+        # network" alert has something honest to fire on. It is signed, so
+        # it is Recorded, not a Needs you card (those are _seed_untrusted's).
+        late = [("203.0.113.200", "telemetry.example.net", "CrashReporter.exe")]
         started = time.time()
         next_beat = started + 3
 
@@ -2886,6 +2989,8 @@ from netscope_ui import PAGE_HTML  # noqa: E402
 
 # Seconds between check-in rule passes over the Timeline's hour.
 CHECKIN_EVERY = 15
+# Seconds between updates of who each open program card's program talked to.
+NEEDS_TALK_EVERY = 5
 
 # Most a single /api/stream call will hand the browser, per direction.
 STREAM_VIEW_CAP = 512 * 1024
@@ -2895,8 +3000,13 @@ class App:
     def __init__(self, store, engine, resolver, token, demo=False,
                  streams=None, objects=None, scanner=None, alerts=None,
                  decoder=None, history=None, dhcp=None, reverse=None,
-                 blocker=None, save_setting=save_setting):
+                 blocker=None, save_setting=save_setting, trust=None,
+                 judge=None):
         self.store = store
+        # Programs the user trusted from a Needs you card, and the judge
+        # that looks new programs up (which keeps the hash function).
+        self.trust = trust
+        self.judge = judge
         # Where dashboard changes are remembered. Demo mode passes an
         # in-memory one, so trying the demo never rewrites settings.json.
         self.save_setting = save_setting
@@ -3256,8 +3366,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/alerts":
             a = self.app.alerts
+            needs = a.needs.open()
+            for c in needs:
+                if c["kind"] == "program":
+                    c["data"]["talk_hosts"] = talk_by_host(c["data"].get("talk"))
             return self._send(200, {
                 "alerts": a.list(),
+                "needs": needs,
+                "trusted": self.app.trust.entries() if self.app.trust else [],
+                "last_program_check": (self.app.judge.last_ts
+                                       if self.app.judge else None),
+                "watching_since": a.started,
                 "counts": a.counts(),
                 "rules": a.rules,
                 "why": RULE_WHY,
@@ -3476,6 +3595,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.app.alerts.clear()
             elif action in ("blocking", "block", "unblock", "end"):
                 return self._block_action(action, body)
+            elif action == "needs_act":
+                return self._needs_act(body)
+            elif action == "trust_remove":
+                t = self.app.trust
+                if t is None or not body.get("path"):
+                    return self._send(400, {"error": "Nothing to remove."})
+                t.remove(str(body["path"]))
+                self.app.save_setting("trusted_programs", t.entries())
+                return self._send(200, {"trusted": t.entries()})
             elif action == "history_flush":
                 if self.app.history:
                     self.app.history.flush()
@@ -3536,31 +3664,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == "blocking":
                 b.set_enabled(bool(body.get("enabled")))
             elif action == "block":
-                kind, d = body.get("kind"), body.get("dir")
-                if kind == "program":
-                    e = b.block_program(pid=body.get("pid"), name=body.get("name"),
-                                        dir=d, lport=body.get("lport"),
-                                        proto=body.get("proto"))
-                    what, who = "program", e["name"]
-                elif kind == "name":
-                    e = b.block_name(body.get("name"))
-                    what, who = "name", e["target"]
-                else:
-                    e = b.block_host(body.get("address"), body.get("port"),
-                                     body.get("proto"), dir=d, lport=body.get("lport"))
-                    what, who = "host", e["target"] + (
-                        ":%s" % e["port"] if e.get("port") else "")
-                scope = {"in": " inbound", "out": " outbound"}.get(e.get("dir"), "") \
-                    if not (kind == "program" and e.get("dir") == "out") else ""
-                if e.get("lport"):
-                    scope += " to local port %s" % e["lport"]
-                n = e.get("dropped") or 0
-                if alerts:
-                    alerts.note_action("block", who, "Blocked %s %s%s" % (what, who, scope),
-                                       "Added a Windows Firewall rule from the dashboard."
-                                       + (" Ended %d open connection%s." % (n, "" if n == 1 else "s")
-                                          if n else ""),
-                                       block_id=e.get("id"))
+                self._block_entry(b, alerts, body)
             else:
                 e = b.unblock(body.get("id"))
                 if e and alerts:
@@ -3570,6 +3674,80 @@ class Handler(BaseHTTPRequestHandler):
         except BlockError as exc:
             return self._send(400, {"error": str(exc)})
         return self._send(200, {"status": self.status(), "blocks": b.listing()})
+
+    @staticmethod
+    def _block_entry(b, alerts, body):
+        """Add one block and note it in the alert log. Raises BlockError."""
+        kind, d = body.get("kind"), body.get("dir")
+        if kind == "program":
+            e = b.block_program(pid=body.get("pid"), name=body.get("name"),
+                                dir=d, lport=body.get("lport"),
+                                proto=body.get("proto"))
+            what, who = "program", e["name"]
+        elif kind == "name":
+            e = b.block_name(body.get("name"))
+            what, who = "name", e["target"]
+        else:
+            e = b.block_host(body.get("address"), body.get("port"),
+                             body.get("proto"), dir=d, lport=body.get("lport"))
+            what, who = "host", e["target"] + (
+                ":%s" % e["port"] if e.get("port") else "")
+        scope = {"in": " inbound", "out": " outbound"}.get(e.get("dir"), "")             if not (kind == "program" and e.get("dir") == "out") else ""
+        if e.get("lport"):
+            scope += " to local port %s" % e["lport"]
+        n = e.get("dropped") or 0
+        if alerts:
+            alerts.note_action("block", who, "Blocked %s %s%s" % (what, who, scope),
+                               "Added a Windows Firewall rule from the dashboard."
+                               + (" Ended %d open connection%s." % (n, "" if n == 1 else "s")
+                                  if n else ""),
+                               block_id=e.get("id"))
+        return e
+
+    def _needs_act(self, body):
+        """
+        Act on a Needs you card: trust, block, expected (an ARP card) or
+        dismiss. The card closes only once the act has worked: a block the
+        firewall refused, or a file gone before it could be trusted, leaves
+        it open with the reason.
+        """
+        a = self.app.alerts
+        needs = a.needs
+        card = needs.get(int(body.get("id")))
+        if card is None or card["state"] != "open":
+            return self._send(404, {"error": "That card is no longer open."})
+        act, data = body.get("act"), card.get("data") or {}
+        if act == "trust" and card["kind"] == "program" and self.app.trust is not None:
+            code, out = trust_card(self.app.trust, needs, self.app.judge.hash_file, card)
+            if code == 200:
+                self.app.save_setting("trusted_programs", self.app.trust.entries())
+            return self._send(code, out)
+        if act == "block" and card["kind"] == "program":
+            b = self.app.blocker
+            if b is None:
+                return self._send(400, {"error": "Blocking is not available."})
+            # The card's own file, by the path saved with it: see block_card.
+            hash_file = self.app.judge.hash_file if self.app.judge else file_sha256
+            code, out, e = block_card(b, needs, hash_file, card)
+            if code != 200:
+                return self._send(code, out)
+            a.note_action("block", e["name"], "Blocked program %s" % e["name"],
+                          "Added a Windows Firewall rule from a Needs you card, "
+                          "for %s." % e["target"]
+                          + (" Ended %d open connection%s." % (
+                              e["dropped"], "" if e["dropped"] == 1 else "s")
+                             if e.get("dropped") else ""),
+                          block_id=e.get("id"))
+            return self._send(200, {"status": self.status(), "blocks": b.listing(),
+                                    "card": needs.get(card["id"])})
+        if act == "expected" and card["kind"] == "arp":
+            a.mute("arp_spoof", data.get("ip") or card["subject"])
+            return self._send(200, {"status": self.status(),
+                                    "card": needs.act(card["id"], "expected")})
+        if act == "dismiss":
+            return self._send(200, {"status": self.status(),
+                                    "card": needs.act(card["id"], "dismissed")})
+        return self._send(400, {"error": "That can't be done to this card."})
 
     def _end_connection(self, b, alerts, body):
         """
@@ -3793,6 +3971,140 @@ def _saved_paths(history, name):
     return {p for p in history.known_paths(name) if os.path.isfile(p)}
 
 
+class SilentNotifier(DesktopNotifier):
+    """Demo mode's toasts: the switch works, nothing is ever shown. A toast
+    about an invented program would read as one about this machine."""
+
+    def notify(self, title, message):
+        pass
+
+    def _send(self, title, message):
+        pass
+
+
+class DemoSignatures(SignatureChecker):
+    """Demo mode's signature checker: straight to the fake, with no stat()
+    of a path that only the demo believes in."""
+
+    def check(self, path):
+        return self.run(path, timeout=self.cap)
+
+
+def _newest_file(paths):
+    best, when = None, None
+    for p in paths or ():
+        try:
+            t = os.path.getmtime(p)
+        except (OSError, ValueError, TypeError):
+            continue
+        if os.path.isfile(p) and (when is None or t > when):
+            best, when = p, t
+    return best
+
+
+def locate_program(resolver, history, name, pid):
+    """
+    (path, parent name) of the program `name` was seen as, for the judge.
+
+    The running process first, while its pid is still that program (Windows
+    reuses pids, and the judge may get to it seconds later). Then the newest
+    file this session saw it run from, then the newest one history kept.
+    (None, None) when none of those finds a file.
+    """
+    want = (name or "").lower()
+    if psutil and pid:
+        try:
+            p = psutil.Process(int(pid))
+            if (p.name() or "").lower() == want:
+                path = p.exe()
+                parent = None
+                try:
+                    par = p.parent()
+                    parent = par.name() if par is not None else None
+                except Exception:
+                    pass
+                if path:
+                    return path, parent
+        except Exception:
+            pass
+    for source in (resolver, history):
+        if source is None:
+            continue
+        try:
+            newest = _newest_file(source.known_paths(name))
+        except Exception:
+            newest = None
+        if newest:
+            return newest, None
+    return None, None
+
+
+def trust_card(trust, needs, hash_file, card):
+    """
+    Trust the program a Needs you card is about, at the file's hash now.
+    (status, body). A file that has changed since the alert is trusted
+    anyway, marked so; one that is gone can't be.
+    """
+    data = card.get("data") or {}
+    path = data.get("path")
+    sha = hash_file(path) if path else None
+    if not sha:
+        return 409, {"error": "The file is gone, so there is nothing to trust. "
+                              "Dismiss it instead."}
+    entry = trust.add(data.get("name") or card.get("subject"), path, sha,
+                      changed=sha != data.get("sha256"))
+    needs.act(card["id"], "trusted")
+    return 200, {"trusted": entry}
+
+
+def refresh_needs_talk(flows, needs):
+    """
+    Merge what each open program card's program is talking to into its card.
+    The flow table is only snapshotted when there is such a card: most of
+    the time there is none, and a snapshot copies every flow.
+    """
+    cards = [c for c in needs.open() if c["kind"] == "program"]
+    if not cards:
+        return
+    snap = flows.snapshot()
+    for card in cards:
+        needs.update_talk(card["id"], flows_for(snap, card["data"].get("name")),
+                          time.time())
+
+
+def block_card(blocker, needs, hash_file, card):
+    """
+    Block the program a Needs you card is about: the file at the path the
+    server saved with the card, never one re-resolved by name or pid (a fake
+    svchost.exe would resolve to the real one, a stale pid to anything).
+    (status, body, block entry or None). The file must still be there and,
+    when the card has a hash, still be the file that was judged.
+    """
+    data = card.get("data") or {}
+    path = data.get("path")
+    if not path:
+        return 409, {"error": "NetScope never found this program's file, so "
+                              "there is nothing to block by path. Block it from "
+                              "an open connection while it runs, or dismiss "
+                              "this."}, None
+    sha = hash_file(path)
+    if not sha:
+        return 409, {"error": "The file is gone (%s), so there is nothing to "
+                              "block. Dismiss it instead." % path}, None
+    if data.get("sha256") and sha != data["sha256"]:
+        return 409, {"error": "The file at %s has changed since this card was "
+                              "raised, so blocking it would block a different "
+                              "program than the one judged. Look at it again; "
+                              "it can still be blocked from an open "
+                              "connection." % path}, None
+    try:
+        entry = blocker.block_program_path(path)
+    except BlockError as exc:
+        return 400, {"error": str(exc)}, None
+    needs.act(card["id"], "blocked")
+    return 200, {}, entry
+
+
 def make_blocker(resolver, demo=False, store=None, history=None):
     """
     Demo mode gets a firewall of its own, in memory: it fabricates traffic, so
@@ -3888,7 +4200,8 @@ def main(argv=None):
     ap.add_argument("--read", metavar="FILE",
                     help="open a .pcap/.pcapng instead of capturing live")
     ap.add_argument("--toasts", action="store_true",
-                    help="send Windows desktop notifications for alerts")
+                    help="kept for compatibility, no effect: toasts are on by "
+                         "default and the dashboard's switch decides")
     ap.add_argument("--tray", action="store_true",
                     help="run in the system tray with the console hidden")
     ap.add_argument("--db", metavar="FILE", help="history database path")
@@ -4082,13 +4395,33 @@ def main(argv=None):
     ex = settings_load().get("history_exclude") or {}
     if isinstance(ex, dict):
         history.set_exclusions(ex.get("programs"), ex.get("hosts"))
-    alerts = AlertEngine(DesktopNotifier(enabled=args.toasts), history=history,
+    # Toasts are on by default and the dashboard's switch, saved, decides
+    # (attach_settings); --toasts is only kept for scripts that pass it. The
+    # demo's notifier never shows one: its programs are invented.
+    notifier = SilentNotifier(enabled=True) if args.demo else DesktopNotifier(enabled=True)
+    alerts = AlertEngine(notifier, history=history,
                          dns_source=DemoEngine.dns_config if args.demo else None)
     alerts.attach_settings(settings_load, settings_save)
     if args.demo and history.enabled and history.in_memory:
         for name in DemoEngine.KNOWN_PROGRAMS:
             history.note_process(name)
         alerts.baselining = False
+    # Who a new program is (its file, its signature), looked up off the
+    # capture thread before it is filed. Attached before any capture starts,
+    # so the first packets are judged too. The demo's programs, files and
+    # signatures are made up, and nothing of this machine's is looked at.
+    trust = TrustList(settings_load().get("trusted_programs"))
+    if args.demo:
+        judge = ProgramJudge(DemoSignatures(run=DemoEngine.fake_signature), trust,
+                             DemoEngine.program_file, alerts.on_program_verdict,
+                             hash_file=DemoEngine.hash_file)
+    else:
+        judge = ProgramJudge(SignatureChecker(), trust,
+                             lambda name, pid: locate_program(resolver, history,
+                                                              name, pid),
+                             alerts.on_program_verdict)
+    judge.start()
+    alerts.attach_judge(judge)
     dhcp = DhcpTracker()
     reverse = ReverseResolver(store)
     reverse.attach_settings(settings_load, settings_save)
@@ -4142,7 +4475,7 @@ def main(argv=None):
                       streams=streams, objects=objects, scanner=scanner,
                       alerts=alerts, decoder=decoder, history=history,
                       dhcp=dhcp, reverse=reverse, blocker=blocker,
-                      save_setting=settings_save)
+                      save_setting=settings_save, trust=trust, judge=judge)
     if args.read:
         Handler.app.source = os.path.basename(args.read)
 
@@ -4158,7 +4491,27 @@ def main(argv=None):
                 app.alerts.check_checkins(app.store.timeline)
             except Exception:
                 pass
+            # Also the alert beat: fires what ArpWatch decided on the capture
+            # thread, which may open a card and so wait on the disk.
+            try:
+                app.alerts.tick()
+            except Exception:
+                pass
     threading.Thread(target=watch_checkins, daemon=True, name="checkins").start()
+
+    # Who each open program card's program is talking to, kept on the card:
+    # the flow table forgets a connection soon after it ends. Not against a
+    # loaded .pcap, whose flows are not this machine's now.
+    def watch_needs(app=Handler.app):
+        while True:
+            time.sleep(NEEDS_TALK_EVERY)
+            if app.source or app.alerts is None:
+                continue
+            try:
+                refresh_needs_talk(app.store.flows, app.alerts.needs)
+            except Exception:
+                pass
+    threading.Thread(target=watch_needs, daemon=True, name="needs-talk").start()
 
     try:
         httpd = DashboardServer(("127.0.0.1", args.port), Handler)

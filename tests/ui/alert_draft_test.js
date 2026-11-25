@@ -9,7 +9,11 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
   await p.goto(process.argv[2]);
   await p.click('.tab[data-p="alerts"]');
-  await p.waitForSelector('#p-alerts [data-rule]', {timeout: 40000});
+  // The rules are folded under Rules and settings; the fold stays open across
+  // the redraw like the boxes do.
+  await p.waitForSelector('#rulesSec > summary', {timeout: 40000});
+  await p.click('#rulesSec > summary');
+  await p.waitForSelector('#p-alerts [data-rule]', {state: 'visible'});
 
   const rules = () => p.evaluate(async () => (await (await fetch('/api/alerts?t='+TOKEN)).json()).rules);
   const box = rule => p.locator('#p-alerts [data-rule="'+rule+'"]');

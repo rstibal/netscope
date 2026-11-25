@@ -17,6 +17,7 @@ unavailable the accumulator is simply discarded and capture carries on.
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import sqlite3
 import threading
@@ -109,9 +110,22 @@ CREATE TABLE IF NOT EXISTS alerts (
     detail   TEXT NOT NULL,
     process  TEXT,
     peer     TEXT,
-    subject  TEXT
+    subject  TEXT,
+    pile     TEXT
 );
 CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts);
+
+-- Cards in "Needs you": open until the user acts on them, so they survive a
+-- restart. Rare, so written at once rather than batched.
+CREATE TABLE IF NOT EXISTS needs_you (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      REAL NOT NULL,
+    kind    TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    data    TEXT NOT NULL,
+    state   TEXT NOT NULL DEFAULT 'open',
+    acted   REAL
+);
 
 -- Program-and-host pairs seen contacting each other on a schedule, so the
 -- check-in alert only reports a pair once, ever.
@@ -331,6 +345,10 @@ class HistoryStore:
                 cols = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
                 if "subject" not in cols:
                     self._db.execute("ALTER TABLE alerts ADD COLUMN subject TEXT")
+                # `pile` says whether an alert went to Needs you or was just
+                # recorded; older rows have none and read as "recorded".
+                if "pile" not in cols:
+                    self._db.execute("ALTER TABLE alerts ADD COLUMN pile TEXT")
                 self._db.commit()
                 self._migrate()
                 # Cache what we already know, so first-seen checks are a set
@@ -535,7 +553,8 @@ class HistoryStore:
                 alert.get("ts", time.time()), alert.get("severity", "info"),
                 alert.get("rule", ""), alert.get("title", ""),
                 alert.get("detail", ""), alert.get("process", ""),
-                alert.get("peer", ""), alert.get("subject") or None))
+                alert.get("peer", ""), alert.get("subject") or None,
+                alert.get("pile") or None))
 
     def record_dhcp_lease(self, lease):
         """A completed lease (a DHCP ACK), queued for the next flush."""
@@ -730,6 +749,43 @@ class HistoryStore:
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
 
+    def needs_load(self):
+        """Open Needs you cards, oldest first, with `data` decoded."""
+        out = []
+        for r in self._q("SELECT id, ts, kind, subject, data, state, acted "
+                         "FROM needs_you WHERE state='open' ORDER BY id"):
+            try:
+                r["data"] = json.loads(r["data"])
+            except Exception:
+                r["data"] = {}
+            out.append(r)
+        return out
+
+    def needs_save(self, card):
+        """Insert a card (id None) or update it; written at once. Returns its id."""
+        if not self.enabled or self._db is None:
+            return card.get("id")
+        try:
+            data = json.dumps(card.get("data") or {})
+            with self._db_lock:
+                if card.get("id") is None:
+                    cur = self._db.execute(
+                        "INSERT INTO needs_you(ts,kind,subject,data,state,acted) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (card["ts"], card["kind"], card["subject"], data,
+                         card.get("state") or "open", card.get("acted")))
+                    cid = cur.lastrowid
+                else:
+                    cid = card["id"]
+                    self._db.execute(
+                        "UPDATE needs_you SET data=?, state=?, acted=? WHERE id=?",
+                        (data, card.get("state") or "open", card.get("acted"), cid))
+                self._db.commit()
+                return cid
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            return card.get("id")
+
     def known_paths(self, name):
         return {r["path"] for r in self._q(
             "SELECT path FROM program_paths WHERE name=?", (str(name or "").lower(),))}
@@ -785,7 +841,7 @@ class HistoryStore:
                 if alerts:
                     self._db.executemany(
                         "INSERT INTO alerts(ts,severity,rule,title,detail,process,"
-                        "peer,subject) VALUES (?,?,?,?,?,?,?,?)", alerts)
+                        "peer,subject,pile) VALUES (?,?,?,?,?,?,?,?,?)", alerts)
 
                 if leases:
                     self._db.executemany(
@@ -859,6 +915,10 @@ class HistoryStore:
                 self._db.execute("DELETE FROM usage WHERE day < ?", (cutoff_day,))
                 self._db.execute("DELETE FROM usage_pairs WHERE day < ?", (cutoff_day,))
                 self._db.execute("DELETE FROM alerts WHERE ts < ?", (cutoff_ts,))
+                # An acted card is kept as long as the alerts are; an open
+                # one until it is acted on, however old.
+                self._db.execute("DELETE FROM needs_you WHERE state != 'open' "
+                                 "AND COALESCE(acted, ts) < ?", (cutoff_ts,))
                 self._db.execute("DELETE FROM sessions WHERE started < ?",
                                  (time.time() - self.retain_days * 86400,))
                 self._db.execute("DELETE FROM program_paths WHERE last_seen < ?",
@@ -1146,7 +1206,8 @@ class HistoryStore:
             where.append("id > ?")
             args.append(int(after))
         rows = self._q(
-            "SELECT id, ts, severity, rule, title, detail, process, peer, subject "
+            "SELECT id, ts, severity, rule, title, detail, process, peer, subject, "
+            "COALESCE(pile, 'recorded') AS pile "
             "FROM alerts" + (" WHERE " + " AND ".join(where) if where else "") +
             " ORDER BY id DESC LIMIT ?", args + [int(limit) + 1])
         return rows[:limit], len(rows) > limit
@@ -1238,6 +1299,10 @@ class HistoryStore:
                 for t in ("usage", "usage_pairs", "processes", "hosts", "alerts",
                           "dhcp_leases", "sessions", "checkins", "program_paths"):
                     self._db.execute(f"DELETE FROM {t}")
+                # Open Needs you cards stay: they still wait for a decision,
+                # and erasing history is not one. Acted cards are history
+                # (what was decided, and what the program talked to) and go.
+                self._db.execute("DELETE FROM needs_you WHERE state != 'open'")
                 self._db.commit()
                 self._db.execute("VACUUM")
             self._known_procs.clear()

@@ -12,7 +12,9 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   await p.goto(process.argv[2]);
   await p.waitForFunction(()=>document.querySelectorAll('#rows tr').length>5,null,{timeout:90000});
   await p.click('.tab[data-p="alerts"]');
-  await p.waitForSelector('#p-alerts [data-rule]');
+  // The rules are folded under Rules and settings (the boxes are there,
+  // folded or not); the alert lands under Recorded's Check-ins line.
+  await p.waitForSelector('#rulesSec [data-rule]', {state: 'attached'});
 
   const rule = await p.evaluate(()=>{ const cb = document.querySelector('#p-alerts [data-rule="checkin"]');
     return cb ? {on: cb.checked, label: cb.parentNode.textContent.trim()} : null; });
@@ -28,13 +30,15 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
     return {cls: card.className, title: card.querySelector('.ti').textContent,
             detail: card.querySelector('.d').textContent, rl: card.querySelector('.rl').textContent,
             why: (card.querySelector('details.why')||{}).textContent || '',
-            mute: (card.querySelector('[data-mute]')||{}).textContent || ''};
+            mute: (card.querySelector('[data-mute]')||{}).textContent || '',
+            line: (card.closest('details.recline')||{dataset:{}}).dataset.kind};
   });
   console.log('      (after ' + secs + 's)');
   check('the demo\'s 20-second check-in raises it', a.title==='New scheduled check-in' &&
         /^AgentSvc\.exe contacts checkin\.example\.net every ~(19|20|21)s \(\d+ times in the last hour\)$/.test(a.detail),
         JSON.stringify(a));
   check('...as a note, since the demo keeps no history', /\binfo\b/.test(a.cls), a.cls);
+  check('...under Recorded\'s Check-ins line', a.line==='checkins', a.line);
   check('...naming the program, with a reason and a mute for the host',
         a.rl==='checkin · AgentSvc.exe' && /on a fixed schedule/.test(a.why) &&
         a.mute==='Mute checkin.example.net', JSON.stringify(a));

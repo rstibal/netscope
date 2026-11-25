@@ -14,7 +14,7 @@ PAGE_HTML = r"""<!doctype html>
   --accent:#4da3ff; --out:#f0883e; --in:#3fb950;
   --tcp:#4da3ff; --udp:#a371f7; --dns:#39c5cf; --tls:#3fb950;
   --http:#e3b341; --icmp:#f0883e; --arp:#8b97a8; --other:#6e7681; --smb:#db61a2;
-  --quic:#56d4dd;
+  --quic:#56d4dd; --high:#f85149;
   --mono:"Cascadia Mono","JetBrains Mono",Consolas,"SF Mono",Menlo,monospace;
   --sans:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,sans-serif;
 }
@@ -24,7 +24,7 @@ html[data-theme="light"]{
   --accent:#0969da; --out:#bc4c00; --in:#1a7f37;
   --tcp:#0969da; --udp:#8250df; --dns:#1b7c83; --tls:#1a7f37;
   --http:#9a6700; --icmp:#bc4c00; --arp:#6e7781; --other:#8c959f; --smb:#bf3989;
-  --quic:#1b7c83;
+  --quic:#1b7c83; --high:#cf222e;
 }
 *{box-sizing:border-box}
 html,body{height:100%;overflow:hidden;max-width:100%}
@@ -554,7 +554,8 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .alert.warn .ti{color:var(--http)}
 .alert.info .ti{color:var(--accent)}
 .alert .when{color:var(--faint);font:10.5px var(--mono);flex:0 0 auto}
-.alert .d{color:var(--dim);font:11.5px var(--mono);margin-top:3px;line-height:1.5}
+.alert .d{color:var(--dim);font:11.5px var(--mono);margin-top:3px;line-height:1.5;
+  overflow-wrap:anywhere}  /* a program's path has no spaces to wrap at */
 .alert .rl{color:var(--faint);font:10px var(--mono);margin-top:3px}
 .rulegrid{display:grid;grid-template-columns:1fr;gap:4px;margin-bottom:6px}
 .rulegrid label{display:flex;align-items:center;gap:7px;color:var(--dim);
@@ -562,6 +563,57 @@ code.k{color:var(--accent);font-family:var(--mono)}
 .rulegrid input[type=number]{width:70px;background:var(--bg);border:1px solid var(--line);
   color:var(--fg);border-radius:4px;padding:2px 5px;font:11px var(--mono)}
 .tab .n.high{background:#f85149}
+/* Two piles (Task 7 of the alerts overhaul): Needs you cards, each a
+   decision, then one folded line per kind of what was only recorded. */
+#p-alerts h4 b{color:var(--fg)}
+.ncard{border:1px solid var(--line);border-left:3px solid var(--high);border-radius:6px;
+  background:var(--panel2);padding:9px 10px;margin-bottom:10px;min-width:0}
+.ncard .t{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:6px}
+.ncard .ti{font:600 12px var(--sans);color:var(--fg);min-width:0}
+.ncard .when{color:var(--faint);font:10.5px var(--mono);flex:0 0 auto}
+.ncard .nkv{display:grid;grid-template-columns:72px minmax(0,1fr);gap:3px 8px;
+  font-size:11.5px;margin-bottom:7px}
+.ncard .nkv>span:nth-child(odd){color:var(--faint)}
+.ncard .nkv .m{font:11.5px var(--mono);word-break:break-all;overflow-wrap:anywhere}
+.ncard .nkv .mac{font:11.5px var(--mono)}
+.ncard .nkv .ls{color:var(--faint);white-space:nowrap}
+.ncard .bad{color:var(--high)}
+.ncard .talks{border-top:1px solid var(--line);padding-top:5px;margin-bottom:7px}
+.ncard .talk{display:flex;justify-content:space-between;gap:8px;padding:1px 0;
+  font:11.5px var(--mono)}
+.ncard .talk .h{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ncard .talk .n{color:var(--dim);flex:0 0 auto}
+.ncard .asof{color:var(--faint);font-size:10.5px;margin-top:2px}
+.ncard .nerr{color:var(--high);font-size:11.5px;margin:0 0 6px}
+.ncard .rowbtns{margin-top:0}
+.ncard .btn-sm.danger{color:var(--high)}
+.nquiet{color:var(--dim);font-size:12px;margin-bottom:4px}
+/* One line per kind: the label, the count, the first few subjects. */
+#p-alerts :is(details.recline,details.fold)>summary{cursor:pointer;list-style:none}
+#p-alerts :is(details.recline,details.fold)>summary::-webkit-details-marker{display:none}
+details.recline{border-top:1px solid var(--line)}
+details.recline:last-child{border-bottom:1px solid var(--line)}
+details.recline>summary{display:flex;gap:8px;padding:5px 0;font-size:12px;color:var(--dim);min-width:0}
+details.recline>summary .k{flex:0 0 auto;color:var(--fg);font-weight:600}
+details.recline>summary .k::before{content:'▸ ';color:var(--faint)}
+details.recline[open]>summary .k::before{content:'▾ '}
+details.recline>summary .w{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font:11.5px var(--mono)}
+details.recline>.body{padding:2px 0 6px}
+details.fold>summary h4{display:inline}
+details.fold>summary h4::before{content:'▸ ';color:var(--faint)}
+details.fold[open]>summary h4::before{content:'▾ '}
+details.fold>summary .hint{display:inline;margin-left:6px}
+details.fold[open]>summary{margin-bottom:8px}
+.eday{margin:10px 0 4px}
+.eday h5{margin:0 0 4px;font:600 10.5px var(--sans);letter-spacing:.5px;
+  text-transform:uppercase;color:var(--faint)}
+.alert.needed .tag{font:700 9.5px var(--sans);color:var(--high);margin-right:6px;
+  text-transform:uppercase;letter-spacing:.3px}
+.trow{display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);
+  font:11.5px var(--mono)}
+.trow .p{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.trow .p .s{color:var(--faint);font-size:10.5px}
 
 /* ---------- history / charts ----------
    Chart hues are the validated categorical slots 1 and 2, not the green/orange
@@ -2520,7 +2572,7 @@ function renderHistory(d){
 
   // The rest is there when wanted, folded so the figures above are the tab.
   let more = '';
-  // The alerts themselves are on the Alerts tab ("Past N days"), where they
+  // The alerts themselves are on the Alerts tab ("Earlier days"), where they
   // can be muted and explained.
   const ac = d.alert_counts;
   if (ac && ac.total){
@@ -2672,18 +2724,22 @@ function ago(ts){
   return Math.round(s/3600) + 'h ago';
 }
 
-// Remembered across renders (and across the 2.5s auto-refresh) rather than
-// re-derived from the DOM each time, so collapsing the rules or leaving a
-// "why did this fire?" open survives the next poll instead of snapping shut
-// under you.
-let rulesCollapsed = false;
-/* Two views of alerts. "This session" is the alert engine's own list, in
-   memory: repeats folded together, dismissable, gone after Clear alerts or a
-   restart. "Past N days" is the log in the history database, which outlives
-   both — the security record, so it has no Dismiss. They used to be split
-   across two tabs in identical cards, which read as one list shown twice. */
-let alertView = 'session', alertLog = null, lastAlerts = null;
-try { if (localStorage.getItem('netscope-alertview') === 'log') alertView = 'log'; } catch (e){}
+/* The tab is two piles. "Needs you" is a card per program or device that
+   wants a decision, kept by the server across restarts and Clear alerts.
+   "Recorded" is everything else from today, one folded line per kind, since
+   it needs nothing and reads best as a count. Earlier days come from the log
+   in the history database (the security record, so it has no Dismiss), or,
+   with history off, from this session's own list. The old "This session /
+   Past N days" switch is gone: Earlier days replaced it. */
+let alertLog = null, lastAlerts = null;
+/* Which folds are open, by key: a section's id, 'rec:<kind>' for a Recorded
+   line, 'day:<day>:<kind>' for one under Earlier days, 'why:<id>' and
+   'lwhy:<id>' for a "Why did this fire?". Kept here rather than read back
+   from the DOM, so the 2.5 s redraw puts each one back as it was. Per page
+   load, like History's folds: folded is the default. */
+let alertFold = {};
+// A card's last refusal from the server (a gone file can't be trusted), by id.
+let cardMsg = {};
 
 async function loadAlertLog(more){
   const have = alertLog && alertLog.enabled && alertLog.rows.length;
@@ -2702,41 +2758,165 @@ async function loadAlertLog(more){
   alertLog.counts = d.counts; alertLog.days = d.retain_days;
 }
 
-function alertLogHTML(d){
-  const days = d.log_days;
-  const L = alertLog;
-  if (!L) return '<div class="empty">Loading the alert log…</div>';
-  if (!L.enabled) return '<div class="empty">History is off, so alerts are only kept for ' +
-    'this session.<br><br>Start without <code class="k">--no-history</code> to keep a log.</div>';
-  const c = L.counts || {total: 0, high: 0, warn: 0};
-  let h = '<h4 style="margin-bottom:4px">' + (c.total ? c.total.toLocaleString() + ' alerts · ' +
-    c.high + ' high · ' + c.warn + ' warn' : 'Alerts') + '</h4>' +
-    '<div class="hint" style="margin:0 0 8px">Logged on disk for ' + (L.days || days) +
-    ' days, including earlier sessions. Clear alerts and restarts don\'t remove them; ' +
-    '<a href="#" id="wipeJump">Erase all history</a> on the History tab does.</div>';
-  if (!L.rows.length)
-    return h + '<div class="empty">No alerts logged in the past ' + (L.days || days) + ' days.</div>';
-  const muted = new Set((d.mutes || []).map(m => m.rule + '\u0000' + m.subject));
-  h += L.rows.map(a => {
-    const isMuted = a.subject && muted.has(a.rule + '\u0000' + a.subject);
-    return '<div class="alert logrow ' + esc(a.severity) + '">' +
-      '<div class="t"><span class="ti">' + esc(a.title) + '</span>' +
-      '<span class="when">' + esc(new Date(a.ts * 1000).toLocaleString()) + '</span></div>' +
-      '<div class="d">' + esc(a.detail) + '</div>' +
-      '<div class="rl" title="' + esc((d.why || {})[a.rule] || '') + '">' + esc(a.rule) +
-        (a.process ? ' · ' + esc(a.process) : '') + '</div>' +
-      ((d.why || {})[a.rule] ? '<details class="why" data-lid="' + a.id + '"><summary>Why did this fire?</summary>' +
-        esc(d.why[a.rule]) + '</details>' : '') +
-      (a.subject || alertMenuItems(a).length ? '<div class="rowbtns">' + (!a.subject ? '' : isMuted
-        ? '<button class="btn-sm" data-unmute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
-          '" title="' + esc(a.subject) + ' is muted for this rule">Unmute ' + esc(a.subject) + '</button>'
-        : '<button class="btn-sm" data-mute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
-          '" title="Stop this rule reporting ' + esc(a.subject) + ', and leave it watching ' +
-          'everything else">Mute ' + esc(a.subject) + '</button>') +
-        (alertMenuItems(a).length ? '<button class="btn-sm" data-lmenu="' + a.id +
-          '" aria-haspopup="menu">Don\'t record / Block…</button>' : '') + '</div>' : '') +
+
+const pad2 = n => String(n).padStart(2, '0');
+function dayKey(ts){
+  const t = new Date(ts * 1000);
+  return t.getFullYear() + '-' + pad2(t.getMonth() + 1) + '-' + pad2(t.getDate());
+}
+const hm = ts => { const t = new Date(ts * 1000); return pad2(t.getHours()) + ':' + pad2(t.getMinutes()); };
+// "14:05" today, "Mon 24 Nov 14:05" before.
+const whenShort = ts => (dayKey(ts) === dayKey(Date.now() / 1000) ? '' :
+  new Date(ts * 1000).toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'}) + ' ') + hm(ts);
+function dayLabel(day){
+  const now = Date.now() / 1000;
+  if (day === dayKey(now)) return 'Today';
+  if (day === dayKey(now - 86400)) return 'Yesterday';
+  const [y, m, dd] = day.split('-').map(Number);
+  return new Date(y, m - 1, dd).toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
+}
+
+/* Recorded lines, by kind, in this order. A rule not listed here still gets
+   a line ("Other"): what was recorded is never left off the tab. */
+const REC_KINDS = [
+  ['programs',  'New programs',     ['new_process']],
+  ['devices',   'Devices',          ['arp_spoof']],
+  ['checkins',  'Check-ins',        ['checkin']],
+  ['bandwidth', 'Bandwidth',        ['threshold']],
+  ['network',   'Network',          ['dns_resolver', 'dhcp_rogue_server', 'rogue_ra', 'port_scan']],
+  ['insecure',  'Insecure traffic', ['cleartext_proto', 'cleartext_creds', 'cert_problems']],
+  ['hosts',     'New hosts',        ['new_host']],
+  ['blocks',    'Blocks',           ['block', 'unblock', 'end']],
+  ['other',     'Other',            []],
+];
+const recKind = rule => (REC_KINDS.find(k => k[2].includes(rule)) || REC_KINDS[REC_KINDS.length - 1])[0];
+
+// The titles a card falls back on when its alert has gone from the session
+// (cleared, or from before a restart); the server's PROGRAM_TITLES.
+const CARD_TITLES = {
+  unsigned_writable: 'Unsigned program in a folder anyone can write to',
+  windows_name_misplaced: 'Program with a Windows name outside Windows',
+  no_file: 'New program whose file can\'t be found',
+  unchecked: 'New program whose signature couldn\'t be checked',
+};
+
+function foldAttr(key){ return ' data-fkey="' + esc(key) + '"' + (alertFold[key] ? ' open' : ''); }
+
+/* One recorded line: "Label · count", the first three subjects, and (open)
+   its alerts, each drawn by `item`. */
+function recLine(kind, rows, key, item, day){
+  const label = REC_KINDS.find(k => k[0] === kind)[1];
+  const subs = [...new Set(rows.map(a => a.subject || a.process || a.title))];
+  return '<details class="recline" data-kind="' + kind + '"' + (day ? ' data-day="' + day + '"' : '') +
+    foldAttr(key) + '><summary><span class="k">' + label + ' · ' + rows.length + '</span>' +
+    '<span class="w">' + esc(subs.slice(0, 3).join(', ') + (subs.length > 3 ? ', …' : '')) + '</span>' +
+    '</summary><div class="body">' + rows.map(item).join('') + '</div></details>';
+}
+
+// Rows split into lines by kind, in REC_KINDS order.
+function recLines(rows, keyOf, item, day){
+  const by = {};
+  rows.forEach(a => (by[recKind(a.rule)] = by[recKind(a.rule)] || []).push(a));
+  return REC_KINDS.filter(k => by[k[0]]).map(k => recLine(k[0], by[k[0]], keyOf(k[0]), item, day)).join('');
+}
+
+/* One alert from this session, with today's controls. */
+function alertItem(a, d){
+  const why = (d.why || {})[a.rule];
+  return '<div class="alert ' + esc(a.severity) + '">' +
+    '<div class="t"><span class="ti">' + esc(a.title) + '</span>' +
+    '<span class="when">' + (a.count > 1 ? '×' + a.count + ' · ' : '') + ago(a.ts) + '</span></div>' +
+    '<div class="d">' + esc(a.detail) + '</div>' +
+    '<div class="rl" title="' + esc(why || '') + '">' + esc(a.rule) +
+      (a.process ? ' · ' + esc(a.process) : '') + '</div>' +
+    (why ? '<details class="why" data-aid="' + a.id + '"' + foldAttr('why:' + a.id) +
+      '><summary>Why did this fire?</summary>' + esc(why) + '</details>' : '') +
+    '<div class="rowbtns">' +
+      // A device that was replaced, and has stayed so, is usually new kit.
+      (a.rule === 'arp_spoof' && a.pile !== 'needs'
+        ? '<button class="btn-sm" data-newrouter="' + a.id + '">It\'s my new router</button>' : '') +
+      (a.subject ? '<button class="btn-sm" data-mute="' + esc(a.rule) +
+        '" data-subject="' + esc(a.subject) + '" title="Stop this rule reporting ' + esc(a.subject) +
+        ', and leave it watching everything else">Mute ' + esc(a.subject) + '</button>' +
+        '<button class="btn-sm" data-mute1h="' + esc(a.rule) +
+        '" data-subject="' + esc(a.subject) + '">Mute 1h</button>' : '') +
+      // A "Blocked ..." note undoes itself while the block stands; once it
+      // is gone (from here or from Connections > Blocked) it says so.
+      (a.rule === 'block' && a.block_id
+        ? ((d.blocked || []).includes(a.block_id)
+            ? '<button class="btn-sm" data-aunblock="' + esc(a.block_id) + '">Unblock</button>'
+            : '<span class="hint" style="margin:0 6px 0 0;align-self:center">no longer blocked</span>')
+        : '') +
+      '<button class="btn-sm" data-dismiss="' + a.id + '">Dismiss</button>' +
+      (alertMenuItems(a).length ? '<button class="btn-sm" data-amenu="' + a.id +
+        '" aria-haspopup="menu">Don\'t record / Block…</button>' : '') +
+    '</div></div>';
+}
+
+/* One row of the log: dated, no Dismiss (the log is the record), and
+   "needed you" on what was a card. */
+function logItem(a, d){
+  const why = (d.why || {})[a.rule];
+  const muted = (d.mutes || []).some(m => m.rule === a.rule && m.subject === a.subject);
+  const needed = a.pile === 'needs';
+  return '<div class="alert logrow ' + esc(a.severity) + (needed ? ' needed' : '') + '">' +
+    '<div class="t"><span class="ti">' + esc(a.title) + '</span>' +
+    '<span class="when">' + (needed ? '<span class="tag">needed you</span>' : '') +
+      esc(new Date(a.ts * 1000).toLocaleString()) + '</span></div>' +
+    '<div class="d">' + esc(a.detail) + '</div>' +
+    '<div class="rl" title="' + esc(why || '') + '">' + esc(a.rule) +
+      (a.process ? ' · ' + esc(a.process) : '') + '</div>' +
+    (why ? '<details class="why" data-lid="' + a.id + '"' + foldAttr('lwhy:' + a.id) +
+      '><summary>Why did this fire?</summary>' + esc(why) + '</details>' : '') +
+    (a.subject || alertMenuItems(a).length ? '<div class="rowbtns">' + (!a.subject ? '' : muted
+      ? '<button class="btn-sm" data-unmute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
+        '" title="' + esc(a.subject) + ' is muted for this rule">Unmute ' + esc(a.subject) + '</button>'
+      : '<button class="btn-sm" data-mute="' + esc(a.rule) + '" data-subject="' + esc(a.subject) +
+        '" title="Stop this rule reporting ' + esc(a.subject) + ', and leave it watching ' +
+        'everything else">Mute ' + esc(a.subject) + '</button>') +
+      (alertMenuItems(a).length ? '<button class="btn-sm" data-lmenu="' + a.id +
+        '" aria-haspopup="menu">Don\'t record / Block…</button>' : '') + '</div>' : '') +
+    '</div>';
+}
+
+/* Earlier days, by local day, newest first; within a day, what needed you
+   first, then a line per kind. */
+function daysHTML(rows, d, item){
+  const days = [], by = {};
+  rows.forEach(a => { const k = dayKey(a.ts); if (!by[k]){ by[k] = []; days.push(k); } by[k].push(a); });
+  return days.map(day => {
+    const rs = by[day], needs = rs.filter(a => a.pile === 'needs');
+    return '<div class="eday" data-day="' + day + '"><h5>' + esc(dayLabel(day)) + ' · ' + rs.length + '</h5>' +
+      needs.map(a => item(a, d)).join('') +
+      recLines(rs.filter(a => a.pile !== 'needs'), k => 'day:' + day + ':' + k, a => item(a, d), day) +
       '</div>';
   }).join('');
+}
+
+function earlierHTML(d){
+  const today = dayKey(Date.now() / 1000);
+  if (!d.log_days){
+    // No log: this session is all there is. Its earlier days are here, and
+    // today's alerts behind a card, which Recorded leaves out.
+    const rows = (d.alerts || []).filter(a => dayKey(a.ts) !== today || a.pile === 'needs');
+    return '<div class="hint" style="margin:0 0 6px">History is off, so alerts are only kept for ' +
+      'this session. Start without <code class="k">--no-history</code> to keep a log.</div>' +
+      (rows.length ? daysHTML(rows, d, alertItem) : '<div class="nquiet">Nothing else this session.</div>');
+  }
+  const L = alertLog;
+  if (!L) return '<div class="nquiet">Loading the alert log…</div>';
+  if (!L.enabled) return '<div class="nquiet">The alert log can\'t be read' +
+    (L.error ? ': ' + esc(L.error) : '') + '.</div>';
+  const c = L.counts || {total: 0, high: 0, warn: 0};
+  const days = L.days || d.log_days;
+  let h = '<div class="hint" style="margin:0 0 6px">' +
+    (c.total ? c.total.toLocaleString() + ' logged · ' + c.high + ' high · ' + c.warn + ' warn. ' : '') +
+    'Kept on disk for ' + days + ' days, including earlier sessions. Clear alerts and restarts ' +
+    'don\'t remove them; <a href="#" id="wipeJump">Erase all history</a> on the History tab does.</div>';
+  // Today too: a card settled today (trusted, dismissed) is in no other
+  // list, and its "needed you" row is listed first.
+  h += L.rows.length ? daysHTML(L.rows, d, logItem)
+                     : '<div class="nquiet">Nothing logged yet.</div>';
   if (L.more) h += '<div class="rowbtns"><button class="btn-sm" id="alertMore">Show older</button></div>';
   return h;
 }
@@ -2767,38 +2947,135 @@ function openAlertMenu(a, btn){
               r.left, r.bottom + 2);
 }
 
-function setAlertView(v){
-  alertView = v === 'log' ? 'log' : 'session';
-  try { localStorage.setItem('netscope-alertview', alertView); } catch (e){}
-  if (lastAlerts) renderAlerts(lastAlerts);
-  if (alertView === 'log') loadAlertLog(false).then(() => {
-    if (alertView === 'log' && lastAlerts) renderAlerts(lastAlerts);
-  }).catch(() => {});
-}
-// History's "See them on the Alerts tab" opens the log view there.
+// History's "See them on the Alerts tab" opens Earlier days there.
 $('p-history').addEventListener('click', e => {
   if (e.target.id !== 'alertsJump') return;
   e.preventDefault();
-  alertView = 'log';
-  try { localStorage.setItem('netscope-alertview', 'log'); } catch (e2){}
+  alertFold.earlierSec = true;
   showTab('alerts');
 });
-// The log's "Erase all history" opens History at that button. History draws
-// on its own schedule once shown, so the button is waited for, not assumed.
+
+/* Needs you: one card per open decision. */
+function needsCard(c, d){
+  const x = c.data || {}, al = (d.alerts || []).find(a => a.card === c.id);
+  const kv = (k, v, cls) => '<span>' + k + '</span><span class="' + (cls || 'm') + '">' + v + '</span>';
+  const btn = (act, label, cls, title) => '<button class="btn-sm' + (cls ? ' ' + cls : '') +
+    '" data-nact="' + act + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label + '</button>';
+  let title, rows = '', talk = '', btns = '';
+  if (c.kind === 'arp'){
+    title = (al && al.title) || 'Another device is claiming ' + (x.ip || c.subject);
+    rows = kv('Adapter', esc(x.iface || '')) + kv('Address', esc(x.ip || c.subject)) +
+      (x.macs || []).map(m => kv('MAC', '<span class="mac">' + esc(m.mac) + '</span> <span class="ls">· last seen ' +
+        esc(whenShort(m.last_seen)) + '</span>', '')).join('');
+    btns = btn('packets', 'Show packets', '', 'Filter the table to ARP') +
+      btn('expected', 'Expected', '', 'Both devices are meant to answer for this address: ' +
+          'stop reporting it') +
+      btn('dismiss', 'Dismiss');
+  } else {
+    const name = x.name || c.subject;
+    title = (al && al.title) || CARD_TITLES[x.reason] || 'New program';
+    // Each signature state says what it is: only unsigned and invalid are
+    // findings; a check that failed, or a file that is gone, is not "not signed".
+    const faint = t => '<span style="color:var(--faint)">' + t + '</span>';
+    const sigRow = x.sig === 'valid' ? [esc(x.signer || 'signed'), 'm']
+      : x.sig === 'unsigned' ? ['not signed', 'bad']
+      : x.sig === 'invalid' ? ['signature not valid' + (x.signer ? ' · ' + esc(x.signer) : ''), 'bad']
+      : x.sig === 'unknown' ? [faint('couldn\'t be checked'), '']
+      : [faint('file not found'), ''];
+    rows = kv('Program', esc(name)) +
+      kv('Where', x.path ? esc(x.path) : 'file not found', x.path ? 'm' : 'bad') +
+      kv('Signed', sigRow[0], sigRow[1]) +
+      kv('Started by', x.parent ? esc(x.parent) : '<span style="color:var(--faint)">not known</span>') +
+      kv('First seen', esc(whenShort(x.first_seen || c.ts)), '');
+    const hosts = x.talk_hosts || [], shown = hosts.slice(0, 8);
+    if (shown.length){
+      talk = '<div class="talks">' + shown.map(t => '<div class="talk"><span class="h" title="' +
+          esc(t.host) + '">' + esc(t.host) + '</span><span class="n">' + t.conns + ' conn · ' +
+          esc(hb(t.in)) + ' ▼ ' + esc(hb(t.out)) + ' ▲</span></div>').join('') +
+        (hosts.length > shown.length ? '<div class="asof">and ' + (hosts.length - shown.length) +
+          ' more</div>' : '') +
+        (x.talk_at && Date.now() / 1000 - x.talk_at > 60 ? '<div class="asof">as of ' + hm(x.talk_at) + '</div>' : '') +
+        '</div>';
+    }
+    const proc = name && !/^[(-]/.test(name) ? name : '';
+    if (lastStatus && lastStatus.blocking && proc && blockItems({pid: x.pid, process: proc}).length)
+      btns += btn('block', 'Block', 'danger', 'Block ' + (x.path || proc) + ' from using the network (a Windows Firewall rule on this file)');
+    if (x.sig !== 'missing' && x.reason !== 'no_file')
+      btns += btn('trust', 'It\'s mine', '', 'Record this file, at its hash now, as yours. A program is only judged the first time its name is seen, so later updates or replacements of it are not checked again');
+    btns += btn('packets', 'Show packets', '', 'Filter the table to ' + name) + btn('dismiss', 'Dismiss');
+  }
+  return '<div class="ncard" data-nid="' + c.id + '" data-kind="' + esc(c.kind) + '">' +
+    '<div class="t"><span class="ti">' + esc(title) + '</span><span class="when">' + esc(whenShort(c.ts)) + '</span></div>' +
+    '<div class="nkv">' + rows + '</div>' + talk +
+    (cardMsg[c.id] ? '<div class="nerr" role="status">' + esc(cardMsg[c.id]) + '</div>' : '') +
+    '<div class="rowbtns">' + btns + '</div></div>';
+}
+
+function needsHTML(d){
+  const cards = d.needs || [];
+  let h = '<div class="sec" id="needsSec"><h4>Needs you' + (cards.length ? ' · <b>' + cards.length + '</b>' : '') + '</h4>';
+  if (!cards.length)
+    h += '<div class="nquiet">Nothing needs you · ' + (d.last_program_check
+      ? 'last program checked ' + hm(d.last_program_check)
+      : 'watching since ' + hm(d.watching_since || Date.now() / 1000)) + '</div>';
+  return h + cards.map(c => needsCard(c, d)).join('') + '</div>';
+}
+
+function showPackets(expr){
+  setView('table');
+  $('find').value = expr;
+  $('find').dispatchEvent(new Event('input'));
+}
+
+function needsAct(card, act, btn){
+  const x = card.data || {};
+  if (act === 'packets')
+    return showPackets(card.kind === 'arp' ? 'arp' : 'process == "' + String(x.name || card.subject).replace(/"/g, '') + '"');
+  if (act === 'block' && !confirm('Block ' + (x.name || card.subject) + ' from using the network at all? ' +
+      'This adds a Windows Firewall rule for that program file and ends its open TCP connections. ' +
+      'It stays in force until you remove it under Connections > Blocked.')) return;
+  if (btn) btn.disabled = true;           // until the redraw that follows
+  return api('/api/control', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'needs_act', id: card.id, act})})
+    .then(r => r.json().then(j => ({ok: r.ok, j})))
+    .then(({ok, j}) => {
+      if (ok){ delete cardMsg[card.id]; if (j.status) renderStatus(j.status); }
+      else cardMsg[card.id] = j.error || 'That did not work.';
+      if (act === 'block') lastBlocksAt = 0;
+      return refreshTab('alerts');
+    }).catch(() => {});
+}
+
+// The pane's own links and the new piles' buttons, by delegation.
 $('p-alerts').addEventListener('click', e => {
-  if (e.target.id !== 'wipeJump') return;
-  e.preventDefault();
-  showTab('history');
-  let tries = 0;
-  const go = () => {
-    const b = $('histWipe');
-    if (b){ $('histMore').open = true; b.scrollIntoView({block: 'center'}); b.focus({preventScroll: true}); }
-    else if (++tries < 40) setTimeout(go, 100);
-  };
-  go();
+  const t = e.target.closest('a,button');
+  if (!t) return;
+  if (t.id === 'wipeJump'){
+    // The log's "Erase all history" opens History at that button. History
+    // draws on its own schedule once shown, so the button is waited for.
+    e.preventDefault();
+    showTab('history');
+    let tries = 0;
+    const go = () => {
+      const b = $('histWipe');
+      if (b){ $('histMore').open = true; b.scrollIntoView({block: 'center'}); b.focus({preventScroll: true}); }
+      else if (++tries < 40) setTimeout(go, 100);
+    };
+    return go();
+  }
+  const d = lastAlerts || {};
+  if (t.dataset.nact){
+    const c = (d.needs || []).find(x => x.id === Number(t.closest('.ncard').dataset.nid));
+    if (c) needsAct(c, t.dataset.nact, t);
+  } else if (t.dataset.untrust){
+    // Answers with the list, not a status, so not through control().
+    api('/api/control', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'trust_remove', path: t.dataset.untrust})})
+      .catch(() => {}).then(() => refreshTab('alerts'));
+  } else if (t.dataset.newrouter){
+    control({action: 'dismiss_alert', id: Number(t.dataset.newrouter)}).then(() => refreshTab('alerts'));
+  }
 });
-try { rulesCollapsed = localStorage.getItem('rulesCollapsed') === '1'; } catch(e) {}
-let openWhy = new Set();
 
 /* The Alerts pane is rebuilt from the server's state every 2.5 s, which put
    every rule box back to what was last applied, so a change had to be applied
@@ -2813,165 +3090,128 @@ function markDraft(){
   if (a) a.textContent = 'Apply changes';
 }
 
+function rulesHTML(d){
+  let h = '<div class="rulegrid">';
+  for (const k in RULE_LABELS){
+    h += '<label><input type="checkbox" data-rule="'+k+'"'+
+         (draftOr(k, d.rules[k]) ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
+  }
+  h += '<label>Threshold <input type="number" id="thrMb" min="1" value="'+
+       esc(String(draftOr('thr', d.threshold_mb)))+'"> MB per program per hour</label>';
+  h += '<label><input type="checkbox" id="toasts"'+(draftOr('toasts', d.toasts) ? ' checked' : '')+
+       (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
+       (d.toasts_supported ? ' (for Needs you only)' : ' (Windows only)')+'</label>';
+  h += '<label title="Looks up a name for IPs nothing on the wire has '+
+       'already named. Off by default: unlike everything else here, this '+
+       'sends DNS queries out."><input type="checkbox" id="reverseDns"'+
+       (draftOr('rdns', d.reverse_dns) ? ' checked' : '')+'> Reverse DNS for unlabeled IPs'+
+       '</label>';
+  const rs = d.reverse_dns_stats;
+  if (d.reverse_dns && rs){
+    h += '<div class="hint" style="margin-left:23px">'+rs.attempted+
+         ' looked up · '+rs.resolved+' resolved'+
+         (rs.pending ? ' · '+rs.pending+' pending' : '')+
+         (rs.cap_reached ? ' · limit reached, restart NetScope to resume'
+                         : '')+
+         '. Most unresolved IPs simply have no reverse DNS record — '+
+         'that is normal, not a fault.</div>';
+  }
+  const ev = d.tracking_evicted;
+  if (ev && (ev.processes || ev.hosts || ev.names)){
+    h += '<div class="hint">Long-running limits reached: dropped the '+
+         'quietest '+ev.processes+' programs, '+ev.hosts+' addresses and '+
+         ev.names+' names from the running totals. Clear packets resets this.'+
+         '</div>';
+  }
+  return h + '</div><div class="rowbtns">'+
+       '<button class="btn-sm" id="applyRules">Apply'+
+         (Object.keys(rulesDraft).length ? ' changes' : '')+'</button>'+
+       '<button class="btn-sm danger" id="clearAlerts" title="Forget this session\'s alerts. '+
+         'Needs you cards stay until you decide.">Clear alerts</button></div>'+
+       '<div class="hint">Settings are remembered between runs.</div>';
+}
+
 function renderAlerts(d){
   lastAlerts = d;
-  let h = '';
-  if (!rulesCollapsed){
-    h += '<div class="sec"><h4>Rules</h4><div class="rulegrid">';
-    for (const k in RULE_LABELS){
-      h += '<label><input type="checkbox" data-rule="'+k+'"'+
-           (draftOr(k, d.rules[k]) ? ' checked' : '')+'> '+esc(RULE_LABELS[k])+'</label>';
-    }
-    h += '<label>Threshold <input type="number" id="thrMb" min="1" value="'+
-         esc(String(draftOr('thr', d.threshold_mb)))+'"> MB per program per hour</label>';
-    h += '<label><input type="checkbox" id="toasts"'+(draftOr('toasts', d.toasts) ? ' checked' : '')+
-         (d.toasts_supported ? '' : ' disabled')+'> Windows desktop notifications'+
-         (d.toasts_supported ? '' : ' (Windows only)')+'</label>';
-    h += '<label title="Looks up a name for IPs nothing on the wire has '+
-         'already named. Off by default: unlike everything else here, this '+
-         'sends DNS queries out."><input type="checkbox" id="reverseDns"'+
-         (draftOr('rdns', d.reverse_dns) ? ' checked' : '')+'> Reverse DNS for unlabeled IPs'+
-         '</label>';
-    const rs = d.reverse_dns_stats;
-    if (d.reverse_dns && rs){
-      h += '<div class="hint" style="margin-left:23px">'+rs.attempted+
-           ' looked up · '+rs.resolved+' resolved'+
-           (rs.pending ? ' · '+rs.pending+' pending' : '')+
-           (rs.cap_reached ? ' · limit reached, restart NetScope to resume'
-                           : '')+
-           '. Most unresolved IPs simply have no reverse DNS record — '+
-           'that is normal, not a fault.</div>';
-    }
-    const ev = d.tracking_evicted;
-    if (ev && (ev.processes || ev.hosts || ev.names)){
-      h += '<div class="hint">Long-running limits reached: dropped the '+
-           'quietest '+ev.processes+' programs, '+ev.hosts+' addresses and '+
-           ev.names+' names from the running totals. Clear packets resets this.'+
-           '</div>';
-    }
-    h += '</div><div class="rowbtns">'+
-         '<button class="btn-sm" id="applyRules">Apply'+
-           (Object.keys(rulesDraft).length ? ' changes' : '')+'</button>'+
-         '<button class="btn-sm danger" id="clearAlerts">Clear alerts</button></div>'+
-         '<div class="hint">Settings are remembered between runs.</div></div>';
-  }
+  const now = Date.now() / 1000, today = dayKey(now);
+  let h = needsHTML(d);
+
+  // Recorded: today's alerts that need nothing, a line per kind.
+  const rec = (d.alerts || []).filter(a => a.pile !== 'needs' && dayKey(a.ts) === today);
+  h += '<div class="sec" id="recSec"><h4>Recorded, nothing to do · today</h4>' +
+    (rec.length ? recLines(rec, k => 'rec:' + k, a => alertItem(a, d))
+                : '<div class="nquiet">Nothing recorded today.</div>') + '</div>';
+
+  h += '<div class="sec"><details class="fold" id="earlierSec"' + foldAttr('earlierSec') +
+    '><summary><h4>Earlier days</h4>' + (d.log_days ? '<span class="hint">logged for ' +
+    d.log_days + ' days</span>' : '') + '</summary>' +
+    (alertFold.earlierSec ? earlierHTML(d) : '') + '</details></div>';
 
   // Muted subjects, listed where you can undo them. A mute you cannot see is
-  // indistinguishable from a rule that stopped working.
+  // indistinguishable from a rule that stopped working, so the count is on
+  // the folded line.
   const mutes = d.mutes || [];
   if (mutes.length){
-    h += '<div class="sec"><h4>Muted · ' + mutes.length + '</h4>' +
+    h += '<div class="sec"><details class="fold" id="mutedSec"' + foldAttr('mutedSec') +
+      '><summary><h4>Muted · ' + mutes.length + '</h4></summary>' +
       mutes.map(m =>
         '<div class="mute"><span class="s">' + esc(m.subject) + '</span>' +
         '<span class="r">' + esc(m.rule) +
         (m.until ? ' · until ' + new Date(m.until*1000).toLocaleTimeString() : '') +
         '</span><button class="btn-sm" data-unmute="' + esc(m.rule) +
         '" data-subject="' + esc(m.subject) + '">Unmute</button></div>').join('') +
-      '</div>';
+      '</details></div>';
+  }
+  // Trusted programs, for the same reason: each records a file someone said
+  // was theirs. A program is only judged the first time its name is seen, so
+  // a later update or replacement of a known program is not re-checked.
+  const trusted = d.trusted || [];
+  if (trusted.length){
+    h += '<div class="sec"><details class="fold" id="trustedSec"' + foldAttr('trustedSec') +
+      '><summary><h4>Trusted programs · ' + trusted.length + '</h4></summary>' +
+      trusted.map(t => '<div class="trow"><span class="p">' + esc(t.name) +
+        (t.changed ? ' <span style="color:var(--high)">· changed since its alert</span>' : '') +
+        '<br><span class="s">' + esc(t.path) + (t.ts ? ' · ' + esc(whenShort(t.ts)) : '') + '</span></span>' +
+        '<button class="btn-sm" data-untrust="' + esc(t.path) + '" aria-label="Stop trusting ' +
+        esc(t.name) + '">Remove</button></div>').join('') +
+      '</details></div>';
   }
 
-  // The switch only appears when there is a log to switch to.
-  const logView = alertView === 'log' && d.log_days;
-  if (d.log_days){
-    h += '<div class="rowbtns" style="margin:0 0 10px"><span class="viewsw" id="alertSw" ' +
-      'role="group" aria-label="Which alerts">' +
-      '<button class="btn-sm' + (logView ? '' : ' on') + '" data-av="session" aria-pressed="' +
-        !logView + '">This session</button>' +
-      '<button class="btn-sm' + (logView ? ' on' : '') + '" data-av="log" aria-pressed="' +
-        !!logView + '" title="Every alert logged in the history database, from this and ' +
-        'earlier sessions">Past ' + d.log_days + ' days</button></span>' +
-      '<button class="btn-sm" id="toggleRules" style="margin-left:auto">' +
-      (rulesCollapsed ? 'Show rules' : 'Hide rules') + '</button></div>';
-  }
-  const list = d.alerts || [];
-  if (logView){
-    h += '<div class="sec">' + alertLogHTML(d) + '</div>';
-  } else {
-  h += '<div class="sec"><div class="sechead"><h4>'+
-       (list.length ? list.length+' alerts · '+d.counts.high+' high · '+d.counts.warn+' warn'
-                    : 'Alerts')+
-       '</h4>'+(d.log_days ? '' : '<button class="btn-sm" id="toggleRules">'+
-       (rulesCollapsed ? 'Show rules' : 'Hide rules')+'</button>')+'</div>';
-  if (!list.length){
-    h += '<div class="empty">Nothing flagged yet. Rules run on every packet; '+
-         'alerts appear here and repeat counts are folded together.</div>';
-  } else {
-    h += list.map(a =>
-      '<div class="alert '+a.severity+'">'+
-        '<div class="t"><span class="ti">'+esc(a.title)+'</span>'+
-        '<span class="when">'+(a.count>1 ? '×'+a.count+' · ' : '')+ago(a.ts)+'</span></div>'+
-        '<div class="d">'+esc(a.detail)+'</div>'+
-        '<div class="rl" title="'+esc((d.why||{})[a.rule]||'')+'">'+esc(a.rule)+
-          (a.process ? ' · '+esc(a.process) : '')+'</div>'+
-        ((d.why||{})[a.rule] ? '<details class="why" data-aid="'+a.id+'"'+
-          (openWhy.has(a.id) ? ' open' : '')+'><summary>Why did this '+
-          'fire?</summary>'+esc(d.why[a.rule])+'</details>' : '')+
-        '<div class="rowbtns">'+
-          (a.subject ? '<button class="btn-sm" data-mute="'+esc(a.rule)+
-            '" data-subject="'+esc(a.subject)+'" title="Stop this rule '+
-            'reporting '+esc(a.subject)+', and leave it watching everything '+
-            'else">Mute '+esc(a.subject)+'</button>' : '')+
-          (a.subject ? '<button class="btn-sm" data-mute1h="'+esc(a.rule)+
-            '" data-subject="'+esc(a.subject)+'">Mute 1h</button>' : '')+
-          // A "Blocked ..." note undoes itself while the block stands; once
-          // it is gone (from here or from Connections > Blocked) it says so.
-          (a.rule === 'block' && a.block_id
-            ? ((d.blocked || []).includes(a.block_id)
-                ? '<button class="btn-sm" data-aunblock="'+esc(a.block_id)+'">Unblock</button>'
-                : '<span class="hint" style="margin:0 6px 0 0;align-self:center">no longer blocked</span>')
-            : '')+
-          '<button class="btn-sm" data-dismiss="'+a.id+'">Dismiss</button>'+
-          (alertMenuItems(a).length ? '<button class="btn-sm" data-amenu="'+a.id+
-            '" aria-haspopup="menu">Don\'t record / Block…</button>' : '')+
-        '</div>'+
-      '</div>').join('');
-  }
-  h += '</div>';
-  }
-  const pane0 = $('p-alerts'), openLog = new Set();
-  // Keep open "why" boxes in the log open across the 2.5 s redraw; the
-  // session list does this with alert ids, which log rows don't share.
-  pane0.querySelectorAll('.logrow details.why[open]').forEach(x => openLog.add(x.dataset.lid));
+  h += '<div class="sec"><details class="fold" id="rulesSec"' + foldAttr('rulesSec') +
+    '><summary><h4>Rules and settings</h4></summary>' + rulesHTML(d) + '</details></div>';
+
+  const pane = $('p-alerts');
   const act = document.activeElement;
-  const focusSel = act && pane0.contains(act)
+  const focusSel = act && pane.contains(act)
     ? (act.dataset.rule ? '[data-rule="'+act.dataset.rule+'"]' : act.id ? '#'+act.id : null) : null;
   const caret = focusSel && act.selectionStart != null ? [act.selectionStart, act.selectionEnd] : null;
-  pane0.innerHTML = h;
+  pane.innerHTML = h;
   if (focusSel){
-    const el = pane0.querySelector(focusSel);
+    const el = pane.querySelector(focusSel);
     if (el){
       el.focus({preventScroll: true});
       if (caret) try { el.setSelectionRange(caret[0], caret[1]); } catch (e){}
     }
   }
 
-  // Alerts that no longer exist (dismissed, muted, cleared) don't need to be
-  // remembered as "open" forever.
-  pane0.querySelectorAll('.logrow details.why').forEach(x => {
-    if (openLog.has(x.dataset.lid)) x.open = true; });
-  if (!logView){
-    const liveIds = new Set(list.map(a => a.id));
-    openWhy.forEach(id => { if (!liveIds.has(id)) openWhy.delete(id); });
-  }
-  pane0.querySelectorAll('#alertSw [data-av]').forEach(b => b.onclick = () => setAlertView(b.dataset.av));
+  // An open "why" for an alert that is gone (dismissed, muted, cleared)
+  // needn't be remembered for ever.
+  const live = new Set((d.alerts || []).map(a => 'why:' + a.id));
+  for (const k in alertFold) if (k.startsWith('why:') && !live.has(k)) delete alertFold[k];
+  pane.querySelectorAll('details[data-fkey]').forEach(x => x.addEventListener('toggle', () => {
+    const k = x.dataset.fkey, was = !!alertFold[k];
+    alertFold[k] = x.open;
+    // Earlier days is drawn, and its log fetched, only once it is open.
+    if (k === 'earlierSec' && x.open && !was){
+      if (d.log_days) loadAlertLog(false).then(() => renderAlerts(lastAlerts)).catch(() => {});
+      else renderAlerts(lastAlerts);
+    }
+  }));
   const more = $('alertMore');
   if (more) more.onclick = () => { more.disabled = true;
     loadAlertLog(true).then(() => renderAlerts(lastAlerts)).catch(() => { more.disabled = false; }); };
 
-  const toggleRules = $('toggleRules');
-  if (toggleRules) toggleRules.onclick = () => {
-    rulesCollapsed = !rulesCollapsed;
-    try { localStorage.setItem('rulesCollapsed', rulesCollapsed ? '1' : '0'); } catch(e) {}
-    renderAlerts(d);
-  };
-  document.querySelectorAll('#p-alerts details.why[data-aid]').forEach(det => {
-    det.addEventListener('toggle', () => {
-      const id = Number(det.dataset.aid);
-      if (det.open) openWhy.add(id); else openWhy.delete(id);
-    });
-  });
-
-  pane0.querySelectorAll('[data-rule]').forEach(cb =>
+  pane.querySelectorAll('[data-rule]').forEach(cb =>
     cb.onchange = () => { rulesDraft[cb.dataset.rule] = cb.checked; markDraft(); });
   const thr = $('thrMb'), tst = $('toasts'), rdn = $('reverseDns');
   if (thr) thr.oninput = () => { rulesDraft.thr = thr.value; markDraft(); };
@@ -2994,7 +3234,6 @@ function renderAlerts(d){
   if (clr) clr.onclick = () => control({action:'clear_alerts'})
     .then(() => refreshTab('alerts'));
 
-  const pane = $('p-alerts');
   const after = p => p.then(() => refreshTab('alerts'));
   pane.querySelectorAll('[data-mute]').forEach(b => b.onclick = () =>
     after(control({action:'mute', rule:b.dataset.mute, subject:b.dataset.subject})));
@@ -5393,10 +5632,11 @@ function renderStatus(st){
   tabCount($('nFiles'), st.objects);
   tabCount($('nDhcp'), st.dhcp_leases);
 
+  // The badge counts what needs you, not everything recorded.
   const a = st.alerts || {};
   const na = $('nAlerts');
-  tabCount(na, a.total);
-  na.classList.toggle('high', (a.high || 0) > 0);
+  tabCount(na, a.needs);
+  na.classList.toggle('high', (a.needs || 0) > 0);
 }
 
 function renderStats(s){
@@ -5510,7 +5750,7 @@ function refreshTab(name){
   else if (name === 'streams') api('/api/streams').then(r=>r.json()).then(renderStreams).catch(()=>{});
   else if (name === 'dhcp')    api('/api/dhcp').then(r=>r.json()).then(renderDhcp).catch(()=>{});
   else if (name === 'alerts')  return api('/api/alerts').then(r=>r.json()).then(d =>
-    alertView === 'log' && d.log_days ? loadAlertLog(false).then(() => d) : d)
+    alertFold.earlierSec && d.log_days ? loadAlertLog(false).then(() => d) : d)
     .then(renderAlerts).catch(()=>{});
   else if (name === 'history') return loadHistory(false);
 }

@@ -189,8 +189,13 @@ def main():
                 for name in names:
                     if args.k and args.k not in name:
                         continue
+                    # NETSCOPE_PYTHON: for a test that needs a demo server
+                    # of its own (needs_test.js wants the demo's history,
+                    # which --no-history above switches off). It must be
+                    # this interpreter, not `python` (see start_demo).
                     code, out = run(["node", os.path.join("ui", name), url],
-                                    HERE, 300)
+                                    HERE, 300,
+                                    env={**os.environ, "NETSCOPE_PYTHON": sys.executable})
                     ok = "FAILED: none" in out
                     print("  %s  %s" % ("PASS " if ok else "FAIL ", name))
                     if args.verbose or not ok:

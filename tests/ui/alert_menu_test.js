@@ -2,6 +2,10 @@
 // rows scroll by in seconds, and the alert is where you notice something.
 const { chromium } = require('playwright');
 const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
+// Today's alerts sit under Recorded's folded lines: open them (the folds are
+// remembered across the redraw) before clicking anything inside one.
+const openAll = p => p.evaluate(()=>document.querySelectorAll('#recSec details.recline')
+  .forEach(d => { d.open = true; }));
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.NETSCOPE_CHROMIUM || undefined });
   const p = await b.newPage({ viewport:{width:1680,height:900} });
@@ -19,6 +23,8 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('alerts carry the host and pid the menu needs', 'host' in a && 'pid' in a, JSON.stringify(a));
 
   await p.mouse.move(5, 5);                    // the pane holds still while hovered
+  await p.waitForSelector('#p-alerts [data-amenu="' + a.id + '"]', {state: 'attached', timeout: 10000});
+  await openAll(p);
   await p.waitForSelector('#p-alerts [data-amenu="' + a.id + '"]', {timeout: 10000});
   await p.click('#p-alerts [data-amenu="' + a.id + '"]');
   await p.waitForSelector('#rowmenu.on');
@@ -50,6 +56,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   // Block asks first, and says what it would do.
   await p.click('.tab[data-p="alerts"]');
   await p.mouse.move(5, 5);
+  await openAll(p);
   await p.waitForSelector('#p-alerts [data-amenu="' + a.id + '"]', {timeout: 10000});
   await p.click('#p-alerts [data-amenu="' + a.id + '"]');
   await p.click('#rowmenu button:has-text("Block host ' + a.peer + '")');
@@ -66,22 +73,22 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   check('...and a multicast peer is never offered for blocking or excluding',
         !none[2].some(t => t && /224\.0\.0\.251/.test(t)), JSON.stringify(none[2]));
 
-  // The log view has the menu too. A log row has only process and peer (no
-  // host or pid columns). This server runs without history, so the view is
-  // drawn directly from a stand-in row.
+  // Earlier days' log rows have the menu too. A log row has only process and
+  // peer (no host or pid columns). This server runs without history, so the
+  // view is drawn directly from a stand-in row, from yesterday.
   const lg = await p.evaluate(()=>{
-    const row = {id: 7, ts: Date.now() / 1000, severity: 'warn', rule: 'new_process',
+    const row = {id: 7, ts: Date.now() / 1000 - 86400, severity: 'warn', rule: 'new_process',
                  title: 'New program on the network', detail: 'd', process: 'Agent.exe',
                  peer: '203.0.113.9', subject: 'Agent.exe'};
     alertLog = {enabled: true, rows: [row], more: false, days: 30,
                 counts: {total: 1, high: 0, warn: 1}};
     const div = document.createElement('div');
-    div.innerHTML = alertLogHTML({log_days: 30, why: {}, mutes: []});
+    div.innerHTML = earlierHTML({log_days: 30, why: {}, mutes: []});
     alertLog = null;
     return {btn: !!div.querySelector('[data-lmenu="7"]'),
             items: alertMenuItems(row).filter(Boolean).map(i => i[0])};
   });
-  check('rows in Past 30 days have the menu too', lg.btn, JSON.stringify(lg));
+  check('rows in Earlier days have the menu too', lg.btn, JSON.stringify(lg));
   check('...offering the same items from process and peer',
         ["Don't record Agent.exe in History", "Don't record 203.0.113.9 in History",
          'Block host 203.0.113.9', 'Block program Agent.exe'].every(t => lg.items.includes(t)),
@@ -95,7 +102,9 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   });
   await p.mouse.move(5, 5);
   await p.evaluate(()=>refreshTab('alerts'));
-  await p.waitForSelector('#p-alerts [data-aunblock]', {timeout: 10000}).catch(()=>{});
+  await p.waitForSelector('#p-alerts [data-aunblock]', {state: 'attached', timeout: 10000}).catch(()=>{});
+  await openAll(p);
+  await p.waitForTimeout(100);
   const note = await p.evaluate(()=>{
     const card = [...document.querySelectorAll('#p-alerts .alert')]
       .find(c => /Blocked host 203\.0\.113\.77/.test(c.textContent));

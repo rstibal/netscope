@@ -1,5 +1,10 @@
 const { chromium } = require('playwright');
 const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!c&&e)?'  -- '+e:''));if(!c)fails.push(n);};
+// Today's alerts are under Recorded, a folded line per kind, and the muted
+// list is folded too: open them all (the folds are remembered across the
+// pane's redraw), so what is clicked here is on screen.
+const openAll = p => p.evaluate(()=>document.querySelectorAll(
+  '#recSec details.recline, #mutedSec').forEach(d => { d.open = true; }));
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.NETSCOPE_CHROMIUM || undefined });
   const p = await b.newPage({ viewport:{width:1680,height:900} });
@@ -18,6 +23,8 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   await p.click('.tab[data-p="alerts"]');
   await p.waitForFunction(()=>document.querySelectorAll('#p-alerts .alert').length>0,
                           null,{timeout:40000});
+  await openAll(p);
+  await p.waitForTimeout(100);
 
   const first = await p.evaluate(()=>{
     const a=document.querySelector('#p-alerts .alert');
@@ -44,6 +51,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   // that was muted instead: nothing for its subject should be left.
   await p.click('#p-alerts [data-mute]');
   await p.waitForTimeout(1200);
+  await openAll(p);
   // (rule, subject): another rule may still have its own alert for the subject.
   const after = await p.evaluate(([rule, subj])=>({
     left: [...document.querySelectorAll('#p-alerts .alert [data-mute]')]
@@ -52,6 +60,8 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
   }), [first.rule, first.mute]);
   check('the muted subject is listed where you can see it',
         after.mutes.includes(first.mute), JSON.stringify(after.mutes));
+  check('...with the count on its folded line', await p.evaluate(()=>
+        /^Muted · \d+$/.test((document.querySelector('#mutedSec > summary')||{}).textContent||'')));
   check('its alert is gone from the list', after.left === 0, `${after.left} left for ${first.rule}/${first.mute}`);
 
   // the API agrees, and the rule is still enabled
@@ -64,6 +74,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
         first.rule + '=' + api.rules[first.rule]);
 
   // unmute puts it back
+  await openAll(p);
   await p.click('#p-alerts [data-unmute="'+first.rule+'"][data-subject="'+first.mute+'"]');
   await p.waitForTimeout(1200);
   const api2r = await p.evaluate(async ()=>{ const r=await fetch('/api/alerts?t='+TOKEN); return r.json(); });
@@ -71,6 +82,7 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
         JSON.stringify(api2r.mutes));
 
   // dismiss removes exactly one
+  await openAll(p);
   // By id, for the same reason as above: a new alert may arrive meanwhile.
   const dismissId = await p.evaluate(()=>{
     const b = document.querySelector('#p-alerts [data-dismiss]'); return b ? b.dataset.dismiss : null; });
@@ -86,8 +98,11 @@ const fails=[]; const check=(n,c,e='')=>{console.log((c?'PASS  ':'FAIL  ')+n+((!
 
 
   // --- the muted row must actually show its subject, not a crushed stub
+  await openAll(p);
   await p.click('#p-alerts [data-mute]');
   await p.waitForTimeout(1200);
+  await openAll(p);
+  await p.waitForTimeout(100);
   const shown = await p.evaluate(()=>{
     const m=document.querySelector('#p-alerts .mute');
     if(!m) return null;

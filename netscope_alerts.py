@@ -31,6 +31,8 @@ from collections import OrderedDict, deque
 
 from netscope_timeline import regular_interval, bursts
 from netscope_l2 import is_group_ip
+from netscope_needs import NeedsYou
+from netscope_arpwatch import ArpWatch
 
 try:
     from cryptography import x509
@@ -42,6 +44,21 @@ MAX_ALERTS = 500
 TOAST_MIN_INTERVAL = 6.0        # seconds between desktop notifications
 
 INFO, WARN, HIGH = "info", "warn", "high"
+
+# Every alert is in one of two piles. "Needs you" waits for a decision, as a
+# card that survives a restart, and is the only pile that toasts; everything
+# else is "Recorded", for reading when you choose to.
+NEEDS, RECORDED = "needs", "recorded"
+# The card kind for each rule that can put an alert in Needs you.
+CARD_KINDS = {"new_process": "program", "arp_spoof": "arp"}
+ARP_QUEUE_MAX = 1000        # ARP events waiting for the beat
+
+PROGRAM_TITLES = {
+    "unsigned_writable": "Unsigned program in a folder anyone can write to",
+    "windows_name_misplaced": "Program with a Windows name outside Windows",
+    "no_file": "New program whose file can't be found",
+    "unchecked": "New program whose signature couldn't be checked",
+}
 
 SCAN_WINDOW_SECS = 20.0     # how far back a burst is measured
 SCAN_PORT_THRESHOLD = 12   # distinct ports/pairs in the window before it's a scan
@@ -133,7 +150,11 @@ RULE_WHY = {
                  "conversation — looks on the wire, though a NIC swap, a VM "
                  "restarting with a new virtual MAC, or a DHCP lease moving "
                  "to a different device can cause the same thing "
-                 "legitimately.",
+                 "legitimately. So a change is held for a minute: a device "
+                 "that stays changed was replaced, one claim back by the old "
+                 "device is recorded, and only the address changing hands "
+                 "three times within the minute (a poisoning tool fighting "
+                 "the real device) opens a card.",
     "checkin": "Fires when a program starts contacting a host on a fixed "
                "schedule: short bursts at a steady interval, at least five "
                "times in the last hour, the same test as the Timeline's "
@@ -401,11 +422,20 @@ class AlertEngine:
         self._scan_outbound = {}    # process -> deque[(ts, (peer, dport))]
         self._udp_sent = {}         # (peer, local port) -> last outbound ts
         self.seen_dhcp_servers = set()
-        # (iface, ip) -> mac last seen claiming it, so a later ARP claiming
-        # the same IP with a different MAC can be told apart from the first
-        # sighting. Per adapter, same reasoning as the flow key: a VPN or a
-        # second NIC can legitimately show the same private IP twice.
-        self.arp_bindings = {}
+        # Cards waiting for a decision. Kept in the history database when
+        # there is one, so they survive a restart.
+        self.needs = NeedsYou(history)
+        # Decides who a new program is, off the capture thread. None until
+        # attach_judge(): a new program is then simply Recorded.
+        self.judge = None
+        # Who claims each (iface, ip), to tell a replaced device from an
+        # impersonated one. Per adapter, same reasoning as the flow key: a
+        # VPN or a second NIC can legitimately show the same private IP twice.
+        self.arp = ArpWatch()
+        # What ArpWatch said on the capture thread, waiting for tick() to
+        # fire it: firing can add a card, and a card can wait on the disk.
+        self._arp_events = deque(maxlen=ARP_QUEUE_MAX)
+        self._arp_lock = threading.Lock()
         # iface -> set of router IPv6 addresses seen advertising themselves.
         self.seen_routers = {}
         # Muted (rule, subject) pairs -> expiry timestamp, or None for
@@ -475,7 +505,14 @@ class AlertEngine:
                 self.threshold_mb = max(1, int(stored["alert_threshold_mb"]))
         except (TypeError, ValueError):
             pass
-        if "alert_toasts" in stored:
+        if not stored.get("needs_toasts_on"):
+            # Toasts used to come from every warning, so many turned them off.
+            # Now only Needs you toasts, and that is worth hearing: switched
+            # on once, for everyone. Whatever is chosen after that stands.
+            self.notifier.enabled = True
+            self._persist("alert_toasts", True)
+            self._persist("needs_toasts_on", True)
+        elif "alert_toasts" in stored:
             self.notifier.enabled = bool(stored["alert_toasts"])
         for m in stored.get("alert_mutes") or []:
             try:
@@ -584,45 +621,70 @@ class AlertEngine:
 
     # -- alert plumbing -----------------------------------------------------
 
-    def _fire(self, key, severity, rule, title, detail, rec=None):
+    def _fire(self, key, severity, rule, title, detail, rec=None,
+              pile=RECORDED, data=None):
+        """
+        Raise (or fold) one alert. With pile=NEEDS it also opens a card and
+        toasts, unless that card is already open. A NEEDS alert must not be
+        fired from the capture thread: opening a card can wait on the disk.
+        """
         if self.is_muted(rule, self.subject_of(key)):
             return None
+        card = None
+        if pile == NEEDS:
+            card = self.needs.add(CARD_KINDS.get(rule, rule),
+                                  self.subject_of(key), data)
+        # A card already open for this subject has had its toast.
+        toast = card is not None
         with self._lock:
             existing = self._alerts.get(key)
             if existing:
                 existing["count"] += 1
                 existing["last"] = _now()
-                return None
-            self._next += 1
-            alert = {
-                "id": self._next,
-                "ts": _now(),
-                "last": _now(),
-                "count": 1,
-                "severity": severity,
-                "rule": rule,
-                # What this alert is about, so the dashboard can offer to mute
-                # this one subject rather than the whole rule.
-                "subject": self.subject_of(key),
-                "title": title,
-                "detail": detail,
-                "process": (rec or {}).get("process", ""),
-                "peer": (rec or {}).get("remote", ""),
-                # What the card's "Don't record / Block" menu needs: the name
-                # the host is recorded under, and the pid to find the
-                # program's file by (checked against the name when used).
-                "host": (rec or {}).get("rhost") or (rec or {}).get("remote", ""),
-                "pid": (rec or {}).get("pid"),
-                "seq": (rec or {}).get("seq"),
-                "stream": (rec or {}).get("stream"),
-            }
-            self._alerts[key] = alert
-            while len(self._alerts) > MAX_ALERTS:
-                self._alerts.popitem(last=False)
-        if self.history is not None:
+                if card is not None:
+                    existing["card"] = card["id"]
+                alert = None
+            else:
+                alert = self._new_alert(key, severity, rule, title, detail,
+                                        rec, pile, card)
+        if alert is not None and self.history is not None:
             self.history.record_alert(alert)
-        if severity in (WARN, HIGH):
+        if toast:
             self.notifier.notify(f"NetScope: {title}", detail)
+        return alert
+
+    def _new_alert(self, key, severity, rule, title, detail, rec, pile, card):
+        """Make and list one alert. Called with _lock held."""
+        self._next += 1
+        rec = rec or {}
+        alert = {
+            "id": self._next,
+            "ts": _now(),
+            "last": _now(),
+            "count": 1,
+            "severity": severity,
+            "rule": rule,
+            "pile": pile,
+            # What this alert is about, so the dashboard can offer to mute
+            # this one subject rather than the whole rule.
+            "subject": self.subject_of(key),
+            "title": title,
+            "detail": detail,
+            "process": rec.get("process", ""),
+            "peer": rec.get("remote", ""),
+            # What the card's "Don't record / Block" menu needs: the name
+            # the host is recorded under, and the pid to find the
+            # program's file by (checked against the name when used).
+            "host": rec.get("rhost") or rec.get("remote", ""),
+            "pid": rec.get("pid"),
+            "seq": rec.get("seq"),
+            "stream": rec.get("stream"),
+        }
+        if card is not None:
+            alert["card"] = card["id"]
+        self._alerts[key] = alert
+        while len(self._alerts) > MAX_ALERTS:
+            self._alerts.popitem(last=False)
         return alert
 
     def note_action(self, kind, subject, title, detail, block_id=None):
@@ -651,11 +713,17 @@ class AlertEngine:
             out = {"total": len(self._alerts), "high": 0, "warn": 0, "info": 0}
             for a in self._alerts.values():
                 out[a["severity"]] += 1
-            return out
+        out["needs"] = len(self.needs.open())
+        return out
 
     def clear(self):
+        """Forget this session's alerts. Open Needs you cards stay: they
+        wait for a decision, and Clear is not one."""
         with self._lock:
             self._alerts.clear()
+        with self._arp_lock:
+            self._arp_events.clear()
+        self.arp.clear()
         self.seen_processes.clear()
         self.seen_hosts.clear()
         self.process_bytes.clear()
@@ -666,7 +734,6 @@ class AlertEngine:
         self._udp_sent.clear()
         self.resolvers.clear()
         self.seen_dhcp_servers.clear()
-        self.arp_bindings.clear()
         self.seen_routers.clear()
         self._checkins_seen.clear()
         # Mutes deliberately survive: Clear means "I have read these", not
@@ -687,6 +754,98 @@ class AlertEngine:
         self.seen_processes.clear()
         self.seen_hosts.clear()
         self._checkins_seen.clear()
+
+    # -- Needs you ----------------------------------------------------------
+
+    def attach_judge(self, judge):
+        """
+        Hand the engine a ProgramJudge, built with on_program_verdict as its
+        on_verdict. New programs are then looked up (file, signature) before
+        they are filed; without one they are simply Recorded.
+        """
+        self.judge = judge
+
+    def on_program_verdict(self, name, rec, info):
+        """The judge's answer about a new program. Runs on its worker."""
+        if not self.rules["new_process"]:
+            return None         # switched off while this was being looked up
+        verdict = info.get("verdict")
+        sig = info.get("sig")
+        signer = (sig.signer if sig is not None else "") or ""
+        path = info.get("path")
+        if verdict is not None and verdict.pile == NEEDS:
+            title = PROGRAM_TITLES.get(verdict.reason, PROGRAM_TITLES["unchecked"])
+            detail = f"{name} · {path}" if path else f"{name} · file not found"
+            data = {"name": name, "path": path, "signer": signer,
+                    "sig": sig.status if sig is not None else None,
+                    "reason": verdict.reason, "parent": info.get("parent"),
+                    "pid": (rec or {}).get("pid"), "sha256": info.get("sha256"),
+                    "first_seen": _now(), "talk": {}, "talk_at": None}
+            return self._fire(("new_process", name), HIGH, "new_process",
+                              title, detail, rec, pile=NEEDS, data=data)
+        reason = verdict.reason if verdict is not None else ""
+        if reason == "signed":
+            how = f"signed by {signer}" if signer else "signed"
+        elif reason == "unsigned_admin":
+            how = "in Program Files, unsigned"
+        elif reason == "trusted":
+            how = "trusted"
+        else:                       # not_a_file: "System" and the like
+            how = "not a program file"
+        return self._fire(("new_process", name), INFO, "new_process",
+                          "New program", f"{name} · {how}", rec)
+
+    def tick(self, now=None):
+        """
+        The alert beat (every CHECKIN_EVERY seconds, off the capture thread):
+        fire what ArpWatch has decided, both what the capture thread queued
+        and holds that have run out since.
+        """
+        now = _now() if now is None else now
+        with self._arp_lock:
+            queued = list(self._arp_events)
+            self._arp_events.clear()
+        events = queued + [(ev, None) for ev in self.arp.tick(now)]
+        if not self.rules["arp_spoof"]:
+            return []
+        fired = []
+        for ev, rec in events:
+            a = self._arp_event(ev, rec)
+            if a is not None:
+                fired.append(a)
+        return fired
+
+    def _arp_event(self, ev, rec=None):
+        kind, iface, ip = ev[0], ev[1], ev[2]
+        # Keyed by kind as well: an impersonation after a replacement is not
+        # one more of the same. The IP stays last, the subject mutes go by.
+        key = ("arp_spoof", kind, iface, ip)
+        if kind == "contested":
+            a, b = ev[3], ev[4]
+            return self._fire(key, WARN, "arp_spoof",
+                              f"Two devices claimed {ip}",
+                              f"{a} and {b} both claimed {ip} on {iface}, "
+                              f"once each way. A sleep proxy, a range extender "
+                              f"or a router being swapped does this; a fight "
+                              f"over the address would open a card.", rec)
+        if kind == "replaced":
+            old, new = ev[3], ev[4]
+            return self._fire(key, INFO, "arp_spoof", "A device was replaced",
+                              f"{ip} on {iface} is a different device now "
+                              f"({old} → {new}), and has stayed so", rec)
+        if kind == "impersonated":
+            seen = ev[3]
+            macs = [{"mac": m, "last_seen": t}
+                    for m, t in sorted(seen.items(), key=lambda x: -x[1])]
+            detail = (f"{len(macs)} devices keep claiming {ip} on {iface} "
+                      f"({', '.join(m['mac'] for m in macs)}). This is how "
+                      f"ARP cache poisoning (a man-in-the-middle on this LAN) "
+                      f"looks on the wire.")
+            return self._fire(key, HIGH, "arp_spoof",
+                              f"Another device is claiming {ip}", detail, rec,
+                              pile=NEEDS,
+                              data={"iface": iface, "ip": ip, "macs": macs})
+        return None
 
     # -- the rules ----------------------------------------------------------
 
@@ -763,7 +922,11 @@ class AlertEngine:
             # either: a placeholder appearing for the first time is news
             # about NetScope, not about this machine.
             unnamed = UNNAMED_PID.match(proc) is not None or proc.startswith("(")
-            if (self.rules["new_process"] and not unnamed
+            # A record from an imported .pcap is another machine's, or this
+            # one's from another time: "new on this machine" says nothing
+            # about it, and it must never open a Needs you card.
+            offline = bool(rec.get("offline"))
+            if (self.rules["new_process"] and not unnamed and not offline
                     and proc not in self.seen_processes):
                 self.seen_processes.add(proc)
                 if self.history is None:
@@ -777,7 +940,14 @@ class AlertEngine:
                                    f"({peer_label(rec)})", rec)
                 elif not self.history.known_process(proc):
                     self.history.note_process(proc)
-                    if not self.baselining:     # baseline: record, stay quiet
+                    if self.baselining:
+                        pass                    # baseline: record, stay quiet
+                    elif self.judge is not None:
+                        # Looking the file up takes PowerShell seconds: the
+                        # judge does it on its own thread and answers through
+                        # on_program_verdict. Never judge() here.
+                        self.judge.submit(proc, rec.get("pid"), rec)
+                    else:
                         self._fire(("new_process", proc), WARN, "new_process",
                                    "New program on the network",
                                    f"{proc} has never used the network on "
@@ -786,7 +956,7 @@ class AlertEngine:
                                    rec)
                 # A program the history already knows is silent: a note for
                 # each one after every restart only buried the warnings.
-            elif not unnamed:
+            elif not unnamed and not offline:
                 self.seen_processes.add(proc)
 
             # The VPN client is credited with the encrypted outer copy of
@@ -1164,17 +1334,17 @@ class AlertEngine:
 
     def _arp_rule(self, rec):
         """
-        Flag a MAC address change for an IP this machine has already seen
-        claimed on this adapter.
+        Watch which MAC claims each IP on each adapter (ArpWatch decides
+        whether a change is a replaced device or an impersonation).
 
-        The first sighting of (iface, ip) becomes the baseline rather than an
-        alert, same reasoning as the DHCP rule: otherwise the very first ARP
-        packet for every host on the network would fire this. Tracked per
-        adapter, not just per IP, because a VPN or a second NIC can put the
-        same private address on two interfaces at once without anything
-        being wrong.
+        The first sighting of (iface, ip) is the baseline, same reasoning as
+        the DHCP rule. Tracked per adapter, not just per IP, because a VPN or
+        a second NIC can put the same private address on two interfaces at
+        once without anything being wrong. This runs on the capture thread,
+        so what ArpWatch says is only queued here; tick() fires it.
         """
-        if not self.rules["arp_spoof"]:
+        # An imported capture's ARP is not this LAN now: never a card.
+        if not self.rules["arp_spoof"] or rec.get("offline"):
             return
         arp = (rec.get("decoded") or {}).get("arp")
         if not arp:
@@ -1183,21 +1353,11 @@ class AlertEngine:
         mac = arp.get("sender_mac")
         if not ip or not mac or ip == "0.0.0.0":
             return
-        key = (rec.get("iface") or "", ip)
-        seen = self.arp_bindings.get(key)
-        if seen is None:
-            self.arp_bindings[key] = mac
-            return
-        if seen == mac:
-            return
-        self.arp_bindings[key] = mac
-        self._fire(("arp_spoof", key[0], ip), HIGH, "arp_spoof",
-                   "ARP binding changed",
-                   f"{ip} was at {seen}, is now claimed by {mac} — this is "
-                   f"how ARP cache poisoning (a man-in-the-middle on this "
-                   f"LAN) looks on the wire. Could also be a NIC swap, a VM "
-                   f"restarting with a new MAC, or a device getting a new "
-                   f"one from DHCP.", rec)
+        events = self.arp.observe(rec.get("iface") or "", ip, str(mac).lower(),
+                                  rec.get("ts") or _now())
+        if events:
+            with self._arp_lock:
+                self._arp_events.extend((ev, rec) for ev in events)
 
     def _ra_rule(self, rec):
         """

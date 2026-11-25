@@ -35,6 +35,9 @@ class FakeHistory:
     def known_host(self, h): return h in self.hosts
     def note_host(self, h): self.hosts.add(h)
     def record_alert(self, a): pass
+    # The engine's Needs you store keeps its cards in the history too.
+    def needs_load(self): return []
+    def needs_save(self, card): return None
 
 
 def engine(history=None):
